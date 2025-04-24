@@ -3038,3 +3038,336 @@ const loadedMeetings = loadMeetings();
 if (loadedMeetings && loadedMeetings.length > 0) {
   customMeetings.push(...loadedMeetings);
 }
+
+// Refactored !sync handler function
+async function handleSyncMessage(msg) {
+  // Create a reply function that suppresses notifications
+  const quietReply = async (content) => {
+    try {
+      let replyOptions = typeof content === 'string' 
+        ? { content, flags: [1 << 2] } // 1 << 2 is SUPPRESS_EMBEDS flag
+        : { ...content, flags: [1 << 2] };
+      
+      return await msg.reply(replyOptions);
+    } catch (err) {
+      // Fallback to regular reply if something goes wrong
+      logToFile(`Error sending quiet reply: ${err.message}`);
+      return await msg.reply(content);
+    }
+  };
+  
+  const code = projectCode(msg.channel.name);
+  if (!code) {
+    await quietReply('No project code detected in channel name.');
+    return;
+  }
+
+  // Get the first 50 messages to look for images
+  const messages = await msg.channel.messages.fetch({ limit: 50 });
+  const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
+
+  // Check for dry run flag
+  const isDryRun = msg.content.includes('--dry');
+  const dryRunPrefix = isDryRun ? '[DRY RUN] ' : '';
+  
+  // Remove dry run flag from the text
+  const userText = msg.content.slice(TRIGGER_PREFIX.length).trim().replace('--dry', '').trim();
+  if (!userText && !isNewPage) return;
+
+  // Check for URLs directly in the user message
+  let directFrameioLink = null;
+  let directScriptLink = null;
+
+  try {
+    directFrameioLink = extractFrameioLink(userText);
+    if (directFrameioLink) {
+      logToFile(`🔗 Found Frame.io link directly in user message: ${directFrameioLink}`);
+    }
+    
+    directScriptLink = extractScriptLink(userText);
+    if (directScriptLink) {
+      logToFile(`🔗 Found script link directly in user message: ${directScriptLink}`);
+    }
+  } catch (error) {
+    logToFile(`⚠️ Error checking for direct links: ${error.message}`);
+  }
+
+  // Find the Notion page for this project
+  let pageId = await findPage(code);
+  let isNewPage = false;
+  
+  // If no page exists, create one
+  if (!pageId) {
+    await quietReply(`${dryRunPrefix}Creating new Notion page for project code "${code}"...`);
+    
+    // Create a new page with the channel name as the title
+    if (!isDryRun) {
+      pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
+      
+      if (!pageId) {
+        await quietReply('❌ Failed to create Notion page. Check logs for details.');
+        return;
+      }
+    } else {
+      logToFile(`💧 DRY RUN: Would create new Notion page for project "${code}"`);
+    }
+    
+    isNewPage = true;
+  }
+
+  try {
+    // Get current date in ISO format
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
+    const gpt = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      temperature: 0,
+      messages: [
+        { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
+        // Few-shot examples
+        { role: 'user', content: '!sync Project is in VA render. Ray will do final cut.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ status: 'VA Render', editor: ['Ray'] })
+        }},
+        { role: 'user', content: '!sync Suki owns it now. Due 12 Apr.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ project_owner: 'Suki', due_date: '2025-04-12' })
+        }},
+        // New example showing latest link wins
+        { role: 'user', content: '!sync Here is our Frame.io: https://f.io/abc123. [Later] Actually use this updated Frame.io link: https://f.io/xyz789.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
+        }},
+        // Add example for stage date
+        { role: 'user', content: 'Aiming to have the script revised and new VA render by tomorrow.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ 
+            status: 'VA Render', 
+            current_stage_date: new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().split('T')[0]
+          })
+        }},
+        // Actual message
+        { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
+      ],
+      functions: [FUNC_SCHEMA],
+      function_call: 'auto'
+    });
+
+    const call = gpt.choices[0].message.function_call;
+    if (!call) {
+      await quietReply('No relevant properties found.');
+      return;
+    }
+
+    let props;
+    try {
+      props = JSON.parse(call.arguments);
+    } catch (e) {
+      console.error('JSON parse error', e, call.arguments);
+      await quietReply('❌ Error parsing GPT response.');
+      return;
+    }
+
+    // Add direct links found in user message if GPT didn't capture them
+    if (directFrameioLink && !props.frameio_url) {
+      props.frameio_url = directFrameioLink;
+      logToFile(`📎 Adding Frame.io link from direct extraction: ${directFrameioLink}`);
+    }
+
+    if (directScriptLink && !props.script_url) {
+      props.script_url = directScriptLink;
+      logToFile(`📎 Adding script link from direct extraction: ${directScriptLink}`);
+    }
+
+    // Create the Notion properties object with error handling
+    let notionProps = {};
+    let hasPropertiesToUpdate = false;
+    let hasPageContent = false;
+    let errorProperties = [];
+    
+    // Process each property individually with error handling
+    try {
+      notionProps = toNotion(props);
+      hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+    } catch (propsError) {
+      logToFile(`Error converting properties in !sync: ${propsError.message}`);
+      errorProperties.push("Base properties");
+      // Continue with empty properties rather than failing completely
+      notionProps = {};
+    }
+    
+    try {
+      hasPageContent = props.page_content && props.page_content.trim().length > 0;
+    } catch (contentError) {
+      logToFile(`Error checking page content in !sync: ${contentError.message}`);
+      hasPageContent = false;
+    }
+    
+    // Try to extract script link if needed
+    if (hasPageContent && !props.script_url && !notionProps.Script) {
+      try {
+        const scriptLink = extractScriptLink(props.page_content);
+        if (scriptLink) {
+          logToFile(`📝 Found potential script link in content: ${scriptLink}`);
+          // Add the script URL to properties
+          try {
+            notionProps.Script = { url: scriptLink };
+            hasPropertiesToUpdate = true;
+          } catch (scriptError) {
+            logToFile(`Error adding script URL to properties in !sync: ${scriptError.message}`);
+            errorProperties.push("Script URL");
+          }
+        }
+      } catch (extractError) {
+        logToFile(`Error extracting script link in !sync: ${extractError.message}`);
+        errorProperties.push("Script extraction");
+      }
+    }
+    
+    // Try to extract Frame.io link if needed
+    if (hasPageContent && !props.frameio_url && !notionProps['Frame.io']) {
+      try {
+        const frameioLink = extractFrameioLink(props.page_content);
+        if (frameioLink) {
+          logToFile(`📝 Found potential Frame.io link in content: ${frameioLink}`);
+          // Add the Frame.io URL to properties
+          try {
+            notionProps['Frame.io'] = { url: frameioLink };
+            hasPropertiesToUpdate = true;
+          } catch (frameioError) {
+            logToFile(`Error adding Frame.io URL to properties in !sync: ${frameioError.message}`);
+            errorProperties.push("Frame.io URL");
+          }
+        }
+      } catch (extractError) {
+        logToFile(`Error extracting Frame.io link in !sync: ${extractError.message}`);
+        errorProperties.push("Frame.io extraction");
+      }
+    }
+    
+    if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
+      await quietReply('Nothing to update.');
+      return;
+    }
+
+    // Track what was updated successfully
+    let updatedProperties = false;
+    let updatedContent = false;
+    
+    // Update page properties if needed
+    if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
+      try {
+        if (!isDryRun) {
+          await notion.pages.update({ 
+            page_id: pageId, 
+            properties: notionProps 
+          });
+          updatedProperties = true;
+        } else {
+          logToFile(`💧 DRY RUN: Would update these properties: ${JSON.stringify(notionProps)}`);
+          updatedProperties = true; // Mark as "updated" for the summary even though we didn't actually update
+        }
+      } catch (updateError) {
+        logToFile(`Error updating properties in !sync: ${updateError.message}`);
+        errorProperties.push("Notion properties update");
+      }
+    }
+    
+    // Add page content if provided
+    if (hasPageContent) {
+      try {
+        // Format the content with a timestamp
+        const timestamp = new Date().toLocaleString();
+        const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+        
+        // Format the content into proper Notion blocks
+        const contentBlocks = formatNotionContent(formattedContent);
+        
+        // Append the formatted blocks to the page
+        if (!isDryRun) {
+          await notion.blocks.children.append({
+            block_id: pageId,
+            children: contentBlocks
+          });
+          updatedContent = true;
+        } else {
+          logToFile(`💧 DRY RUN: Would add content: ${props.page_content.trim().substring(0, 100)}...`);
+          updatedContent = true; // Mark as "updated" for the summary
+        }
+      } catch (contentError) {
+        logToFile(`Error adding page content in !sync: ${contentError.message}`);
+        errorProperties.push("Page content");
+      }
+    }
+
+    // Create response message
+    let responseDescription = '';
+    if (isNewPage) {
+      responseDescription += `✨ ${isDryRun ? 'Would create' : 'Created'} new Notion page for project **${code}**\n\n`;
+      if (firstImageUrl) {
+        responseDescription += `${isDryRun ? 'Would add' : 'Added'} first image from channel as thumbnail\n\n`;
+      }
+    }
+    
+    if (updatedProperties) {
+      responseDescription += `${isDryRun ? 'Would update' : 'Updated'} properties:\n` + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
+    }
+    
+    if (updatedContent) {
+      if (responseDescription) responseDescription += '\n\n';
+      responseDescription += `${isDryRun ? 'Would add' : 'Added'} notes to page content`;
+    }
+    
+    // Add error information if any
+    if (errorProperties.length > 0) {
+      if (responseDescription) responseDescription += '\n\n';
+      responseDescription += `⚠️ **Errors:** There were issues with: ${errorProperties.join(', ')}.\nOther updates were still applied.`;
+    }
+
+    await quietReply({
+      embeds: [{
+        title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
+        description: responseDescription,
+        color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
+      }]
+    });
+
+    // After the main response embed:
+    if (updatedProperties || updatedContent || isNewPage) {
+      // Get the Notion URL for the page
+      const notionUrl = getNotionPageUrl(pageId);
+      
+      // If we have a URL, send it back to the channel
+      if (notionUrl) {
+        try {
+          // Send URL in a separate message
+          const linkMsg = await msg.channel.send({
+            content: `🔗 **Notion Page**: ${notionUrl}`,
+            flags: [1 << 2] // SUPPRESS_EMBEDS 
+          });
+          
+          // Pin the message with the link if it's a new page
+          if (isNewPage && !isDryRun) {
+            try {
+              await linkMsg.pin();
+              logToFile(`📌 Pinned Notion link for project ${code}`);
+            } catch (pinError) {
+              logToFile(`Error pinning message: ${pinError.message}`);
+            }
+          }
+        } catch (urlError) {
+          logToFile(`Error sending Notion URL: ${urlError.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    quietReply('❌ Error updating Notion; check logs.');
+  }
+}
+
+// Load custom watchers from a file if it exists
