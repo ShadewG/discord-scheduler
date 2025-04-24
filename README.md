@@ -10,6 +10,7 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - ✏️ Edit existing reminders through Discord UI
 - ➕ Add new reminders easily with slash commands
 - 🌐 Support for timezone-specific scheduling
+- 🔇 No startup announcement when the bot goes online (silent operation)
 
 ## Commands
 

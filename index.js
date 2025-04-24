@@ -847,14 +847,6 @@ client.once('ready', async () => {
   
   // Log the next execution times for all jobs
   logNextExecutions();
-  
-  // Send an immediate test message when the bot starts
-  setTimeout(() => {
-    // Get current time in Berlin timezone
-    const berlinTime = new Date().toLocaleString('en-GB', { timeZone: TZ });
-    
-    sendMessage(`Bot is now online and ready to send reminders! Current time in Berlin: ${berlinTime}. Use /help to see available commands. Use /next to see upcoming reminders.`);
-  }, 2000); // Wait 2 seconds after startup
 });
 
 // Connect to Discord
