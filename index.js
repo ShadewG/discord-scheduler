@@ -185,7 +185,8 @@ async function sendNotionMessage(text) {
 
 /* ─ Poll Notion every minute ─────────────────────────────────────── */
 // Use actual bot startup time instead of arbitrary past date
-let lastCheck = new Date();  // Use current time when the bot starts
+// Initialize with a past date so we'll check recent edits on first run
+let lastCheck = new Date(Date.now() - 30 * 60 * 1000);  // Start checking from 30 minutes ago
 const processedPageIds = new Set();     // track pages we've already processed
 
 async function pollNotion() {
@@ -232,8 +233,9 @@ async function pollNotion() {
         const edited = new Date(page.last_edited_time);
         
         // Skip pages that were edited before the bot started
-        if (edited <= lastCheck) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before or at bot startup time (${lastCheck.toISOString()}). Ignoring pre-existing pages.`);
+        // Only skip if the edit is more than 1 hour old - otherwise process for notification
+        if (edited < new Date(Date.now() - 60 * 60 * 1000)) {
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is more than 1 hour ago. Ignoring old pages.`);
           
           // Still add to processed pages so we don't check it again
           processedPageIds.add(pageId);
@@ -278,7 +280,7 @@ async function pollNotion() {
         
         logToFile(`🔔 Found new Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
         logToFile(`   - Last edited: ${edited.toISOString()}`);
-        logToFile(`   - Bot startup: ${lastCheck.toISOString()}`);
+        logToFile(`   - Current check time: ${new Date().toISOString()}`);
         
         // Add to processed pages so we don't notify again
         processedPageIds.add(pageId);
@@ -348,8 +350,9 @@ async function pollNotion() {
             const edited = new Date(page.last_edited_time);
             
             // Skip pages that were edited before the bot started
-            if (edited <= lastCheck) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup. Ignoring for watcher "${watcher.name}".`);
+            // Only skip if the edit is more than 1 hour old
+            if (edited < new Date(Date.now() - 60 * 60 * 1000)) {
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is more than 1 hour ago. Ignoring for watcher "${watcher.name}".`);
               
               // Still add to processed pages so we don't check it again
               processedPageIds.add(watcherPageKey);
@@ -415,6 +418,15 @@ async function pollNotion() {
     
     if (notificationCount > 0) {
       logToFile(`📊 Sent ${notificationCount} Notion notifications`);
+    }
+    
+    // Periodically clear the processedPageIds cache to prevent it from growing too large
+    // We'll clear it every hour based on the current minute
+    const currentMinute = new Date().getMinutes();
+    if (currentMinute === 0) { // At the top of each hour
+      const oldSize = processedPageIds.size;
+      processedPageIds.clear();
+      logToFile(`🧹 Cleared processed pages cache (cleared ${oldSize} page IDs)`);
     }
     
     // Only update lastCheck if we actually checked the database successfully
