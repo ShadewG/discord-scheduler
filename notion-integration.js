@@ -37,7 +37,22 @@
  * 
  * 5. Database requirements:
  *    - Must have a "Caption Status" property of type "Select"
- *    - Must have a "Project Name" property (title property)
+ *    - Must have a title property (any of these names will work: "Project Name", "Name", "Title", "Page", "Project")
+ * 
+ * ## Features
+ * 
+ * 1. Flexible Title Property:
+ *    - The integration will automatically find the title property
+ *    - It tries common names first: "Project Name", "Name", "Title", "Page", "Project"
+ *    - If none of these match, it will find any property of type "title"
+ * 
+ * 2. Separate Notification Channel:
+ *    - Notion notifications go to a dedicated channel (1364886978851508224)
+ *    - Regular scheduler reminders use the standard channel
+ * 
+ * 3. Prevents Duplicate Notifications:
+ *    - The integration tracks which pages it has already processed
+ *    - Once a notification is sent for a page, it won't notify again for that same page
  * 
  * ## Troubleshooting
  * 
@@ -49,7 +64,7 @@
  * 2. Property not found errors:
  *    - Make sure your database has a "Caption Status" property
  *    - Ensure the property is a "Select" type
- *    - Verify your database has a title property named "Project Name"
+ *    - Ensure your database has at least one title-type property
  * 
  * ## Configuration
  * 
@@ -57,6 +72,7 @@
  * - TARGET_PROP: The name of the property/column to check (default: "Caption Status")
  * - TARGET_VALUE: The value that triggers a notification (default: "Ready For Captions")
  * - RAY_ID: The Discord user ID to mention in notifications
+ * - NOTION_CHANNEL_ID: Channel where Notion notifications are sent
  */
 
 // This file is for documentation only and is not loaded by the application 

@@ -23,7 +23,8 @@ const rawDB = process.env.NOTION_DB_ID || '';
 const DB = rawDB.replace(/-/g, '');  // Remove all hyphens from the ID
 const TARGET_PROP   = 'Caption Status';                // column name in Notion
 const TARGET_VALUE  = 'Ready For Captions';            // value that triggers ping
-const RAY_ID        = '669012345678901245';            // Ray's Discord user-ID
+const RAY_ID        = '348547268695162890';            // Ray's Discord user-ID
+const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
 // --------------------------------------------------------------------------
 
 // Load environment variables
@@ -107,8 +108,21 @@ async function sendMessage(text) {
   }
 }
 
+/* ─ Helper : Send a message to Notion channel ──── */
+async function sendNotionMessage(text) {
+  try {
+    const channel = await client.channels.fetch(NOTION_CHANNEL_ID);
+    await channel.send(text);
+    logToFile(`📢 Sent Notion notification to channel ${NOTION_CHANNEL_ID}: ${text}`);
+  } catch (error) {
+    logToFile(`❌ Error sending Notion notification: ${error.message}`);
+    logToFile(`Notion Channel ID: ${NOTION_CHANNEL_ID}`);
+  }
+}
+
 /* ─ Poll Notion every minute ─────────────────────────────────────── */
 let lastCheck = new Date(0);            // marker to avoid repeat pings
+const processedPageIds = new Set();     // track pages we've already processed
 
 async function pollNotion() {
   try {
@@ -136,23 +150,76 @@ async function pollNotion() {
 
       logToFile(`✅ Successfully queried Notion database (found ${res.results.length} matching results)`);
 
+      let notificationCount = 0;
+      
       for (const page of res.results) {
+        const pageId = page.id;
+        
+        // Skip if we've already processed this page
+        if (processedPageIds.has(pageId)) {
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed previously. Skipping.`);
+          continue;
+        }
+        
         const edited = new Date(page.last_edited_time);
         if (edited <= lastCheck) {
-          logToFile(`👀 Found page last edited at ${edited.toISOString()}, but it's before our last check (${lastCheck.toISOString()}). Skipping.`);
-          break;   // skip already-seen rows
+          logToFile(`👀 Found page edited at ${edited.toISOString()}, but it's before our last check (${lastCheck.toISOString()}). Skipping.`);
+          continue;
         }
-
-        // Get the title from "Project Name" property instead of "Name"
-        const title =
-          page.properties["Project Name"]?.title?.[0]?.plain_text ?? '(untitled project)';
-          
-        logToFile(`🔔 Found updated Notion page with caption ready: "${title}"`);
         
-        await sendMessage(
+        // Try different title property names
+        let title = null;
+        let titlePropertyName = null;
+        
+        // Check for various common title property names
+        const possibleTitleProps = ["Project Name", "Name", "Title", "Page", "Project"];
+        
+        for (const propName of possibleTitleProps) {
+          if (page.properties[propName]?.title?.length > 0) {
+            title = page.properties[propName].title[0].plain_text;
+            titlePropertyName = propName;
+            break;
+          }
+        }
+        
+        // If no title found, list available properties and use default
+        if (!title) {
+          const availableProps = Object.keys(page.properties).join(', ');
+          logToFile(`⚠️ Could not find title property. Available properties: ${availableProps}`);
+          
+          // Find any title property
+          for (const [propName, prop] of Object.entries(page.properties)) {
+            if (prop.type === 'title' && prop.title?.length > 0) {
+              title = prop.title[0].plain_text;
+              titlePropertyName = propName;
+              logToFile(`✅ Found title in property "${propName}": "${title}"`);
+              break;
+            }
+          }
+          
+          // If still no title, use default
+          if (!title) {
+            title = '(untitled project)';
+          }
+        }
+        
+        logToFile(`🔔 Found updated Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
+        
+        // Add to processed pages so we don't notify again
+        processedPageIds.add(pageId);
+        
+        // Send to the dedicated Notion channel instead of regular channel
+        await sendNotionMessage(
           `<@${RAY_ID}> Captions are ready for project **"${title}"**`
         );
+        
+        notificationCount++;
       }
+      
+      if (notificationCount > 0) {
+        logToFile(`📊 Sent ${notificationCount} Notion notifications`);
+      }
+      
       lastCheck = new Date();             // move checkpoint forward
     } catch (err) {
       logToFile(`❌ Notion database query error: ${err.message}`);
@@ -168,8 +235,8 @@ async function pollNotion() {
         logToFile(`   3. Make sure the "Caption Status" property exists and is a Select type`);
       } else if (err.message.includes('undefined')) {
         // Log specific debug info for property errors
-        logToFile(`🔧 PROPERTY ERROR: The code expects "Project Name" as the title property.`);
-        logToFile(`🔧 Available properties in the result: ${res?.results?.[0]?.properties ? Object.keys(res.results[0].properties).join(', ') : 'Unknown'}`);
+        logToFile(`🔧 PROPERTY ERROR: Check the title property name in your Notion database.`);
+        logToFile(`🔧 The code will try these properties for title: ${["Project Name", "Name", "Title", "Page", "Project"].join(', ')}`);
       }
     }
   } catch (err) {
