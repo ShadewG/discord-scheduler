@@ -1010,8 +1010,7 @@ const commands = [
     .addBooleanOption(option =>
       option.setName('ephemeral')
         .setDescription('Make response only visible to you')
-        .setRequired(false)
-    ),
+        .setRequired(false)),
   
   new SlashCommandBuilder()
     .setName('sync')
@@ -1153,7 +1152,141 @@ const commands = [
     .addStringOption(option =>
       option.setName('text')
         .setDescription('Message to send')
+        .setRequired(true)),
+  
+  new SlashCommandBuilder()
+    .setName('set')
+    .setDescription('Set a property directly on the Notion page for this channel')
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('status')
+        .setDescription('Set the Status property')
+        .addStringOption(option =>
+          option.setName('value')
+            .setDescription('Status value')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Uploaded', value: 'Uploaded' },
+              { name: 'FOIA Received', value: 'FOIA Received' },
+              { name: 'Ready for production', value: 'Ready for production' },
+              { name: 'Writing', value: 'Writing' },
+              { name: 'Writing Review', value: 'Writing Review' },
+              { name: 'VA Render', value: 'VA Render' },
+              { name: 'VA Review', value: 'VA Review' },
+              { name: 'Writing Revisions', value: 'Writing Revisions' },
+              { name: 'Ready for Editing', value: 'Ready for Editing' },
+              { name: 'Clip Selection', value: 'Clip Selection' },
+              { name: 'Clip Selection Review', value: 'Clip Selection Review' },
+              { name: 'MGX', value: 'MGX' },
+              { name: 'MGX Review/Cleanup', value: 'MGX Review/Cleanup' },
+              { name: 'Ready to upload', value: 'Ready to upload' },
+              { name: 'Backlog', value: 'Backlog' },
+              { name: 'Pause', value: 'Pause' }
+            ))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('due_date')
+        .setDescription('Set the due date')
+        .addStringOption(option =>
+          option.setName('date')
+            .setDescription('Due date (YYYY-MM-DD)')
+            .setRequired(true))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('priority')
+        .setDescription('Set the priority')
+        .addStringOption(option =>
+          option.setName('level')
+            .setDescription('Priority level')
+            .setRequired(true)
+            .addChoices(
+              { name: 'High', value: 'High' },
+              { name: 'Medium', value: 'Medium' },
+              { name: 'Low', value: 'Low' }
+            ))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('editor')
+        .setDescription('Set the editor(s)')
+        .addStringOption(option =>
+          option.setName('names')
+            .setDescription('Editor names (comma-separated)')
+            .setRequired(true))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('writer')
+        .setDescription('Set the writer(s)')
+        .addStringOption(option =>
+          option.setName('names')
+            .setDescription('Writer names (comma-separated)')
+            .setRequired(true))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('lead')
+        .setDescription('Set the lead person')
+        .addStringOption(option =>
+          option.setName('name')
+            .setDescription('Lead name')
+            .setRequired(true))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('caption_status')
+        .setDescription('Set the caption status')
+        .addStringOption(option =>
+          option.setName('status')
+            .setDescription('Caption status')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Ready For Captions', value: 'Ready For Captions' },
+              { name: 'Captions In Progress', value: 'Captions In Progress' },
+              { name: 'Captions Done', value: 'Captions Done' },
+              { name: 'Needs Captions', value: 'Needs Captions' }
+            ))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('script_url')
+        .setDescription('Set the script URL')
+        .addStringOption(option =>
+          option.setName('url')
+            .setDescription('URL to the script document')
+            .setRequired(true))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('frameio_url')
+        .setDescription('Set the Frame.io URL')
+        .addStringOption(option =>
+          option.setName('url')
+            .setDescription('URL to the Frame.io project')
+            .setRequired(true))
+    ),
+  
+  new SlashCommandBuilder()
+    .setName('watch')
+    .setDescription('Create a Notion watcher to notify when properties change')
+    .addStringOption(option => 
+      option.setName('property')
+        .setDescription('The Notion property to watch')
         .setRequired(true))
+    .addStringOption(option => 
+      option.setName('value')
+        .setDescription('The value to watch for')
+        .setRequired(true))
+    .addUserOption(option => 
+      option.setName('notify')
+        .setDescription('User to notify when this property value is found')
+        .setRequired(true))
+    .addStringOption(option => 
+      option.setName('name')
+        .setDescription('Optional name for this watcher')
+        .setRequired(false)),
 ];
 
 // Register slash commands when the bot is ready
@@ -2709,11 +2842,33 @@ function addPredefinedWatcher() {
 // Try to add predefined watcher if requested via command line
 addPredefinedWatcher();
 
+// Add a helper function to get the Notion URL from page ID
+function getNotionPageUrl(pageId) {
+  if (!pageId) return null;
+  // Format is: https://www.notion.so/{workspace}/{page-id}
+  return `https://www.notion.so/${pageId.replace(/-/g, '')}`;
+}
+
 // Refactored !sync handler function
 async function handleSyncMessage(msg) {
+  // Create a reply function that suppresses notifications
+  const quietReply = async (content) => {
+    try {
+      let replyOptions = typeof content === 'string' 
+        ? { content, flags: [1 << 2] } // 1 << 2 is SUPPRESS_EMBEDS flag
+        : { ...content, flags: [1 << 2] };
+      
+      return await msg.reply(replyOptions);
+    } catch (err) {
+      // Fallback to regular reply if something goes wrong
+      logToFile(`Error sending quiet reply: ${err.message}`);
+      return await msg.reply(content);
+    }
+  };
+  
   const code = projectCode(msg.channel.name);
   if (!code) {
-    await msg.reply('No project code detected in channel name.');
+    await quietReply('No project code detected in channel name.');
     return;
   }
 
@@ -2753,14 +2908,14 @@ async function handleSyncMessage(msg) {
   
   // If no page exists, create one
   if (!pageId) {
-    await msg.reply(`${dryRunPrefix}Creating new Notion page for project code "${code}"...`);
+    await quietReply(`${dryRunPrefix}Creating new Notion page for project code "${code}"...`);
     
     // Create a new page with the channel name as the title
     if (!isDryRun) {
       pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
       
       if (!pageId) {
-        await msg.reply('❌ Failed to create Notion page. Check logs for details.');
+        await quietReply('❌ Failed to create Notion page. Check logs for details.');
         return;
       }
     } else {
@@ -2814,7 +2969,7 @@ async function handleSyncMessage(msg) {
 
     const call = gpt.choices[0].message.function_call;
     if (!call) {
-      await msg.reply('No relevant properties found.');
+      await quietReply('No relevant properties found.');
       return;
     }
 
@@ -2823,7 +2978,7 @@ async function handleSyncMessage(msg) {
       props = JSON.parse(call.arguments);
     } catch (e) {
       console.error('JSON parse error', e, call.arguments);
-      await msg.reply('❌ Error parsing GPT response.');
+      await quietReply('❌ Error parsing GPT response.');
       return;
     }
 
@@ -2905,7 +3060,7 @@ async function handleSyncMessage(msg) {
     }
     
     if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
-      await msg.reply('Nothing to update.');
+      await quietReply('Nothing to update.');
       return;
     }
 
@@ -2983,16 +3138,45 @@ async function handleSyncMessage(msg) {
       responseDescription += `⚠️ **Errors:** There were issues with: ${errorProperties.join(', ')}.\nOther updates were still applied.`;
     }
 
-    await msg.reply({
+    await quietReply({
       embeds: [{
         title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
         description: responseDescription,
         color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
       }]
     });
+
+    // After the main response embed:
+    if (updatedProperties || updatedContent || isNewPage) {
+      // Get the Notion URL for the page
+      const notionUrl = getNotionPageUrl(pageId);
+      
+      // If we have a URL, send it back to the channel
+      if (notionUrl) {
+        try {
+          // Send URL in a separate message
+          const linkMsg = await msg.channel.send({
+            content: `🔗 **Notion Page**: ${notionUrl}`,
+            flags: [1 << 2] // SUPPRESS_EMBEDS 
+          });
+          
+          // Pin the message with the link if it's a new page
+          if (isNewPage && !isDryRun) {
+            try {
+              await linkMsg.pin();
+              logToFile(`📌 Pinned Notion link for project ${code}`);
+            } catch (pinError) {
+              logToFile(`Error pinning message: ${pinError.message}`);
+            }
+          }
+        } catch (urlError) {
+          logToFile(`Error sending Notion URL: ${urlError.message}`);
+        }
+      }
+    }
   } catch (err) {
     console.error(err);
-    msg.reply('❌ Error updating Notion; check logs.');
+    quietReply('❌ Error updating Notion; check logs.');
   }
 }
 
@@ -3375,6 +3559,53 @@ function formatNotionContent(content) {
           ]
         }
       });
+    } 
+    // Check if it's a bullet point or an actionable item (starting with - or •)
+    else if (line.trim().match(/^[-•]\s+/)) {
+      const text = line.trim().replace(/^[-•]\s+/, '');
+      
+      // Detect if this is an actionable item (contains action verbs or is a task)
+      const isActionable = 
+        text.match(/\b(do|add|create|update|change|fix|implement|review|check|test|verify|complete|finish|make|build|set up|configure|write|design|develop)\b/i) ||
+        text.includes('task') || 
+        text.includes('TODO') || 
+        text.includes('to-do') ||
+        text.includes('action item');
+      
+      if (isActionable) {
+        // Create a to-do item (unchecked)
+        blocks.push({
+          object: 'block',
+          type: 'to_do',
+          to_do: {
+            rich_text: [
+              {
+                type: 'text',
+                text: {
+                  content: text
+                }
+              }
+            ],
+            checked: false
+          }
+        });
+      } else {
+        // Regular bullet point
+        blocks.push({
+          object: 'block',
+          type: 'bulleted_list_item',
+          bulleted_list_item: {
+            rich_text: [
+              {
+                type: 'text',
+                text: {
+                  content: text
+                }
+              }
+            ]
+          }
+        });
+      }
     } else {
       // Regular paragraph block
       blocks.push({
@@ -3453,4 +3684,197 @@ function extractFrameioLink(content) {
   }
   
   return null;
+}
+
+else if (commandName === 'set') {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    hasResponded = true;
+    clearTimeout(timeoutWarning);
+    
+    // Extract the project code from the channel name
+    const code = projectCode(interaction.channel.name);
+    if (!code) {
+      await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
+      return;
+    }
+    
+    // Find the Notion page for this project
+    let pageId = await findPage(code);
+    if (!pageId) {
+      await interaction.editReply(`No Notion page found for project code "${code}". Use !sync first to create a page.`);
+      return;
+    }
+    
+    // Get subcommand and value
+    const subcommand = interaction.options.getSubcommand();
+    let propValue = null;
+    let notionProps = {};
+    
+    // Process based on subcommand
+    switch (subcommand) {
+      case 'status':
+        propValue = interaction.options.getString('value');
+        notionProps.Status = { status: { name: propValue } };
+        break;
+      
+      case 'due_date':
+        propValue = interaction.options.getString('date');
+        // Validate date format (YYYY-MM-DD)
+        if (!propValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          await interaction.editReply('Invalid date format. Use YYYY-MM-DD (e.g., 2025-04-15).');
+          return;
+        }
+        notionProps.Date = { date: { start: propValue } };
+        break;
+      
+      case 'priority':
+        propValue = interaction.options.getString('level');
+        notionProps.Priority = { select: { name: propValue } };
+        break;
+      
+      case 'editor':
+        propValue = interaction.options.getString('names');
+        const editorNames = propValue.split(',').map(n => n.trim()).filter(n => n);
+        if (editorNames.length === 0) {
+          await interaction.editReply('Please provide at least one editor name.');
+          return;
+        }
+        notionProps.Editor = { multi_select: editorNames.map(name => ({ name })) };
+        break;
+      
+      case 'writer':
+        propValue = interaction.options.getString('names');
+        const writerNames = propValue.split(',').map(n => n.trim()).filter(n => n);
+        if (writerNames.length === 0) {
+          await interaction.editReply('Please provide at least one writer name.');
+          return;
+        }
+        notionProps.Writer = { multi_select: writerNames.map(name => ({ name })) };
+        break;
+      
+      case 'lead':
+        propValue = interaction.options.getString('name');
+        notionProps.Lead = { select: { name: propValue } };
+        break;
+      
+      case 'caption_status':
+        propValue = interaction.options.getString('status');
+        notionProps['Caption Status'] = { select: { name: propValue } };
+        break;
+      
+      case 'script_url':
+        propValue = interaction.options.getString('url');
+        notionProps.Script = { url: propValue };
+        break;
+      
+      case 'frameio_url':
+        propValue = interaction.options.getString('url');
+        notionProps['Frame.io'] = { url: propValue };
+        break;
+    }
+    
+    try {
+      // Update the Notion property
+      await notion.pages.update({ 
+        page_id: pageId, 
+        properties: notionProps 
+      });
+      
+      // Get the Notion URL for the page
+      const notionUrl = getNotionPageUrl(pageId);
+      
+      // Success message
+      await interaction.editReply({
+        content: `✅ Updated ${subcommand.replace('_', ' ')} to "${propValue}" for project ${code}`,
+        components: notionUrl ? [
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setLabel('View in Notion')
+                .setStyle(ButtonStyle.Link)
+                .setURL(notionUrl)
+            )
+        ] : []
+      });
+      
+      // Also send a non-ephemeral message to channel
+      await interaction.channel.send({
+        content: `✅ <@${interaction.user.id}> set ${subcommand.replace('_', ' ')} to "${propValue}" for project ${code}`,
+        flags: [1 << 2] // SUPPRESS_EMBEDS
+      });
+    } catch (updateError) {
+      logToFile(`Error updating property in /set command: ${updateError.message}`);
+      await interaction.editReply(`❌ Error updating property: ${updateError.message}`);
+    }
+  } catch (cmdError) {
+    logToFile(`Error in /set command: ${cmdError.message}`);
+    if (!hasResponded) {
+      try {
+        await interaction.reply({ content: `❌ Error: ${cmdError.message}`, ephemeral: true });
+        hasResponded = true;
+      } catch (replyError) {
+        logToFile(`Failed to send error reply: ${replyError.message}`);
+      }
+    } else {
+      await interaction.editReply(`❌ Error: ${cmdError.message}`);
+    }
+  }
+}
+
+else if (commandName === 'watch') {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    hasResponded = true;
+    clearTimeout(timeoutWarning);
+    
+    // Get the parameters
+    const property = interaction.options.getString('property');
+    const value = interaction.options.getString('value');
+    const user = interaction.options.getUser('notify');
+    const customName = interaction.options.getString('name') || `${property} = ${value}`;
+    
+    // Generate a unique ID
+    const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    
+    // Create the new watcher
+    const newWatcher = {
+      id,
+      name: customName,
+      property,
+      value,
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      createdBy: interaction.user.id,
+      disabled: false
+    };
+    
+    // Add to custom watchers
+    customWatchers.push(newWatcher);
+    
+    // Save to file
+    saveWatchers();
+    
+    await interaction.editReply({
+      content: `✅ Created new Notion watcher "${customName}" (ID: ${id}):\n- Property: ${property}\n- Value: ${value}\n- Notifies: ${user}\n\nThis watcher is now active and will notify ${user} when a Notion page's "${property}" property is set to "${value}".`
+    });
+    
+    // Also send a non-ephemeral confirmation
+    await interaction.channel.send({
+      content: `✅ <@${interaction.user.id}> created a new Notion watcher: When "${property}" equals "${value}", <@${user.id}> will be notified.`,
+      flags: [1 << 2] // SUPPRESS_EMBEDS
+    });
+  } catch (cmdError) {
+    logToFile(`Error in /watch command: ${cmdError.message}`);
+    if (!hasResponded) {
+      try {
+        await interaction.reply({ content: `❌ Error: ${cmdError.message}`, ephemeral: true });
+        hasResponded = true;
+      } catch (replyError) {
+        logToFile(`Failed to send error reply: ${replyError.message}`);
+      }
+    } else {
+      await interaction.editReply(`❌ Error: ${cmdError.message}`);
+    }
+  }
 }
