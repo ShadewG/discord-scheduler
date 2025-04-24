@@ -1424,7 +1424,9 @@ function loadWatchers() {
   if (fs.existsSync(watchersFilePath)) {
     try {
       const data = fs.readFileSync(watchersFilePath, 'utf8');
-      return JSON.parse(data);
+      const loadedWatchers = JSON.parse(data);
+      logToFile(`Loaded ${loadedWatchers.length} existing Notion watchers from file`);
+      return loadedWatchers;
     } catch (error) {
       logToFile(`Error loading watchers file: ${error.message}`);
     }
@@ -1437,6 +1439,31 @@ function loadWatchers() {
 // Save custom watchers to a file
 function saveWatchers() {
   const watchersFilePath = path.join(__dirname, 'notion-watchers.json');
+  // Only save if there are watchers to save
+  if (customWatchers.length === 0) {
+    logToFile('No custom watchers to save');
+    return;
+  }
+  
+  // Check if the file already exists and has the same content to avoid unnecessary writes
+  if (fs.existsSync(watchersFilePath)) {
+    try {
+      const existingData = fs.readFileSync(watchersFilePath, 'utf8');
+      const existingWatchers = JSON.parse(existingData);
+      
+      // Compare if watchers are identical (simple length check first)
+      if (existingWatchers.length === customWatchers.length &&
+          JSON.stringify(existingWatchers.sort((a, b) => a.id.localeCompare(b.id))) === 
+          JSON.stringify(customWatchers.sort((a, b) => a.id.localeCompare(b.id)))) {
+        logToFile('Watchers unchanged - skipping write to notion-watchers.json');
+        return;
+      }
+    } catch (error) {
+      // If reading existing file fails, proceed with saving
+      logToFile(`Error reading existing watchers file: ${error.message}`);
+    }
+  }
+  
   fs.writeFileSync(watchersFilePath, JSON.stringify(customWatchers, null, 2));
   logToFile('Custom Notion watchers saved to notion-watchers.json');
 }
@@ -1445,5 +1472,5 @@ function saveWatchers() {
 const loadedWatchers = loadWatchers();
 if (loadedWatchers && loadedWatchers.length > 0) {
   customWatchers.push(...loadedWatchers);
-  logToFile(`Loaded ${customWatchers.length} custom Notion watchers`);
+  logToFile(`${customWatchers.length} Notion watchers active`);
 }
