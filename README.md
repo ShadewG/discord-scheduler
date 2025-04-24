@@ -10,7 +10,7 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - ✏️ Edit existing reminders through Discord UI
 - ➕ Add new reminders easily with slash commands
 - 🌐 Support for timezone-specific scheduling
-- 🔇 No startup announcement when the bot goes online (silent operation)
+- 🔇 Silent operation (no startup announcements)
 - 📝 Send manual messages to the channel with optional role mentions
 - 📓 Notion integration to track changes in databases
 

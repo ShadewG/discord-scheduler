@@ -1048,14 +1048,6 @@ client.once('ready', async () => {
   cron.schedule('* * * * *', pollNotion, { timezone: TZ });
   logToFile('🔍 Notion poller scheduled every 1 min');
   
-  // Send a startup notification to the Notion channel
-  try {
-    await sendNotionMessage(`📓 **Notion Integration Started**\nBot is now monitoring for caption status changes. Only pages marked as "Ready For Captions" from now on will trigger notifications.`);
-    logToFile('✅ Sent Notion startup notification');
-  } catch (error) {
-    logToFile(`❌ Failed to send Notion startup notification: ${error.message}`);
-  }
-  
   // Register slash commands
   await registerCommands(client.user.id);
   
