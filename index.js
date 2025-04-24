@@ -2119,6 +2119,17 @@ client.once('ready', async () => {
   logNextExecutions();
 });
 
+// Register commands when joining a new server
+client.on('guildCreate', async guild => {
+  logToFile(`🔔 Bot was added to a new server: ${guild.name} (${guild.id})`);
+  try {
+    await registerCommands(client.user.id, guild.id);
+    logToFile(`✅ Registered commands for new server: ${guild.name}`);
+  } catch (error) {
+    logToFile(`❌ Failed to register commands for new server: ${error.message}`);
+  }
+});
+
 // Connect to Discord
 client.login(DISCORD_TOKEN);
 
