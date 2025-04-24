@@ -15,6 +15,15 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowB
 const fs = require('fs');
 const { getTimeUntilNextExecution } = require('./utils');
 
+// ⬇⬇ Notion integration -----------------------------------------------------
+const { Client: Notion } = require('@notionhq/client');
+const notion  = new Notion({ auth: process.env.NOTION_TOKEN });
+const DB      = process.env.NOTION_DB_ID;              // 32-char DB id
+const TARGET_PROP   = 'Caption Status';                // column name in Notion
+const TARGET_VALUE  = 'Ready For Captions';            // value that triggers ping
+const RAY_ID        = '669012345678901245';            // Ray's Discord user-ID
+// --------------------------------------------------------------------------
+
 // Load environment variables
 const {
   DISCORD_TOKEN,
@@ -93,6 +102,46 @@ async function sendMessage(text) {
   } catch (error) {
     logToFile(`❌ Error sending message: ${error.message}`);
     logToFile(`Channel ID: ${CHANNEL_ID}`);
+  }
+}
+
+/* ─ Poll Notion every minute ─────────────────────────────────────── */
+let lastCheck = new Date(0);            // marker to avoid repeat pings
+
+async function pollNotion() {
+  try {
+    if (!process.env.NOTION_TOKEN || !DB) {
+      logToFile('❌ Notion poll skipped: Missing NOTION_TOKEN or NOTION_DB_ID');
+      return;
+    }
+    
+    logToFile('🔍 Polling Notion database for Caption Status updates...');
+    
+    const res = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        property: TARGET_PROP,
+        select: { equals: TARGET_VALUE }
+      },
+      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+    });
+
+    for (const page of res.results) {
+      const edited = new Date(page.last_edited_time);
+      if (edited <= lastCheck) break;   // skip already-seen rows
+
+      const title =
+        page.properties.Name.title?.[0]?.plain_text ?? '(untitled page)';
+        
+      logToFile(`✅ Found updated Notion page with caption: "${title}"`);
+      
+      await sendMessage(
+        `<@${RAY_ID}> Captions are ready for project **"${title}"**`
+      );
+    }
+    lastCheck = new Date();             // move checkpoint forward
+  } catch (err) {
+    logToFile(`❌ Notion poll error: ${err.message}`);
   }
 }
 
@@ -884,6 +933,10 @@ client.once('ready', async () => {
   jobs.forEach(job => {
     scheduleJob(job);
   });
+  
+  // Schedule Notion poller
+  cron.schedule('* * * * *', pollNotion, { timezone: TZ });
+  logToFile('🔍 Notion poller scheduled every 1 min');
   
   // Register slash commands
   await registerCommands(client.user.id);

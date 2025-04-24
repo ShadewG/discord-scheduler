@@ -1,52 +1,40 @@
-// notion-integration.js
-// Stub file for future Notion integration
-
 /**
- * Interface for a Notion event
- * @typedef {Object} NotionEvent
- * @property {string} id - Notion event ID
- * @property {string} title - Event title
- * @property {Date} startTime - Event start time
- * @property {Date} endTime - Event end time
- * @property {string} type - Event type (e.g., 'Fika', 'Planning', 'Deep-Work', 'Wrap-Up')
- * @property {string[]} attendees - List of attendee IDs
- * @property {string} description - Event description
+ * Notion Integration for Discord Scheduler Bot
+ * 
+ * This integration polls a Notion database every minute and checks for pages
+ * where a specific property (e.g., "Caption Status") equals a specific value
+ * (e.g., "Ready For Captions"). When it finds matching pages that have been
+ * updated since the last check, it sends a Discord message mentioning the
+ * specified user.
+ * 
+ * ## Prerequisites
+ * 
+ * 1. Create a Notion Integration:
+ *    - Go to https://www.notion.so/my-integrations
+ *    - Create a new integration
+ *    - Copy the "Internal Integration Token"
+ * 
+ * 2. Share your database with the integration:
+ *    - Open your Notion database
+ *    - Click "..." in the top right
+ *    - Click "Add connections"
+ *    - Find and select your integration
+ * 
+ * 3. Get your database ID:
+ *    - Open your database in Notion
+ *    - The URL will look like: https://www.notion.so/workspace/83c7...a1a3?v=...
+ *    - Copy the 32-character ID (83c7...a1a3 in this example)
+ * 
+ * 4. Configure environment variables:
+ *    - NOTION_TOKEN: Your Notion integration token (secret_xxx...)
+ *    - NOTION_DB_ID: Your database ID
+ * 
+ * ## Configuration
+ * 
+ * In index.js, you can configure:
+ * - TARGET_PROP: The name of the property/column to check (default: "Caption Status")
+ * - TARGET_VALUE: The value that triggers a notification (default: "Ready For Captions")
+ * - RAY_ID: The Discord user ID to mention in notifications
  */
 
-/**
- * Interface for Notion API client configuration
- * @typedef {Object} NotionConfig
- * @property {string} apiKey - Notion API key
- * @property {string} databaseId - Notion database ID for events
- */
-
-/**
- * Fetches events from Notion database
- * @param {NotionConfig} config - Notion API configuration
- * @param {Object} options - Query options
- * @param {Date} options.startDate - Start date for event range
- * @param {Date} options.endDate - End date for event range
- * @returns {Promise<NotionEvent[]>} List of events
- */
-async function fetchEvents(config, options) {
-  // This is a stub to be implemented in the future
-  console.log('Stub: fetchEvents called with', { config, options });
-  return [];
-}
-
-/**
- * Syncs Discord schedule with Notion events
- * @param {NotionConfig} notionConfig - Notion API configuration
- * @param {Array} discordJobs - Discord job configurations
- * @returns {Promise<Array>} Updated Discord job configurations
- */
-async function syncScheduleWithNotion(notionConfig, discordJobs) {
-  // This is a stub to be implemented in the future
-  console.log('Stub: syncScheduleWithNotion called');
-  return discordJobs;
-}
-
-module.exports = {
-  fetchEvents,
-  syncScheduleWithNotion
-}; 
+// This file is for documentation only and is not loaded by the application 

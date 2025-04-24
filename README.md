@@ -12,6 +12,7 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - 🌐 Support for timezone-specific scheduling
 - 🔇 No startup announcement when the bot goes online (silent operation)
 - 📝 Send manual messages to the channel with optional role mentions
+- 📓 Notion integration to track changes in databases
 
 ## Commands
 
@@ -43,6 +44,10 @@ DISCORD_TOKEN=your_discord_bot_token_here
 CHANNEL_ID=your_channel_id_here
 ROLE_ID=your_role_id_here
 TZ=Europe/Berlin
+
+# Notion Integration (optional)
+NOTION_TOKEN=secret_xxx
+NOTION_DB_ID=83c7...a1a3
 ```
 
 ## Deployment
@@ -55,6 +60,16 @@ This bot can be deployed to services like Railway or Heroku.
 2. Connect your repository to Railway
 3. Add environment variables in Railway dashboard
 4. Deploy the bot
+
+## Notion Integration
+
+The bot includes an integration with Notion that:
+
+1. Polls a specified Notion database every minute
+2. Checks for pages where "Caption Status" equals "Ready For Captions"
+3. Notifies a specified user when new matching pages are found
+
+For more information, see the [notion-integration.js](./notion-integration.js) file.
 
 ## License
 
