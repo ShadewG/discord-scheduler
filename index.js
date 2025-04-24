@@ -81,7 +81,7 @@ const FUNC_SCHEMA = {
       editor:         { type:'array', items: { type:'string' } },
       lead:           { type:'string' },
       brand_deal:     { type:'string', description: 'The ID of the related item in the brand deals database' },
-      status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog'] },
+      status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog','Pause'] },
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
       current_stage_date: { type:'string', format:'date' },
       category:       { type:'string', enum:['IB','CL','Bodycam'], description: 'The category of the project (IB, CL, or Bodycam)' },
@@ -1473,10 +1473,19 @@ Resolve conflicts by preferring the most recent mentions.
 Important: Pay careful attention to URLs mentioned in the chat history.
 - For script URLs (Google Docs, Notion pages), set the script_url property
 - For Frame.io links (including f.io short links), set the frameio_url property
-- If you see other important links, include them in page_content
 
-If you find mentions of images, assets, or other important information that should be added to the page
-as notes rather than properties, include those in the page_content field.
+For the page_content field:
+ONLY include content that is:
+- Specific actionable tasks or next steps
+- Important project plans, deadlines or milestones
+- Key creative decisions or requirements
+- Critical context that future viewers of the page need
+
+DO NOT include in page_content:
+- General links to guides or documentation
+- Links that are already set as properties (scripts, Frame.io)
+- General discussions or non-actionable information
+- Routine status updates that are captured in properties
 
 You can also identify or update the project category to "IB", "CL", or "Bodycam" based on discussions.
 The category is usually determined from the project code (IB##, CL##, BC##), but can be changed.
@@ -2541,17 +2550,26 @@ client.on('messageCreate', async msg => {
       temperature: 0,
       messages: [
         { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.
-You can update both properties and add content to the page itself. 
-If the user mentions new images, notes, or other content that should be added to the page (not just as properties),
-include that in the page_content field.
 
-Important: Pay careful attention to URLs in the user's message. 
-- For script URLs (Google Docs, Notion pages), set the script_url property
-- For Frame.io links (including f.io short links), set the frameio_url property
-- If you see other important links, include them in page_content
+For properties:
+- For script URLs (Google Docs, Notion), set the script_url property
+- For Frame.io links (f.io), set the frameio_url property
+- Process dates, status updates, priorities, etc. as properties
 
-You can set the project category to "IB", "CL", or "Bodycam" based on user instructions.
-The category is automatically determined from the project code prefix (IB, CL, BC), but users can change it.` },
+For page_content field:
+ONLY include content that is:
+- Specific actionable tasks or next steps
+- Important project plans, deadlines or milestones
+- Key creative decisions or requirements
+- Critical context that future viewers of the page need
+
+DO NOT include in page_content:
+- General links to guides or documentation
+- Links that are already set as properties (scripts, Frame.io)
+- General discussions or non-actionable information
+- Routine status updates that are captured in properties
+
+The category property can be "IB", "CL", or "Bodycam" based on project code prefix.` },
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
       ],
       functions: [FUNC_SCHEMA],
