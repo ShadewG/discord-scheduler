@@ -1489,10 +1489,29 @@ client.on('interactionCreate', async interaction => {
       }
       
       // Find the Notion page for this project
-      const pageId = await findPage(code);
+      let pageId = await findPage(code);
+      let isNewPage = false;
+      
+      // Fetch channel messages for analysis
+      const messages = await interaction.channel.messages.fetch({ limit: 100 });
+      
+      // Look for the first image in the messages for a thumbnail
+      const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
+      
+      // If no page exists, create one
       if (!pageId) {
-        await interaction.editReply(`No Notion page found for project code "${code}". Please make sure a Notion page exists with this code.`);
-        return;
+        await interaction.editReply(`No Notion page found for project code "${code}". Creating a new page...`);
+        
+        // Create a new page with the channel name as the title
+        pageId = await createNotionPage(code, interaction.channel.name, {}, firstImageUrl);
+        
+        if (!pageId) {
+          await interaction.editReply('❌ Failed to create Notion page. Check logs for details.');
+          return;
+        }
+        
+        isNewPage = true;
+        await interaction.editReply(`✅ Created new Notion page for project "${code}". Now analyzing messages...`);
       }
       
       // Get number of messages to analyze (default: 50, max: 100)
@@ -1500,8 +1519,6 @@ client.on('interactionCreate', async interaction => {
       
       await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
       
-      // Fetch channel messages
-      const messages = await interaction.channel.messages.fetch({ limit });
       if (!messages || messages.size === 0) {
         await interaction.editReply('No messages found to analyze.');
         return;
@@ -1510,7 +1527,8 @@ client.on('interactionCreate', async interaction => {
       // Sort messages by timestamp (oldest first)
       const sortedMessages = Array.from(messages.values())
         .filter(msg => !msg.author.bot) // Skip bot messages
-        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+        .slice(0, limit); // Limit to the requested number
       
       if (sortedMessages.length === 0) {
         await interaction.editReply('No user messages found to analyze.');
@@ -1624,9 +1642,17 @@ Today's date is ${today}.`
       const analysisEmbed = new EmbedBuilder()
         .setColor(0x00FF00)
         .setTitle(`📊 Analysis Results for ${code}`)
-        .setDescription(`I've analyzed ${sortedMessages.length} messages and updated the following:`)
+        .setDescription(`I've analyzed ${sortedMessages.length} messages and ${isNewPage ? 'created a new page with' : 'updated the following:'}`)
         .setFooter({ text: `Analyzed ${limit} messages` })
         .setTimestamp();
+      
+      // Add note about page creation if applicable
+      if (isNewPage) {
+        analysisEmbed.addFields({
+          name: '✨ New Page Created',
+          value: `Created a new Notion page for project **${code}**${firstImageUrl ? ' with thumbnail image' : ''}`
+        });
+      }
       
       // Add fields for updated properties
       if (hasPropertiesToUpdate) {
@@ -1664,7 +1690,7 @@ Today's date is ${today}.`
         });
       }
       
-      await interaction.editReply({ content: '✅ Analysis complete!', embeds: [analysisEmbed] });
+      await interaction.editReply({ content: `✅ Analysis complete! ${isNewPage ? 'New page created and' : ''} Notion has been updated.`, embeds: [analysisEmbed] });
     } catch (error) {
       logToFile(`Error in /analyze command: ${error.message}`);
       await interaction.editReply(`❌ Error analyzing channel history: ${error.message}`);
@@ -1986,14 +2012,31 @@ client.on('messageCreate', async msg => {
     return;
   }
 
-  const pageId = await findPage(code);
+  // Get the first 50 messages to look for images
+  const messages = await msg.channel.messages.fetch({ limit: 50 });
+  const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
+
+  // Find the Notion page for this project
+  let pageId = await findPage(code);
+  let isNewPage = false;
+  
+  // If no page exists, create one
   if (!pageId) {
-    await msg.reply(`No Notion page starting with "${code}".`);
-    return;
+    await msg.reply(`Creating new Notion page for project code "${code}"...`);
+    
+    // Create a new page with the channel name as the title
+    pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
+    
+    if (!pageId) {
+      await msg.reply('❌ Failed to create Notion page. Check logs for details.');
+      return;
+    }
+    
+    isNewPage = true;
   }
 
   const userText = msg.content.slice(TRIGGER_PREFIX.length).trim();
-  if (!userText) return;
+  if (!userText && !isNewPage) return;
 
   try {
     // Get current date in ISO format
@@ -2007,7 +2050,7 @@ client.on('messageCreate', async msg => {
 You can update both properties and add content to the page itself. 
 If the user mentions new images, notes, or other content that should be added to the page (not just as properties),
 include that in the page_content field.` },
-        { role: 'user', content: userText }
+        { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
       ],
       functions: [FUNC_SCHEMA],
       function_call: 'auto'
@@ -2035,7 +2078,7 @@ include that in the page_content field.` },
     // Check if there's page content to add
     const hasPageContent = props.page_content && props.page_content.trim().length > 0;
     
-    if (!hasPropertiesToUpdate && !hasPageContent) {
+    if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
       await msg.reply('Nothing to update.');
       return;
     }
@@ -2078,6 +2121,13 @@ include that in the page_content field.` },
 
     // Create response message
     let responseDescription = '';
+    if (isNewPage) {
+      responseDescription += `✨ Created new Notion page for project **${code}**\n\n`;
+      if (firstImageUrl) {
+        responseDescription += 'Added first image from channel as thumbnail\n\n';
+      }
+    }
+    
     if (hasPropertiesToUpdate) {
       responseDescription += 'Updated properties:\n' + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
     }
@@ -2089,7 +2139,7 @@ include that in the page_content field.` },
 
     await msg.reply({
       embeds: [{
-        title: `✅ ${code} updated`,
+        title: `✅ ${code} ${isNewPage ? 'created' : 'updated'}`,
         description: responseDescription,
         color: 0x57F287
       }]
@@ -2099,3 +2149,137 @@ include that in the page_content field.` },
     msg.reply('❌ Error updating Notion; check logs.');
   }
 });
+
+// Function to create a new Notion page if one doesn't exist
+async function createNotionPage(code, channelName, properties = {}, firstImageUrl = null) {
+  try {
+    logToFile(`🔨 Creating new Notion page for project code "${code}" from channel "${channelName}"`);
+    
+    // Make sure we have the database schema
+    if (!CACHED_TITLE_PROPERTY) {
+      // Get database schema to find the title property
+      const dbInfo = await notion.databases.retrieve({
+        database_id: DB
+      });
+      
+      // Find which property is of type 'title'
+      for (const [propName, propDetails] of Object.entries(dbInfo.properties)) {
+        if (propDetails.type === 'title') {
+          CACHED_TITLE_PROPERTY = propName;
+          logToFile(`✅ Found title property in database: "${CACHED_TITLE_PROPERTY}"`);
+          break;
+        }
+      }
+      
+      if (!CACHED_TITLE_PROPERTY) {
+        logToFile(`❌ Could not find any title property in the database. Available properties: ${Object.keys(dbInfo.properties).join(', ')}`);
+        return null;
+      }
+    }
+    
+    // Format a title for the new page
+    const title = channelName.includes(code) ? channelName : `${code} - ${channelName}`;
+    
+    // Create the basic page properties
+    const pageProperties = {
+      [CACHED_TITLE_PROPERTY]: {
+        title: [
+          {
+            text: {
+              content: title
+            }
+          }
+        ]
+      },
+      ...properties
+    };
+    
+    // Create the page
+    const response = await notion.pages.create({
+      parent: {
+        database_id: DB
+      },
+      properties: pageProperties
+    });
+    
+    logToFile(`✅ Created new Notion page for "${title}" with ID: ${response.id}`);
+    
+    // Add the thumbnail image if provided
+    if (firstImageUrl) {
+      try {
+        await notion.blocks.children.append({
+          block_id: response.id,
+          children: [
+            {
+              object: 'block',
+              type: 'image',
+              image: {
+                type: 'external',
+                external: {
+                  url: firstImageUrl
+                }
+              }
+            },
+            {
+              object: 'block',
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [
+                  {
+                    type: 'text',
+                    text: {
+                      content: `Project created from Discord channel ${channelName}`
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        });
+        logToFile(`✅ Added thumbnail image to new page`);
+      } catch (imgError) {
+        logToFile(`❌ Error adding thumbnail image: ${imgError.message}`);
+      }
+    }
+    
+    return response.id;
+  } catch (error) {
+    logToFile(`❌ Error creating Notion page: ${error.message}`);
+    return null;
+  }
+}
+
+// Function to extract the first image URL from messages
+function findFirstImageUrl(messages) {
+  if (!messages || messages.length === 0) return null;
+  
+  for (const msg of messages) {
+    // Check for attachments
+    if (msg.attachments && msg.attachments.size > 0) {
+      const attachment = Array.from(msg.attachments.values())[0];
+      if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+        return attachment.url;
+      }
+    }
+    
+    // Check for embeds with images
+    if (msg.embeds && msg.embeds.length > 0) {
+      for (const embed of msg.embeds) {
+        if (embed.image && embed.image.url) {
+          return embed.image.url;
+        }
+      }
+    }
+    
+    // Look for image URLs in the content
+    if (msg.content) {
+      const urlRegex = /(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))/i;
+      const match = msg.content.match(urlRegex);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+  }
+  
+  return null;
+}
