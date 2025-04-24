@@ -4,8 +4,8 @@
  * This integration polls a Notion database every minute and checks for pages
  * where a specific property (e.g., "Caption Status") equals a specific value
  * (e.g., "Ready For Captions"). When it finds matching pages that have been
- * updated since the last check, it sends a Discord message mentioning the
- * specified user.
+ * updated since the bot started running, it sends a Discord message mentioning 
+ * the specified user.
  * 
  * ## Prerequisites
  * 
@@ -53,6 +53,11 @@
  * 3. Prevents Duplicate Notifications:
  *    - The integration tracks which pages it has already processed
  *    - Once a notification is sent for a page, it won't notify again for that same page
+ * 
+ * 4. Only Tracks New Changes:
+ *    - The bot only processes pages that were marked "Ready For Captions" after the bot started
+ *    - Any pages that were already in that state before the bot started will be ignored
+ *    - This prevents a flood of notifications for pre-existing content when restarting the bot
  * 
  * ## Troubleshooting
  * 

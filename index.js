@@ -121,7 +121,8 @@ async function sendNotionMessage(text) {
 }
 
 /* ─ Poll Notion every minute ─────────────────────────────────────── */
-let lastCheck = new Date(0);            // marker to avoid repeat pings
+// Use actual bot startup time instead of arbitrary past date
+let lastCheck = new Date();  // Use current time when the bot starts
 const processedPageIds = new Set();     // track pages we've already processed
 
 async function pollNotion() {
@@ -162,8 +163,13 @@ async function pollNotion() {
         }
         
         const edited = new Date(page.last_edited_time);
+        
+        // Skip pages that were edited before the bot started
         if (edited <= lastCheck) {
-          logToFile(`👀 Found page edited at ${edited.toISOString()}, but it's before our last check (${lastCheck.toISOString()}). Skipping.`);
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before or at bot startup time (${lastCheck.toISOString()}). Ignoring pre-existing pages.`);
+          
+          // Still add to processed pages so we don't check it again
+          processedPageIds.add(pageId);
           continue;
         }
         
@@ -203,7 +209,9 @@ async function pollNotion() {
           }
         }
         
-        logToFile(`🔔 Found updated Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
+        logToFile(`🔔 Found new Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
+        logToFile(`   - Last edited: ${edited.toISOString()}`);
+        logToFile(`   - Bot startup: ${lastCheck.toISOString()}`);
         
         // Add to processed pages so we don't notify again
         processedPageIds.add(pageId);
@@ -220,7 +228,8 @@ async function pollNotion() {
         logToFile(`📊 Sent ${notificationCount} Notion notifications`);
       }
       
-      lastCheck = new Date();             // move checkpoint forward
+      // Only update lastCheck if we actually checked the database successfully
+      lastCheck = new Date();
     } catch (err) {
       logToFile(`❌ Notion database query error: ${err.message}`);
       
@@ -1027,6 +1036,7 @@ client.once('ready', async () => {
   logToFile(`📆  Timezone set to: ${TZ || 'Not set (using system default)'}`);
   logToFile(`📌  Pinging role ID: ${ROLE_ID}`);
   logToFile(`💬  Sending to channel ID: ${CHANNEL_ID}`);
+  logToFile(`💬  Notion notifications channel: ${NOTION_CHANNEL_ID}`);
   logToFile('\n⏰  Scheduled jobs:');
 
   // Schedule all jobs
@@ -1037,6 +1047,14 @@ client.once('ready', async () => {
   // Schedule Notion poller
   cron.schedule('* * * * *', pollNotion, { timezone: TZ });
   logToFile('🔍 Notion poller scheduled every 1 min');
+  
+  // Send a startup notification to the Notion channel
+  try {
+    await sendNotionMessage(`📓 **Notion Integration Started**\nBot is now monitoring for caption status changes. Only pages marked as "Ready For Captions" from now on will trigger notifications.`);
+    logToFile('✅ Sent Notion startup notification');
+  } catch (error) {
+    logToFile(`❌ Failed to send Notion startup notification: ${error.message}`);
+  }
   
   // Register slash commands
   await registerCommands(client.user.id);
