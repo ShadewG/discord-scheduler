@@ -16,14 +16,18 @@ const fs = require('fs');
 const { getTimeUntilNextExecution } = require('./utils');
 const { OpenAI } = require('openai');
 
+// ⬇⬇ Notion integration -----------------------------------------------------
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
-const DB = rawDB.replace(/-/g, '');  // Remove all hyphens from the ID
-const TARGET_PROP   = 'Caption Status';                // column name in Notion
-const TARGET_VALUE  = 'Ready For Captions';            // value that triggers ping
-const RAY_ID        = '348547268695162890';            // Ray's Discord user-ID
+const DB = rawDB.replace(/-/g, '');
+const TARGET_PROP = 'Caption Status';
+const TARGET_VALUE = 'Ready For Captions';
+const RAY_ID = '669012345678901245';                     // User ID to notify
 const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
-// --------------------------------------------------------------------------
+
+// Initialize Notion client
+const { Client: Notion } = require('@notionhq/client');
+const notion = new Notion({ auth: process.env.NOTION_TOKEN });
 
 // Load environment variables
 const {
@@ -533,6 +537,10 @@ function scheduleJob(job) {
 // Define slash commands
 const commands = [
   new SlashCommandBuilder()
+    .setName('watchers')
+    .setDescription('List all Notion watchers in detail'),
+  
+  new SlashCommandBuilder()
     .setName('test')
     .setDescription('Send test messages for all scheduled reminders'),
   
@@ -790,7 +798,8 @@ function createHelpEmbed() {
       { name: '/edit', value: 'Edit a scheduled reminder' },
       { name: '/add', value: 'Add a new scheduled reminder' },
       { name: '/notion', value: 'Manage Notion status watchers (add/list/enable/disable/delete/properties)' },
-      { name: '/help', value: 'Show this help information' }
+      { name: '/help', value: 'Show this help information' },
+      { name: '/watchers', value: 'List all Notion watchers in detail' }
     )
     .setTimestamp();
 
@@ -1299,6 +1308,46 @@ client.on('interactionCreate', async interaction => {
           content: `❌ Error fetching database properties: ${error.message}\n\nMake sure your Notion integration is set up correctly.`
         });
       }
+    }
+  }
+  
+  else if (commandName === 'watchers') {
+    await interaction.deferReply();
+    
+    try {
+      // Create a rich embed to display all watchers
+      const embed = new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('📋 All Notion Watchers')
+        .setDescription('Here are all configured Notion watchers that notify users when properties change.')
+        .setTimestamp();
+      
+      // Add field for default watcher
+      embed.addFields({
+        name: '🔍 Default Watcher',
+        value: `**Property:** ${TARGET_PROP}\n**Value:** ${TARGET_VALUE}\n**Notifies:** <@${RAY_ID}>`
+      });
+      
+      // Add fields for custom watchers
+      if (customWatchers && customWatchers.length > 0) {
+        customWatchers.forEach(watcher => {
+          const status = watcher.disabled ? '🔴 Disabled' : '🟢 Active';
+          embed.addFields({
+            name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
+            value: `**Property:** ${watcher.property}\n**Value:** ${watcher.value}\n**Notifies:** <@${watcher.userId}>\n**Created:** ${new Date(watcher.createdAt).toLocaleDateString()}`
+          });
+        });
+      } else {
+        embed.addFields({
+          name: 'Custom Watchers',
+          value: '*No custom watchers configured*\nUse `/notion add` to create watchers.'
+        });
+      }
+      
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      logToFile(`Error in /watchers command: ${error.message}`);
+      await interaction.editReply('❌ Error retrieving watchers. Check logs for details.');
     }
   }
 });
