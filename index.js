@@ -63,6 +63,80 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
 
+// System prompt for analysis
+const ANALYSIS_SYSTEM_PROMPT = `
+You are an assistant that **reads the last N Discord messages for a single
+video-project channel** and produces *only the final state* of each project
+property so we can patch a Notion row.
+
+─────────────────
+## Output contract
+Return **ONE** of the following:
+
+1. **No function call**  
+   when nothing in the messages changes project data.
+
+2. A function call to \`update_properties\` where \`arguments\` is a JSON
+   object that MAY contain any of the keys below **exactly as written**.
+   Omit keys you cannot improve.  
+   Do **NOT** invent keys or nested objects.
+
+\`\`\`jsonc
+{
+  // ─────────── strings / urls ───────────
+  "script_url":   "https://docs.google.com/document/d/…",
+  "frameio_url":  "https://app.frame.io/…",
+  "due_date":     "2025-04-15",          // ISO-8601 date
+  "editor_discord":"348547268695162890", // snowflake as string
+  "lead":          "Ray",
+  "brand_deal":    "MySponsor2025",
+  "current_stage_date":"2025-04-15",
+
+  // ─────────── arrays of names ──────────
+  "writer":       ["Anna","Michael"],
+  "project_owner":["Sam"],
+  "editor":       ["Ray","Jamie"],
+
+  // ─────────── enums (use EXACT values) ─
+  "priority":        "High",             // High | Medium | Low
+  "caption_status":  "Ready For Captions",
+  "status":          "Writing Review",
+  "threed_status":   "Storyboarding",
+  "category":        "CL",               // IB | CL | Bodycam
+
+  // ─────────── rich notes block ─────────
+  "page_content": "Bullet list of actionable decisions…"
+}
+\`\`\`
+
+### How to decide what goes where
+* **Latest wins:** if the same field is mentioned multiple times, keep the most
+  recent value.
+* **URLs**  
+  * \`google docs\`, \`notion(.)site\`, or anything obviously a script ⇒
+    \`script_url\`.  
+  * \`frame.io\` or \`f.io\` ⇒ \`frameio_url\`.
+* **Dates**  
+  * Accept natural language ("this Friday", "12 Apr") and convert to YYYY-MM-DD
+    **in the Berlin timezone** (${TZ}).
+* **Names → arrays**  
+  * If more than one writer/owner/editor is mentioned, accumulate them into the
+    respective array (deduplicate, preserve order of first appearance).
+* **Enum fuzziness**  
+  * Map close variants to the valid enum:  
+    "on hold" → \`"Pause"\`, "prio high" → \`"High"\`, etc.
+* **page_content**  
+  Include **only** actionable plans, creative decisions, concrete next steps,
+  or deadlines **not already expressed by a property**.  
+  Strip greetings, chatter, generic docs/guides links, and any link you already
+  placed into \`script_url\` or \`frameio_url\`.
+
+### Today's date
+Today is \${new Date().toISOString().split('T')[0]}.
+Remember this when interpreting relative dates like "next Monday".
+
+Return nothing else.`;
+
 // Function calling schema for OpenAI
 const FUNC_SCHEMA = {
   name: 'update_properties',
@@ -1463,39 +1537,8 @@ client.on('interactionCreate', async interaction => {
             model: 'gpt-4o',
             temperature: 0,
             messages: [
-              { 
-                role: 'system', 
-                content: `You analyze project discussions to extract the latest decisions about project details.
-Your task is to identify the FINAL/LATEST mentions of key properties from a chat history.
-For example, if someone initially sets a due date to Friday but later changes it to Sunday, use Sunday.
-Resolve conflicts by preferring the most recent mentions.
-
-Important: Pay careful attention to URLs mentioned in the chat history.
-- For script URLs (Google Docs, Notion pages), set the script_url property
-- For Frame.io links (including f.io short links), set the frameio_url property
-
-For the page_content field:
-ONLY include content that is:
-- Specific actionable tasks or next steps
-- Important project plans, deadlines or milestones
-- Key creative decisions or requirements
-- Critical context that future viewers of the page need
-
-DO NOT include in page_content:
-- General links to guides or documentation
-- Links that are already set as properties (scripts, Frame.io)
-- General discussions or non-actionable information
-- Routine status updates that are captured in properties
-
-You can also identify or update the project category to "IB", "CL", or "Bodycam" based on discussions.
-The category is usually determined from the project code (IB##, CL##, BC##), but can be changed.
-
-Today's date is ${today}.`
-              },
-              { 
-                role: 'user', 
-                content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}`
-              }
+              { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
+              { role: 'user', content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}` }
             ],
             functions: [FUNC_SCHEMA],
             function_call: 'auto'
@@ -2549,27 +2592,7 @@ client.on('messageCreate', async msg => {
       model: 'gpt-4o',
       temperature: 0,
       messages: [
-        { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.
-
-For properties:
-- For script URLs (Google Docs, Notion), set the script_url property
-- For Frame.io links (f.io), set the frameio_url property
-- Process dates, status updates, priorities, etc. as properties
-
-For page_content field:
-ONLY include content that is:
-- Specific actionable tasks or next steps
-- Important project plans, deadlines or milestones
-- Key creative decisions or requirements
-- Critical context that future viewers of the page need
-
-DO NOT include in page_content:
-- General links to guides or documentation
-- Links that are already set as properties (scripts, Frame.io)
-- General discussions or non-actionable information
-- Routine status updates that are captured in properties
-
-The category property can be "IB", "CL", or "Bodycam" based on project code prefix.` },
+        { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
       ],
       functions: [FUNC_SCHEMA],
