@@ -1641,25 +1641,24 @@ Today's date is ${today}.`
         const timestamp = new Date().toLocaleString();
         const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
         
-        // Append the content to the page
+        // Look for a Google Docs link that could be a script
+        if (!props.script_url && !notionProps.Script) {
+          const scriptLink = extractScriptLink(props.page_content);
+          if (scriptLink) {
+            logToFile(`📝 Found potential script link in content: ${scriptLink}`);
+            // Add the script URL to properties
+            notionProps.Script = { url: scriptLink };
+            hasPropertiesToUpdate = true;
+          }
+        }
+        
+        // Format the content into proper Notion blocks with clickable links
+        const contentBlocks = formatNotionContent(formattedContent);
+        
+        // Append the formatted blocks to the page
         await notion.blocks.children.append({
           block_id: pageId,
-          children: [
-            {
-              object: 'block',
-              type: 'paragraph',
-              paragraph: {
-                rich_text: [
-                  {
-                    type: 'text',
-                    text: {
-                      content: formattedContent
-                    }
-                  }
-                ]
-              }
-            }
-          ]
+          children: contentBlocks
         });
       }
       
@@ -2125,25 +2124,24 @@ The category is automatically determined from the project code prefix (IB, CL, B
       const timestamp = new Date().toLocaleString();
       const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
       
-      // Append the content to the page
+      // Look for a Google Docs link that could be a script
+      if (!props.script_url && !notionProps.Script) {
+        const scriptLink = extractScriptLink(props.page_content);
+        if (scriptLink) {
+          logToFile(`📝 Found potential script link in content: ${scriptLink}`);
+          // Add the script URL to properties
+          notionProps.Script = { url: scriptLink };
+          hasPropertiesToUpdate = true;
+        }
+      }
+      
+      // Format the content into proper Notion blocks
+      const contentBlocks = formatNotionContent(formattedContent);
+      
+      // Append the formatted blocks to the page
       await notion.blocks.children.append({
         block_id: pageId,
-        children: [
-          {
-            object: 'block',
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [
-                {
-                  type: 'text',
-                  text: {
-                    content: formattedContent
-                  }
-                }
-              ]
-            }
-          }
-        ]
+        children: contentBlocks
       });
     }
 
@@ -2205,13 +2203,48 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
       }
     }
     
-    // Format a title for the new page
-    const title = channelName.includes(code) ? channelName : `${code} - ${channelName}`;
+    // Format a proper title for the new page - remove redundancy
+    let cleanChannelName = channelName;
+    
+    // Remove the code from the channel name if it's already there to avoid duplication
+    if (channelName.toLowerCase().includes(code.toLowerCase())) {
+      // Extract just the descriptive part, removing the code prefix
+      const codeRegex = new RegExp(`^${code.toLowerCase()}-?\\s*`, 'i');
+      cleanChannelName = channelName.replace(codeRegex, '');
+      logToFile(`📝 Cleaned channel name to "${cleanChannelName}" by removing code prefix`);
+    }
+    
+    // Format the title with the code first, then the cleaned channel name
+    const title = `${code} - ${cleanChannelName}`;
     
     // Determine the category from the project code
     const category = getProjectCategory(code);
     if (category) {
       logToFile(`📝 Setting category to "${category}" based on project code ${code}`);
+    }
+    
+    // Try to find the template in Notion
+    const templateName = "Project Name"; // Default template name
+    let templateId = null;
+    
+    try {
+      // Search for the template in the database
+      const templateQuery = await notion.databases.query({
+        database_id: DB,
+        filter: {
+          property: CACHED_TITLE_PROPERTY,
+          rich_text: { equals: templateName }
+        }
+      });
+      
+      if (templateQuery.results.length > 0) {
+        templateId = templateQuery.results[0].id;
+        logToFile(`✅ Found template with name "${templateName}" (ID: ${templateId})`);
+      } else {
+        logToFile(`⚠️ Couldn't find template with name "${templateName}". Will create page without template.`);
+      }
+    } catch (err) {
+      logToFile(`⚠️ Error looking for template: ${err.message}`);
     }
     
     // Create the basic page properties
@@ -2237,13 +2270,82 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
       };
     }
     
-    // Create the page
-    const response = await notion.pages.create({
-      parent: {
-        database_id: DB
-      },
-      properties: pageProperties
-    });
+    // Set a default Status if none provided - try to infer a reasonable starting status
+    if (!properties.Status) {
+      pageProperties['Status'] = {
+        status: {
+          name: 'Ready for production' // Default starting status
+        }
+      };
+    }
+    
+    // Create the page, using template if available
+    let response;
+    
+    if (templateId) {
+      // Duplicate the template
+      response = await notion.pages.create({
+        parent: {
+          database_id: DB
+        },
+        properties: pageProperties
+      });
+      
+      // Get the template's children blocks
+      const templateBlocks = await notion.blocks.children.list({
+        block_id: templateId
+      });
+      
+      // Copy template blocks to the new page
+      if (templateBlocks.results.length > 0) {
+        logToFile(`📋 Copying ${templateBlocks.results.length} blocks from template`);
+        
+        // We'll handle this differently - need to recreate each block type
+        const blocksToCopy = [];
+        
+        // Process and recreate each block type
+        for (const block of templateBlocks.results) {
+          // Skip if it's a child database/relation, we can't easily duplicate these
+          if (block.type === 'child_database') {
+            logToFile(`⚠️ Skipping child_database block - can't automatically duplicate`);
+            continue;
+          }
+          
+          // Create a simplified copy of the block object (structure depends on block type)
+          try {
+            // Create a basic copy with the same type and content
+            const newBlock = {
+              object: 'block',
+              type: block.type
+            };
+            
+            // Copy the content specific to this block type
+            newBlock[block.type] = block[block.type];
+            
+            blocksToCopy.push(newBlock);
+          } catch (blockErr) {
+            logToFile(`⚠️ Error processing template block: ${blockErr.message}`);
+          }
+        }
+        
+        // Add the blocks to the new page
+        if (blocksToCopy.length > 0) {
+          await notion.blocks.children.append({
+            block_id: response.id,
+            children: blocksToCopy
+          });
+          logToFile(`✅ Added ${blocksToCopy.length} template blocks to new page`);
+        }
+      }
+    } else {
+      // Create without a template
+      response = await notion.pages.create({
+        parent: {
+          database_id: DB
+        },
+        properties: pageProperties
+      });
+    }
     
     logToFile(`✅ Created new Notion page for "${title}" with ID: ${response.id}`);
     
@@ -2322,6 +2424,91 @@ function findFirstImageUrl(messages) {
         return match[1];
       }
     }
+  }
+  
+  return null;
+}
+
+// Function to properly format content for Notion blocks with proper link handling
+function formatNotionContent(content) {
+  // Split the content into lines
+  const lines = content.trim().split('\n');
+  const blocks = [];
+  
+  // Process each line to create appropriate blocks
+  for (const line of lines) {
+    // Skip empty lines
+    if (!line.trim()) {
+      continue;
+    }
+    
+    // Check if it's a link line (e.g., "SCRIPT: https://...")
+    const linkMatch = line.match(/^([^:]+):\s+(https?:\/\/\S+)$/i);
+    if (linkMatch) {
+      const [_, label, url] = linkMatch;
+      
+      // Create a paragraph with a link
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [
+            {
+              type: 'text',
+              text: {
+                content: `${label}: `,
+                link: null
+              },
+              annotations: {
+                bold: true
+              }
+            },
+            {
+              type: 'text',
+              text: {
+                content: url,
+                link: {
+                  url: url
+                }
+              }
+            }
+          ]
+        }
+      });
+    } else {
+      // Regular paragraph block
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [
+            {
+              type: 'text',
+              text: {
+                content: line
+              }
+            }
+          ]
+        }
+      });
+    }
+  }
+  
+  return blocks;
+}
+
+// Function to extract Google Doc links as potential script links
+function extractScriptLink(content) {
+  // Check for an explicit script URL
+  const scriptMatch = content.match(/script:?\s*(https:\/\/docs\.google\.com\/document\/[^\s]+)/i);
+  if (scriptMatch) {
+    return scriptMatch[1];
+  }
+  
+  // If no explicit script, look for any Google Docs link
+  const docsMatch = content.match(/(https:\/\/docs\.google\.com\/document\/[^\s]+)/i);
+  if (docsMatch) {
+    return docsMatch[1];
   }
   
   return null;
