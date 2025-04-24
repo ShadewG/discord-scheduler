@@ -1001,7 +1001,29 @@ const commands = [
       option.setName('messages')
         .setDescription('Number of messages to analyze (default: 100, max: 300)')
         .setRequired(false)
+    )
+    .addBooleanOption(option =>
+      option.setName('dry_run')
+        .setDescription('Preview changes without updating Notion (dry-run mode)')
+        .setRequired(false)
+    )
+    .addBooleanOption(option =>
+      option.setName('ephemeral')
+        .setDescription('Make response only visible to you')
+        .setRequired(false)
     ),
+  
+  new SlashCommandBuilder()
+    .setName('sync')
+    .setDescription('Update Notion with properties from your message (alias for !sync)')
+    .addStringOption(option => 
+      option.setName('text')
+        .setDescription('The properties to update (same as !sync command)')
+        .setRequired(true))
+    .addBooleanOption(option =>
+      option.setName('dry_run')
+        .setDescription('Preview changes without updating Notion')
+        .setRequired(false)),
   
   new SlashCommandBuilder()
     .setName('test')
@@ -1496,8 +1518,13 @@ client.on('interactionCreate', async interaction => {
     
     else if (commandName === 'analyze') {
       try {
+        // Check if response should be ephemeral
+        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
+        
         // Immediately defer reply to prevent timeout
-        await interaction.deferReply();
+        await interaction.deferReply({
+          ephemeral: ephemeral
+        });
         hasResponded = true;
         clearTimeout(timeoutWarning);
         
@@ -1539,7 +1566,11 @@ client.on('interactionCreate', async interaction => {
           // Get number of messages to analyze (default: 100, max: 300)
           const limit = Math.min(interaction.options.getInteger('messages') || 100, 300);
           
-          await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
+          // Check if this is a dry run
+          const isDryRun = interaction.options.getBoolean('dry_run') || false;
+          const dryRunPrefix = isDryRun ? '[DRY RUN] ' : '';
+          
+          await interaction.editReply(`${dryRunPrefix}🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
           
           if (!messages || messages.size === 0) {
             await interaction.editReply('No messages found to analyze.');
@@ -1706,11 +1737,16 @@ client.on('interactionCreate', async interaction => {
           // Update page properties if needed
           if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
             try {
-              await notion.pages.update({ 
-                page_id: pageId, 
-                properties: notionProps 
-              });
-              updatedProperties = true;
+              if (!isDryRun) {
+                await notion.pages.update({ 
+                  page_id: pageId, 
+                  properties: notionProps 
+                });
+                updatedProperties = true;
+              } else {
+                logToFile(`💧 DRY RUN: Would update these properties: ${JSON.stringify(notionProps)}`);
+                updatedProperties = true; // Mark as "updated" for the summary even though we didn't actually update
+              }
             } catch (updateError) {
               logToFile(`Error updating properties: ${updateError.message}`);
               errorProperties.push("Notion properties update");
@@ -1728,11 +1764,16 @@ client.on('interactionCreate', async interaction => {
               const contentBlocks = formatNotionContent(formattedContent);
               
               // Append the formatted blocks to the page
-              await notion.blocks.children.append({
-                block_id: pageId,
-                children: contentBlocks
-              });
-              updatedContent = true;
+              if (!isDryRun) {
+                await notion.blocks.children.append({
+                  block_id: pageId,
+                  children: contentBlocks
+                });
+                updatedContent = true;
+              } else {
+                logToFile(`💧 DRY RUN: Would add content: ${props.page_content.trim().substring(0, 100)}...`);
+                updatedContent = true; // Mark as "updated" for the summary
+              }
             } catch (contentError) {
               logToFile(`Error adding page content: ${contentError.message}`);
               errorProperties.push("Page content");
@@ -1741,10 +1782,10 @@ client.on('interactionCreate', async interaction => {
           
           // Format analysis for display
           const analysisEmbed = new EmbedBuilder()
-            .setColor(0x00FF00)
-            .setTitle(`📊 Analysis Results for ${code}`)
+            .setColor(isDryRun ? 0x00FFFF : 0x00FF00) // Cyan for dry-run, green for regular
+            .setTitle(`${dryRunPrefix}📊 Analysis Results for ${code}`)
             .setDescription(`I've analyzed ${sortedMessages.length} messages and ${isNewPage ? 'created a new page with' : 'updated the following:'}`)
-            .setFooter({ text: `Analyzed ${limit} messages` })
+            .setFooter({ text: `Analyzed ${limit} messages${isDryRun ? ' (DRY RUN - No changes made)' : ''}` })
             .setTimestamp();
           
           // Add note about page creation if applicable
@@ -1806,6 +1847,20 @@ client.on('interactionCreate', async interaction => {
           if (errorProperties.length > 0) completionMessage += ' (Some errors occurred)';
           
           await interaction.editReply({ content: completionMessage, embeds: [analysisEmbed] });
+          
+          // If ephemeral, set up auto-delete after 5 minutes
+          if (ephemeral) {
+            setTimeout(async () => {
+              try {
+                // For ephemeral messages, we don't need to delete them as they're already
+                // only visible to the user and Discord handles cleanup
+                logToFile(`👻 Ephemeral analyze results for ${code} should auto-expire now`);
+              } catch (deleteError) {
+                logToFile(`Error with ephemeral message: ${deleteError.message}`);
+              }
+            }, 5 * 60 * 1000); // 5 minutes
+          }
+          
         } catch (analyzeError) {
           logToFile(`Error in /analyze command: ${analyzeError.message}`);
           await interaction.editReply(`❌ Error analyzing channel history: ${analyzeError.message}`);
@@ -1817,6 +1872,61 @@ client.on('interactionCreate', async interaction => {
           await interaction.reply({ content: '❌ Error initializing command. Please try again.', ephemeral: true });
         } catch (replyError) {
           logToFile(`Failed to send error reply for /analyze command: ${replyError.message}`);
+        }
+      }
+    }
+    
+    else if (commandName === 'sync') {
+      try {
+        await interaction.deferReply({ ephemeral: false });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Extract the project code from the channel name
+        const code = projectCode(interaction.channel.name);
+        if (!code) {
+          await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
+          return;
+        }
+        
+        // Get the text input and dry run option
+        const text = interaction.options.getString('text');
+        const isDryRun = interaction.options.getBoolean('dry_run') || false;
+        const dryRunPrefix = isDryRun ? '[DRY RUN] ' : '';
+        
+        await interaction.editReply(`${dryRunPrefix}🔄 Processing sync request: "${text}"`);
+        
+        // Process as if it were a !sync command
+        logToFile(`/sync command used by ${interaction.user.tag}: "${text}"`);
+        
+        // Use a fake msg object to reuse !sync logic
+        const fakeMsg = {
+          content: `${TRIGGER_PREFIX} ${text}${isDryRun ? ' --dry' : ''}`,
+          channel: interaction.channel,
+          author: interaction.user,
+          reply: async (content) => {
+            if (typeof content === 'string') {
+              await interaction.editReply(content);
+            } else {
+              await interaction.editReply(content);
+            }
+          }
+        };
+        
+        // Call the existing message handler directly
+        // This avoids duplicating logic between !sync and /sync
+        await handleSyncMessage(fakeMsg);
+      } catch (cmdError) {
+        logToFile(`Error in /sync command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error processing sync command: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          await interaction.editReply(`❌ Error processing sync command: ${cmdError.message}`);
         }
       }
     }
@@ -2599,10 +2709,8 @@ function addPredefinedWatcher() {
 // Try to add predefined watcher if requested via command line
 addPredefinedWatcher();
 
-/* ─ Handle !sync messages for Notion updates ─────────────────────── */
-client.on('messageCreate', async msg => {
-  if (msg.author.bot || !msg.content.startsWith(TRIGGER_PREFIX)) return;
-
+// Refactored !sync handler function
+async function handleSyncMessage(msg) {
   const code = projectCode(msg.channel.name);
   if (!code) {
     await msg.reply('No project code detected in channel name.');
@@ -2613,26 +2721,12 @@ client.on('messageCreate', async msg => {
   const messages = await msg.channel.messages.fetch({ limit: 50 });
   const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
 
-  // Find the Notion page for this project
-  let pageId = await findPage(code);
-  let isNewPage = false;
+  // Check for dry run flag
+  const isDryRun = msg.content.includes('--dry');
+  const dryRunPrefix = isDryRun ? '[DRY RUN] ' : '';
   
-  // If no page exists, create one
-  if (!pageId) {
-    await msg.reply(`Creating new Notion page for project code "${code}"...`);
-    
-    // Create a new page with the channel name as the title
-    pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
-    
-    if (!pageId) {
-      await msg.reply('❌ Failed to create Notion page. Check logs for details.');
-      return;
-    }
-    
-    isNewPage = true;
-  }
-
-  const userText = msg.content.slice(TRIGGER_PREFIX.length).trim();
+  // Remove dry run flag from the text
+  const userText = msg.content.slice(TRIGGER_PREFIX.length).trim().replace('--dry', '').trim();
   if (!userText && !isNewPage) return;
 
   // Check for URLs directly in the user message
@@ -2653,6 +2747,29 @@ client.on('messageCreate', async msg => {
     logToFile(`⚠️ Error checking for direct links: ${error.message}`);
   }
 
+  // Find the Notion page for this project
+  let pageId = await findPage(code);
+  let isNewPage = false;
+  
+  // If no page exists, create one
+  if (!pageId) {
+    await msg.reply(`${dryRunPrefix}Creating new Notion page for project code "${code}"...`);
+    
+    // Create a new page with the channel name as the title
+    if (!isDryRun) {
+      pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
+      
+      if (!pageId) {
+        await msg.reply('❌ Failed to create Notion page. Check logs for details.');
+        return;
+      }
+    } else {
+      logToFile(`💧 DRY RUN: Would create new Notion page for project "${code}"`);
+    }
+    
+    isNewPage = true;
+  }
+
   try {
     // Get current date in ISO format
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
@@ -2671,7 +2788,7 @@ client.on('messageCreate', async msg => {
         { role: 'user', content: '!sync Suki owns it now. Due 12 Apr.' },
         { role: 'assistant', function_call: { 
           name: 'update_properties',
-          arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12' })
+          arguments: JSON.stringify({ project_owner: 'Suki', due_date: '2025-04-12' })
         }},
         // New example showing latest link wins
         { role: 'user', content: '!sync Here is our Frame.io: https://f.io/abc123. [Later] Actually use this updated Frame.io link: https://f.io/xyz789.' },
@@ -2799,11 +2916,16 @@ client.on('messageCreate', async msg => {
     // Update page properties if needed
     if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
       try {
-        await notion.pages.update({ 
-          page_id: pageId, 
-          properties: notionProps 
-        });
-        updatedProperties = true;
+        if (!isDryRun) {
+          await notion.pages.update({ 
+            page_id: pageId, 
+            properties: notionProps 
+          });
+          updatedProperties = true;
+        } else {
+          logToFile(`💧 DRY RUN: Would update these properties: ${JSON.stringify(notionProps)}`);
+          updatedProperties = true; // Mark as "updated" for the summary even though we didn't actually update
+        }
       } catch (updateError) {
         logToFile(`Error updating properties in !sync: ${updateError.message}`);
         errorProperties.push("Notion properties update");
@@ -2821,11 +2943,16 @@ client.on('messageCreate', async msg => {
         const contentBlocks = formatNotionContent(formattedContent);
         
         // Append the formatted blocks to the page
-        await notion.blocks.children.append({
-          block_id: pageId,
-          children: contentBlocks
-        });
-        updatedContent = true;
+        if (!isDryRun) {
+          await notion.blocks.children.append({
+            block_id: pageId,
+            children: contentBlocks
+          });
+          updatedContent = true;
+        } else {
+          logToFile(`💧 DRY RUN: Would add content: ${props.page_content.trim().substring(0, 100)}...`);
+          updatedContent = true; // Mark as "updated" for the summary
+        }
       } catch (contentError) {
         logToFile(`Error adding page content in !sync: ${contentError.message}`);
         errorProperties.push("Page content");
@@ -2835,19 +2962,19 @@ client.on('messageCreate', async msg => {
     // Create response message
     let responseDescription = '';
     if (isNewPage) {
-      responseDescription += `✨ Created new Notion page for project **${code}**\n\n`;
+      responseDescription += `✨ ${isDryRun ? 'Would create' : 'Created'} new Notion page for project **${code}**\n\n`;
       if (firstImageUrl) {
-        responseDescription += 'Added first image from channel as thumbnail\n\n';
+        responseDescription += `${isDryRun ? 'Would add' : 'Added'} first image from channel as thumbnail\n\n`;
       }
     }
     
     if (updatedProperties) {
-      responseDescription += 'Updated properties:\n' + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
+      responseDescription += `${isDryRun ? 'Would update' : 'Updated'} properties:\n` + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
     }
     
     if (updatedContent) {
       if (responseDescription) responseDescription += '\n\n';
-      responseDescription += 'Added notes to page content';
+      responseDescription += `${isDryRun ? 'Would add' : 'Added'} notes to page content`;
     }
     
     // Add error information if any
@@ -2858,15 +2985,23 @@ client.on('messageCreate', async msg => {
 
     await msg.reply({
       embeds: [{
-        title: `✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
+        title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
         description: responseDescription,
-        color: errorProperties.length > 0 ? 0xFFA500 : 0x57F287
+        color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
       }]
     });
   } catch (err) {
     console.error(err);
     msg.reply('❌ Error updating Notion; check logs.');
   }
+}
+
+/* ─ Handle !sync messages for Notion updates ─────────────────────── */
+client.on('messageCreate', async msg => {
+  if (msg.author.bot || !msg.content.startsWith(TRIGGER_PREFIX)) return;
+  
+  // Call the refactored handler
+  await handleSyncMessage(msg);
 });
 
 // Function to create a new Notion page if one doesn't exist
