@@ -185,8 +185,9 @@ async function sendNotionMessage(text) {
 
 /* ─ Poll Notion every minute ─────────────────────────────────────── */
 // Use actual bot startup time instead of arbitrary past date
-// Initialize with a past date so we'll check recent edits on first run
-let lastCheck = new Date(Date.now() - 30 * 60 * 1000);  // Start checking from 30 minutes ago
+// Track when the bot started to only notify about changes after startup
+const BOT_START_TIME = new Date();
+let lastCheck = new Date();
 const processedPageIds = new Set();     // track pages we've already processed
 
 async function pollNotion() {
@@ -233,9 +234,8 @@ async function pollNotion() {
         const edited = new Date(page.last_edited_time);
         
         // Skip pages that were edited before the bot started
-        // Only skip if the edit is more than 1 hour old - otherwise process for notification
-        if (edited < new Date(Date.now() - 60 * 60 * 1000)) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is more than 1 hour ago. Ignoring old pages.`);
+        if (edited <= BOT_START_TIME) {
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for watcher "${watcher.name}".`);
           
           // Still add to processed pages so we don't check it again
           processedPageIds.add(pageId);
@@ -350,9 +350,8 @@ async function pollNotion() {
             const edited = new Date(page.last_edited_time);
             
             // Skip pages that were edited before the bot started
-            // Only skip if the edit is more than 1 hour old
-            if (edited < new Date(Date.now() - 60 * 60 * 1000)) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is more than 1 hour ago. Ignoring for watcher "${watcher.name}".`);
+            if (edited <= BOT_START_TIME) {
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for watcher "${watcher.name}".`);
               
               // Still add to processed pages so we don't check it again
               processedPageIds.add(watcherPageKey);
@@ -1628,7 +1627,8 @@ if (loadedWatchers && loadedWatchers.length > 0) {
 function addPredefinedWatcher() {
   // Check for command line arguments to restore watcher
   const args = process.argv.slice(2);
-  if (args.length > 0 && args[0] === '--add-watcher') {
+  // Disable auto-adding of watcher to let users add it manually
+  /*if (args.length > 0 && args[0] === '--add-watcher') {
     try {
       const watcher = {
         id: args[1] || `m${Date.now().toString(36)}`,
@@ -1661,7 +1661,7 @@ function addPredefinedWatcher() {
     } catch (error) {
       logToFile(`❌ Error adding predefined watcher: ${error.message}`);
     }
-  }
+  }*/
 }
 
 // Try to add predefined watcher if requested via command line
