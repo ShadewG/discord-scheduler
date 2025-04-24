@@ -14,6 +14,7 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - 📝 Send manual messages to the channel with optional role mentions
 - 📓 Notion integration to track changes in databases
 - 🔔 Custom Notion watchers for specific status changes
+- 🚀 Automatic deployment via GitHub integration
 
 ## Commands
 
