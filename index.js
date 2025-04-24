@@ -26,6 +26,9 @@ const TARGET_VALUE = 'Ready For Captions';
 const RAY_ID = '348547268695162890';            // User ID to notify
 const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
 
+// Cache for Notion database title property to avoid repeated lookups
+let CACHED_TITLE_PROPERTY = null;
+
 // Initialize Notion client
 const { Client: Notion } = require('@notionhq/client');
 const notion = new Notion({ auth: process.env.NOTION_TOKEN });
@@ -87,20 +90,87 @@ function projectCode(name) {
 }
 
 async function findPage(code) {
-  const res = await notion.databases.query({
-    database_id: DB,
-    filter: { 
-      or: [
-        // Try different common title properties
-        { property:'Title', rich_text:{ starts_with: code } },
-        { property:'Name', rich_text:{ starts_with: code } },
-        { property:'Project Name', rich_text:{ starts_with: code } },
-        { property:'Project', rich_text:{ starts_with: code } }
-      ]
-    },
-    page_size: 1
-  });
-  return res.results[0]?.id ?? null;
+  try {
+    // Use cached title property if available
+    if (!CACHED_TITLE_PROPERTY) {
+      // Step 1: First get database schema to find the title property
+      const dbInfo = await notion.databases.retrieve({
+        database_id: DB
+      });
+      
+      // Find which property is of type 'title'
+      let titlePropertyName = null;
+      for (const [propName, propDetails] of Object.entries(dbInfo.properties)) {
+        if (propDetails.type === 'title') {
+          titlePropertyName = propName;
+          logToFile(`✅ Found title property in database: "${titlePropertyName}"`);
+          break;
+        }
+      }
+      
+      if (!titlePropertyName) {
+        logToFile(`❌ Could not find any title property in the database. Available properties: ${Object.keys(dbInfo.properties).join(', ')}`);
+        return null;
+      }
+      
+      // Cache the title property for future use
+      CACHED_TITLE_PROPERTY = titlePropertyName;
+    } else {
+      logToFile(`✅ Using cached title property: "${CACHED_TITLE_PROPERTY}"`);
+    }
+    
+    // Step 2: Now query using the correct title property
+    const res = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        property: CACHED_TITLE_PROPERTY,
+        rich_text: { starts_with: code }
+      },
+      page_size: 1
+    });
+    
+    if (res.results.length > 0) {
+      logToFile(`✅ Found matching page for code "${code}" in property "${CACHED_TITLE_PROPERTY}"`);
+      return res.results[0].id;
+    } else {
+      // Try a more lenient search if exact start match fails
+      logToFile(`🔍 No exact match found. Trying with 'contains' filter...`);
+      const containsRes = await notion.databases.query({
+        database_id: DB,
+        filter: {
+          property: CACHED_TITLE_PROPERTY,
+          rich_text: { contains: code }
+        },
+        page_size: 1
+      });
+      
+      if (containsRes.results.length > 0) {
+        logToFile(`✅ Found matching page containing code "${code}" in property "${CACHED_TITLE_PROPERTY}"`);
+        return containsRes.results[0].id;
+      }
+      
+      logToFile(`❌ No pages found with code "${code}" in title property "${CACHED_TITLE_PROPERTY}"`);
+      return null;
+    }
+  } catch (error) {
+    logToFile(`❌ Error finding page with code "${code}": ${error.message}`);
+    
+    // Clear the cache if there was an error with the property
+    if (error.code === 'validation_error') {
+      CACHED_TITLE_PROPERTY = null;
+      logToFile(`🔄 Title property cache cleared due to validation error`);
+    }
+    
+    // More detailed troubleshooting
+    if (error.code === 'validation_error') {
+      logToFile(`🔍 TROUBLESHOOTING: Database property issue`);
+      logToFile(`1. Make sure your Notion integration has access to the database`);
+      logToFile(`2. Database ID being used: ${DB}`);
+      logToFile(`3. Check if the database structure has changed`);
+    }
+    
+    return null;
+  }
 }
 
 function toNotion(p) {
