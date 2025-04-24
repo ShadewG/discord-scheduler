@@ -80,7 +80,8 @@ const FUNC_SCHEMA = {
       brand_deal:     { type:'string', description: 'The ID of the related item in the brand deals database' },
       status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog'] },
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
-      current_stage_date: { type:'string', format:'date' }
+      current_stage_date: { type:'string', format:'date' },
+      page_content:   { type:'string', description: 'Text content to append to the bottom of the Notion page, such as notes about new images or important information' }
     },
     additionalProperties: false
   }
@@ -1545,6 +1546,9 @@ Your task is to identify the FINAL/LATEST mentions of key properties from a chat
 For example, if someone initially sets a due date to Friday but later changes it to Sunday, use Sunday.
 Resolve conflicts by preferring the most recent mentions.
 
+If you find mentions of images, assets, or other important information that should be added to the page
+as notes rather than properties, include those in the page_content field.
+
 Today's date is ${today}.`
           },
           { 
@@ -1572,46 +1576,95 @@ Today's date is ${today}.`
       }
       
       const notionProps = toNotion(props);
-      if (Object.keys(notionProps).length === 0) {
+      const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+      const hasPageContent = props.page_content && props.page_content.trim().length > 0;
+      
+      if (!hasPropertiesToUpdate && !hasPageContent) {
         await interaction.editReply('No updates needed based on the chat history analysis.');
         return;
       }
       
-      // Update Notion
-      await notion.pages.update({ page_id: pageId, properties: notionProps });
+      // Update page properties if needed
+      if (hasPropertiesToUpdate) {
+        await notion.pages.update({ 
+          page_id: pageId, 
+          properties: notionProps 
+        });
+      }
+      
+      // Add page content if provided
+      if (hasPageContent) {
+        // Format the content with a timestamp
+        const timestamp = new Date().toLocaleString();
+        const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+        
+        // Append the content to the page
+        await notion.blocks.children.append({
+          block_id: pageId,
+          children: [
+            {
+              object: 'block',
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [
+                  {
+                    type: 'text',
+                    text: {
+                      content: formattedContent
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        });
+      }
       
       // Format analysis for display
       const analysisEmbed = new EmbedBuilder()
         .setColor(0x00FF00)
         .setTitle(`📊 Analysis Results for ${code}`)
-        .setDescription(`I've analyzed ${sortedMessages.length} messages and updated the following properties:`)
-        .addFields(
-          Object.keys(notionProps).map(propName => ({
-            name: propName,
-            value: propName === 'Date' ? 
-                  `Due date: ${props.due_date}` : 
-                  propName === 'Priority' ?
-                  `Priority: ${props.priority}` :
-                  propName === 'Caption Status' ?
-                  `Status: ${props.caption_status}` :
-                  propName === 'Script' ?
-                  `Script URL: ${props.script_url}` :
-                  propName === 'Frame.io' ?
-                  `Frame.io URL: ${props.frameio_url}` :
-                  propName === 'Editor' ?
-                  `Editor: <@${props.editor_discord}>` :
-                  propName === 'Brand Deal' ?
-                  `Brand Deal: Updated` :
-                  propName === 'Status' ?
-                  `Status: ${props.status}` :
-                  JSON.stringify(notionProps[propName])
-          }))
-        )
+        .setDescription(`I've analyzed ${sortedMessages.length} messages and updated the following:`)
         .setFooter({ text: `Analyzed ${limit} messages` })
         .setTimestamp();
       
-      await interaction.editReply({ content: '✅ Analysis complete!', embeds: [analysisEmbed] });
+      // Add fields for updated properties
+      if (hasPropertiesToUpdate) {
+        analysisEmbed.addFields({
+          name: 'Updated Properties:',
+          value: Object.keys(notionProps).map(propName => {
+            return propName === 'Date' ? 
+                  `• **${propName}:** ${props.due_date}` : 
+                  propName === 'Priority' ?
+                  `• **${propName}:** ${props.priority}` :
+                  propName === 'Caption Status' ?
+                  `• **${propName}:** ${props.caption_status}` :
+                  propName === 'Script' ?
+                  `• **${propName}:** ${props.script_url}` :
+                  propName === 'Frame.io' ?
+                  `• **${propName}:** ${props.frameio_url}` :
+                  propName === 'Editor' ?
+                  `• **${propName}:** <@${props.editor_discord}>` :
+                  propName === 'Brand Deal' ?
+                  `• **${propName}:** Updated` :
+                  propName === 'Status' ?
+                  `• **${propName}:** ${props.status}` :
+                  `• **${propName}**`;
+          }).join('\n')
+        });
+      }
       
+      // Add field for page content
+      if (hasPageContent) {
+        analysisEmbed.addFields({
+          name: 'Added Notes to Page:',
+          value: props.page_content.length > 1000 
+            ? props.page_content.substring(0, 997) + '...' 
+            : props.page_content
+        });
+      }
+      
+      await interaction.editReply({ content: '✅ Analysis complete!', embeds: [analysisEmbed] });
     } catch (error) {
       logToFile(`Error in /analyze command: ${error.message}`);
       await interaction.editReply(`❌ Error analyzing channel history: ${error.message}`);
@@ -1950,7 +2003,10 @@ client.on('messageCreate', async msg => {
       model: 'gpt-4o',
       temperature: 0,
       messages: [
-        { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.` },
+        { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.
+You can update both properties and add content to the page itself. 
+If the user mentions new images, notes, or other content that should be added to the page (not just as properties),
+include that in the page_content field.` },
         { role: 'user', content: userText }
       ],
       functions: [FUNC_SCHEMA],
@@ -1972,18 +2028,69 @@ client.on('messageCreate', async msg => {
       return;
     }
 
+    // Update properties
     const notionProps = toNotion(props);
-    if (Object.keys(notionProps).length === 0) {
+    const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+    
+    // Check if there's page content to add
+    const hasPageContent = props.page_content && props.page_content.trim().length > 0;
+    
+    if (!hasPropertiesToUpdate && !hasPageContent) {
       await msg.reply('Nothing to update.');
       return;
     }
 
-    await notion.pages.update({ page_id: pageId, properties: notionProps });
+    // Update page properties if needed
+    if (hasPropertiesToUpdate) {
+      await notion.pages.update({ 
+        page_id: pageId, 
+        properties: notionProps 
+      });
+    }
+    
+    // Add page content if provided
+    if (hasPageContent) {
+      // Format the content with a timestamp
+      const timestamp = new Date().toLocaleString();
+      const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+      
+      // Append the content to the page
+      await notion.blocks.children.append({
+        block_id: pageId,
+        children: [
+          {
+            object: 'block',
+            type: 'paragraph',
+            paragraph: {
+              rich_text: [
+                {
+                  type: 'text',
+                  text: {
+                    content: formattedContent
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      });
+    }
+
+    // Create response message
+    let responseDescription = '';
+    if (hasPropertiesToUpdate) {
+      responseDescription += 'Updated properties:\n' + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
+    }
+    
+    if (hasPageContent) {
+      if (responseDescription) responseDescription += '\n\n';
+      responseDescription += 'Added notes to page content';
+    }
 
     await msg.reply({
       embeds: [{
         title: `✅ ${code} updated`,
-        description: Object.keys(notionProps).map(k => `• **${k}**`).join('\n'),
+        description: responseDescription,
         color: 0x57F287
       }]
     });
