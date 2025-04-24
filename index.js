@@ -1765,11 +1765,14 @@ client.on('messageCreate', async msg => {
   if (!userText) return;
 
   try {
+    // Get current date in ISO format
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
     const gpt = await openai.chat.completions.create({
       model: 'gpt-4o',
       temperature: 0,
       messages: [
-        { role: 'system', content: 'You update video-pipeline metadata from chat.' },
+        { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.` },
         { role: 'user', content: userText }
       ],
       functions: [FUNC_SCHEMA],
