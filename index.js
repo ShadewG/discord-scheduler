@@ -214,13 +214,29 @@ function toNotion(p) {
                         out.Editor          = { people:[{ id: USER_TO_NOTION[p.editor_discord] }] };
   
   // New properties                      
-  if (p.writer && Array.isArray(p.writer) && p.writer.length > 0)
-                        out.Writer          = { multi_select: p.writer.map(name => ({ name })) };
-  if (p.project_owner && Array.isArray(p.project_owner) && p.project_owner.length > 0)
-                        out['Project Owner'] = { multi_select: p.project_owner.map(name => ({ name })) };
-  if (p.editor && Array.isArray(p.editor) && p.editor.length > 0)
-                        out.Editor          = { multi_select: p.editor.map(name => ({ name })) };
-  if (p.lead)           out.Lead            = { select: { name: p.lead } };
+  if (p.writer && Array.isArray(p.writer) && p.writer.length > 0) {
+    // Ensure each writer name is a string
+    const writerNames = p.writer.map(w => typeof w === 'string' ? w : String(w));
+    out.Writer = { multi_select: writerNames.map(name => ({ name })) };
+  }
+  
+  if (p.project_owner && Array.isArray(p.project_owner) && p.project_owner.length > 0) {
+    // Ensure each project owner name is a string
+    const ownerNames = p.project_owner.map(o => typeof o === 'string' ? o : String(o));
+    out['Project Owner'] = { multi_select: ownerNames.map(name => ({ name })) };
+  }
+  
+  if (p.editor && Array.isArray(p.editor) && p.editor.length > 0) {
+    // Ensure each editor name is a string
+    const editorNames = p.editor.map(e => typeof e === 'string' ? e : String(e));
+    out.Editor = { multi_select: editorNames.map(name => ({ name })) };
+  }
+  
+  // Handle Lead property - ensure it's a string even if an array was provided
+  if (p.lead) {
+    const leadName = Array.isArray(p.lead) ? p.lead[0] : p.lead;
+    out.Lead = { select: { name: leadName } };
+  }
   
   // Brand Deal is a relation type, not a select
   if (p.brand_deal)     out['Brand Deal']   = { relation: [{ id: p.brand_deal }] };
