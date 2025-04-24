@@ -131,6 +131,33 @@ Return **ONE** of the following:
   Strip greetings, chatter, generic docs/guides links, and any link you already
   placed into \`script_url\` or \`frameio_url\`.
 
+### Property extraction rules
+* If the message names the current stage
+  * "clip selection", "VA render", "writing review", etc.
+  → set **status** to the closest allowed enum value.
+  (Allowed: Uploaded · FOIA Received · Ready for production · Writing ·
+   Writing Review · VA Render · VA Review · Writing Revisions · Ready for Editing ·
+   Clip Selection · Clip Selection Review · MGX · MGX Review/Cleanup · Ready to upload ·
+   Backlog · Pause)
+
+* If the message says someone "will handle", "is in charge of", "will edit",
+  "will cut", etc.:
+  * treat that name as **project_owner** when the task is managerial
+    (Suki handles script changes → "project_owner": ["Suki"])
+  * treat that name as **editor** when the task is editing
+    (Hayes will cut clips → "editor": ["Hayes"])
+  * treat that name as **writer** for writing tasks.
+
+* Always convert stage names to the exact enum:
+  - "va render"  → "VA Render"
+  - "writing review" → "Writing Review" 
+  - "on pause / hold" → "Pause"
+
+* If multiple owners/editors/writers are mentioned, return them as arrays,
+  preserving first-mention order.
+
+* Reminder: DO NOT invent keys; omit anything you are not certain about.
+
 ### Today's date
 Today is \${new Date().toISOString().split('T')[0]}.
 Remember this when interpreting relative dates like "next Monday".
@@ -1538,6 +1565,18 @@ client.on('interactionCreate', async interaction => {
             temperature: 0,
             messages: [
               { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
+              // Few-shot examples
+              { role: 'user', content: 'The project is in VA render stage now. Ray will do the final cut.' },
+              { role: 'assistant', function_call: { 
+                name: 'update_properties',
+                arguments: JSON.stringify({ status: 'VA Render', editor: ['Ray'] })
+              }},
+              { role: 'user', content: 'Suki is managing the project now. Due by April 12th. Medium priority.' },
+              { role: 'assistant', function_call: { 
+                name: 'update_properties',
+                arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12', priority: 'Medium' })
+              }},
+              // Actual message
               { role: 'user', content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}` }
             ],
             functions: [FUNC_SCHEMA],
@@ -2593,6 +2632,18 @@ client.on('messageCreate', async msg => {
       temperature: 0,
       messages: [
         { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
+        // Few-shot examples
+        { role: 'user', content: '!sync Project is in VA render. Ray will do final cut.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ status: 'VA Render', editor: ['Ray'] })
+        }},
+        { role: 'user', content: '!sync Suki owns it now. Due 12 Apr.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12' })
+        }},
+        // Actual message
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
       ],
       functions: [FUNC_SCHEMA],
