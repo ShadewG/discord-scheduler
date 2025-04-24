@@ -71,8 +71,16 @@ const FUNC_SCHEMA = {
       frameio_url:    { type:'string', format:'uri' },
       due_date:       { type:'string', format:'date' },
       priority:       { type:'string', enum:['High','Medium','Low'] },
-      caption_status: { type:'string', enum:['Ready For Captions','Needs Captions'] },
-      editor_discord: { type:'string' }
+      caption_status: { type:'string', enum:['Ready For Captions','Captions In Progress','Captions Done','Needs Captions'] },
+      editor_discord: { type:'string' },
+      writer:         { type:'array', items: { type:'string' } },
+      project_owner:  { type:'array', items: { type:'string' } },
+      editor:         { type:'array', items: { type:'string' } },
+      lead:           { type:'string' },
+      brand_deal:     { type:'string' },
+      status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog'] },
+      threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
+      current_stage_date: { type:'string', format:'date' }
     },
     additionalProperties: false
   }
@@ -182,6 +190,20 @@ function toNotion(p) {
   if (p.caption_status) out['Caption Status']= { select:{ name:p.caption_status } };
   if (p.editor_discord && USER_TO_NOTION[p.editor_discord])
                         out.Editor          = { people:[{ id: USER_TO_NOTION[p.editor_discord] }] };
+  
+  // New properties                      
+  if (p.writer && Array.isArray(p.writer) && p.writer.length > 0)
+                        out.Writer          = { multi_select: p.writer.map(name => ({ name })) };
+  if (p.project_owner && Array.isArray(p.project_owner) && p.project_owner.length > 0)
+                        out['Project Owner'] = { multi_select: p.project_owner.map(name => ({ name })) };
+  if (p.editor && Array.isArray(p.editor) && p.editor.length > 0)
+                        out.Editor          = { multi_select: p.editor.map(name => ({ name })) };
+  if (p.lead)           out.Lead            = { select: { name: p.lead } };
+  if (p.brand_deal)     out['Brand Deal']   = { select: { name: p.brand_deal } };
+  if (p.status)         out.Status          = { select: { name: p.status } };
+  if (p.threed_status)  out['3D Status']    = { select: { name: p.threed_status } };
+  if (p.current_stage_date) out['Current Stage Date'] = { date: { start: p.current_stage_date } };
+  
   return out;
 }
 
