@@ -143,8 +143,9 @@ async function pollNotion() {
           break;   // skip already-seen rows
         }
 
+        // Get the title from "Project Name" property instead of "Name"
         const title =
-          page.properties.Name.title?.[0]?.plain_text ?? '(untitled page)';
+          page.properties["Project Name"]?.title?.[0]?.plain_text ?? '(untitled project)';
           
         logToFile(`🔔 Found updated Notion page with caption ready: "${title}"`);
         
@@ -165,6 +166,10 @@ async function pollNotion() {
         logToFile(`   1. Verify the database ID in your .env file`);
         logToFile(`   2. Go to the database in Notion and share it with your integration`);
         logToFile(`   3. Make sure the "Caption Status" property exists and is a Select type`);
+      } else if (err.message.includes('undefined')) {
+        // Log specific debug info for property errors
+        logToFile(`🔧 PROPERTY ERROR: The code expects "Project Name" as the title property.`);
+        logToFile(`🔧 Available properties in the result: ${res?.results?.[0]?.properties ? Object.keys(res.results[0].properties).join(', ') : 'Unknown'}`);
       }
     }
   } catch (err) {

@@ -82,11 +82,13 @@ async function testDatabaseProperties() {
     
     const properties = database.properties;
     const TARGET_PROP = 'Caption Status';
+    const TITLE_PROP = 'Project Name';
     
     console.log(`Found ${Object.keys(properties).length} properties in the database:`);
     
     let hasCaptionStatus = false;
     let hasTitle = false;
+    let titlePropertyName = null;
     
     for (const [name, property] of Object.entries(properties)) {
       const type = property.type;
@@ -98,6 +100,7 @@ async function testDatabaseProperties() {
       
       if (type === 'title') {
         hasTitle = true;
+        titlePropertyName = name;
       }
     }
     
@@ -108,7 +111,11 @@ async function testDatabaseProperties() {
     }
     
     if (hasTitle) {
-      console.log(`✅ Found a title property in the database`);
+      console.log(`✅ Found a title property named "${titlePropertyName}"`);
+      if (titlePropertyName !== TITLE_PROP) {
+        console.warn(`⚠️  Warning: Title property is named "${titlePropertyName}" but code expects "${TITLE_PROP}"`);
+        console.warn(`    You should update the code in index.js to use "${titlePropertyName}" instead of "${TITLE_PROP}"`);
+      }
     } else {
       console.error(`❌ No title property found in the database`);
     }
@@ -125,6 +132,7 @@ async function testQueryWithFilter() {
   
   const TARGET_PROP = 'Caption Status';
   const TARGET_VALUE = 'Ready For Captions'; 
+  const TITLE_PROP = 'Project Name';
   
   try {
     // Try to query with filter
@@ -141,7 +149,17 @@ async function testQueryWithFilter() {
     if (response.results.length > 0) {
       console.log('\nExample pages:');
       response.results.slice(0, 3).forEach((page, index) => {
-        const title = page.properties.Name?.title?.[0]?.plain_text || '(Untitled)';
+        // Check if page has the Project Name property
+        if (!page.properties[TITLE_PROP]) {
+          console.error(`❌ Page is missing the "${TITLE_PROP}" property. Available properties: ${Object.keys(page.properties).join(', ')}`);
+          // Try to find any title property
+          const titleProp = Object.entries(page.properties).find(([_, prop]) => prop.type === 'title');
+          if (titleProp) {
+            console.log(`   Found alternative title property: "${titleProp[0]}"`);
+          }
+        }
+        
+        const title = page.properties[TITLE_PROP]?.title?.[0]?.plain_text || '(Untitled)';
         const lastEdited = new Date(page.last_edited_time).toISOString();
         console.log(`   ${index+1}. "${title}" (Last edited: ${lastEdited})`);
       });

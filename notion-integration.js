@@ -37,7 +37,7 @@
  * 
  * 5. Database requirements:
  *    - Must have a "Caption Status" property of type "Select"
- *    - Must have a "Name" property (title property)
+ *    - Must have a "Project Name" property (title property)
  * 
  * ## Troubleshooting
  * 
@@ -49,7 +49,7 @@
  * 2. Property not found errors:
  *    - Make sure your database has a "Caption Status" property
  *    - Ensure the property is a "Select" type
- *    - Verify your database has a title property named "Name"
+ *    - Verify your database has a title property named "Project Name"
  * 
  * ## Configuration
  * 
