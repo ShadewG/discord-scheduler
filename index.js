@@ -14,10 +14,8 @@ const cron = require('node-cron');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
 const { getTimeUntilNextExecution } = require('./utils');
+const { OpenAI } = require('openai');
 
-// ⬇⬇ Notion integration -----------------------------------------------------
-const { Client: Notion } = require('@notionhq/client');
-const notion  = new Notion({ auth: process.env.NOTION_TOKEN });
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
 const DB = rawDB.replace(/-/g, '');  // Remove all hyphens from the ID
@@ -32,7 +30,10 @@ const {
   DISCORD_TOKEN,
   CHANNEL_ID,
   ROLE_ID,
-  TZ = 'Europe/Berlin' // Set default if not defined
+  TZ = 'Europe/Berlin', // Set default if not defined
+  NOTION_TOKEN,
+  NOTION_DB_ID,
+  OPENAI_API_KEY
 } = process.env;
 
 // Check for required environment variables
@@ -45,11 +46,69 @@ if (!DISCORD_TOKEN || !CHANNEL_ID || !ROLE_ID) {
   process.exit(1);
 }
 
+// Initialize API clients
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+// Constants for Notion/OpenAI integration
+const DB_ID = NOTION_DB_ID;
+const TRIGGER_PREFIX = '!sync';
+
+// Function calling schema for OpenAI
+const FUNC_SCHEMA = {
+  name: 'update_properties',
+  description: 'Return only properties that must change.',
+  parameters: {
+    type: 'object',
+    properties: {
+      script_url:     { type:'string', format:'uri' },
+      frameio_url:    { type:'string', format:'uri' },
+      due_date:       { type:'string', format:'date' },
+      priority:       { type:'string', enum:['High','Medium','Low'] },
+      caption_status: { type:'string', enum:['Ready For Captions','Needs Captions'] },
+      editor_discord: { type:'string' }
+    },
+    additionalProperties: false
+  }
+};
+
+// Discord-snowflake -> Notion-People-ID mapping
+const USER_TO_NOTION = {
+  '669012345678901245': 'fb1d2b3c-4567-8901-2345-6789abcdef01' // Ray
+};
+
+// Utility helpers for Notion integration
+function projectCode(name) {
+  const m = name.match(/^(cl|ib)\d{2}/i);   // extend prefixes if needed
+  return m ? m[0].toUpperCase() : null;
+}
+
+async function findPage(code) {
+  const res = await notion.databases.query({
+    database_id: DB_ID,
+    filter: { property:'Name', rich_text:{ starts_with: code } },
+    page_size: 1
+  });
+  return res.results[0]?.id ?? null;
+}
+
+function toNotion(p) {
+  const out = {};
+  if (p.script_url)     out.Script          = { url: p.script_url };
+  if (p.frameio_url)    out['Frame.io']     = { url: p.frameio_url };
+  if (p.due_date)       out.Date            = { date:{ start:p.due_date } };
+  if (p.priority)       out.Priority        = { select:{ name:p.priority } };
+  if (p.caption_status) out['Caption Status']= { select:{ name:p.caption_status } };
+  if (p.editor_discord && USER_TO_NOTION[p.editor_discord])
+                        out.Editor          = { people:[{ id: USER_TO_NOTION[p.editor_discord] }] };
+  return out;
+}
+
 // Initialize Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -1474,3 +1533,70 @@ if (loadedWatchers && loadedWatchers.length > 0) {
   customWatchers.push(...loadedWatchers);
   logToFile(`${customWatchers.length} Notion watchers active`);
 }
+
+/* ─ Handle !sync messages for Notion updates ─────────────────────── */
+client.on('messageCreate', async msg => {
+  if (msg.author.bot || !msg.content.startsWith(TRIGGER_PREFIX)) return;
+
+  const code = projectCode(msg.channel.name);
+  if (!code) {
+    await msg.reply('No project code detected in channel name.');
+    return;
+  }
+
+  const pageId = await findPage(code);
+  if (!pageId) {
+    await msg.reply(`No Notion page starting with "${code}".`);
+    return;
+  }
+
+  const userText = msg.content.slice(TRIGGER_PREFIX.length).trim();
+  if (!userText) return;
+
+  try {
+    const gpt = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      temperature: 0,
+      messages: [
+        { role: 'system', content: 'You update video-pipeline metadata from chat.' },
+        { role: 'user', content: userText }
+      ],
+      functions: [FUNC_SCHEMA],
+      function_call: 'auto'
+    });
+
+    const call = gpt.choices[0].message.function_call;
+    if (!call) {
+      await msg.reply('No relevant properties found.');
+      return;
+    }
+
+    let props;
+    try {
+      props = JSON.parse(call.arguments);
+    } catch (e) {
+      console.error('JSON parse error', e, call.arguments);
+      await msg.reply('❌ Error parsing GPT response.');
+      return;
+    }
+
+    const notionProps = toNotion(props);
+    if (Object.keys(notionProps).length === 0) {
+      await msg.reply('Nothing to update.');
+      return;
+    }
+
+    await notion.pages.update({ page_id: pageId, properties: notionProps });
+
+    await msg.reply({
+      embeds: [{
+        title: `✅ ${code} updated`,
+        description: Object.keys(notionProps).map(k => `• **${k}**`).join('\n'),
+        color: 0x57F287
+      }]
+    });
+  } catch (err) {
+    console.error(err);
+    msg.reply('❌ Error updating Notion; check logs.');
+  }
+});

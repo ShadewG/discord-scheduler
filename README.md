@@ -26,6 +26,12 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - `/testjob` - Test a specific reminder
 - `/edit` - Edit an existing reminder
 - `/add` - Add a new reminder
+- `/meeting` - Schedule a meeting with another user (e.g. `/meeting @user 30m` or `/meeting @user 1400`)
+- `!sync` - Update Notion project properties using AI in project-specific channels (name starts with project code):
+  - `!sync add script URL https://docs.google.com/...`
+  - `!sync set Frame.io link to https://app.frame.io/...`
+  - `!sync this project is high priority and due on April 30th`
+  - `!sync Ray will be my editor and needs captions by end of week`
 - `/notion` - Manage Notion status watchers:
   - `/notion add` - Add a new status watcher
   - `/notion list` - List all watchers
@@ -56,6 +62,9 @@ TZ=Europe/Berlin
 # Notion Integration (optional)
 NOTION_TOKEN=secret_xxx
 NOTION_DB_ID=83c7...a1a3
+
+# OpenAI Integration (for !sync command)
+OPENAI_API_KEY=sk-xxxx
 ```
 
 ## Deployment
