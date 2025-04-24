@@ -137,8 +137,14 @@ async function pollNotion() {
       return;
     }
     
-    logToFile(`🔍 Polling Notion database (ID: ${DB.substring(0, 6)}...${DB.substring(DB.length - 4)}) for Caption Status updates...`);
+    logToFile(`🔍 Polling Notion database (ID: ${DB.substring(0, 6)}...${DB.substring(DB.length - 4)}) for updates...`);
     
+    let notificationCount = 0;
+    
+    // Track newly processed pages to avoid duplicate notifications
+    const processedThisRun = new Set();
+    
+    // First, check the default Caption Status watcher
     try {
       const res = await notion.databases.query({
         database_id: DB,
@@ -149,10 +155,8 @@ async function pollNotion() {
         sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
       });
 
-      logToFile(`✅ Successfully queried Notion database (found ${res.results.length} matching results)`);
+      logToFile(`✅ Checked default watcher (found ${res.results.length} matching results)`);
 
-      let notificationCount = 0;
-      
       for (const page of res.results) {
         const pageId = page.id;
         
@@ -215,6 +219,7 @@ async function pollNotion() {
         
         // Add to processed pages so we don't notify again
         processedPageIds.add(pageId);
+        processedThisRun.add(pageId);
         
         // Send to the dedicated Notion channel instead of regular channel
         await sendNotionMessage(
@@ -223,15 +228,8 @@ async function pollNotion() {
         
         notificationCount++;
       }
-      
-      if (notificationCount > 0) {
-        logToFile(`📊 Sent ${notificationCount} Notion notifications`);
-      }
-      
-      // Only update lastCheck if we actually checked the database successfully
-      lastCheck = new Date();
     } catch (err) {
-      logToFile(`❌ Notion database query error: ${err.message}`);
+      logToFile(`❌ Default watcher error: ${err.message}`);
       
       // More detailed error logging
       if (err.code === 'object_not_found') {
@@ -241,13 +239,123 @@ async function pollNotion() {
         logToFile(`🔧 Steps to fix:`);
         logToFile(`   1. Verify the database ID in your .env file`);
         logToFile(`   2. Go to the database in Notion and share it with your integration`);
-        logToFile(`   3. Make sure the "Caption Status" property exists and is a Select type`);
+        logToFile(`   3. Make sure the "${TARGET_PROP}" property exists and is a Select type`);
       } else if (err.message.includes('undefined')) {
         // Log specific debug info for property errors
         logToFile(`🔧 PROPERTY ERROR: Check the title property name in your Notion database.`);
         logToFile(`🔧 The code will try these properties for title: ${["Project Name", "Name", "Title", "Page", "Project"].join(', ')}`);
       }
     }
+    
+    // Now check all custom watchers
+    if (customWatchers && customWatchers.length > 0) {
+      logToFile(`⏳ Processing ${customWatchers.length} custom Notion watchers...`);
+      
+      for (const watcher of customWatchers) {
+        try {
+          // Skip disabled watchers
+          if (watcher.disabled) {
+            logToFile(`⏭️ Skipping disabled watcher: "${watcher.name}"`);
+            continue;
+          }
+          
+          logToFile(`🔍 Checking watcher "${watcher.name}" (${watcher.property} = ${watcher.value})`);
+          
+          const res = await notion.databases.query({
+            database_id: DB,
+            filter: {
+              property: watcher.property,
+              select: { equals: watcher.value }
+            },
+            sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+          });
+          
+          logToFile(`✅ Watcher "${watcher.name}" found ${res.results.length} matching results`);
+          
+          for (const page of res.results) {
+            const pageId = page.id;
+            
+            // Skip if we've already processed this page for this watcher
+            const watcherPageKey = `${watcher.id}:${pageId}`;
+            if (processedPageIds.has(watcherPageKey)) {
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed for watcher "${watcher.name}". Skipping.`);
+              continue;
+            }
+            
+            const edited = new Date(page.last_edited_time);
+            
+            // Skip pages that were edited before the bot started
+            if (edited <= lastCheck) {
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup. Ignoring for watcher "${watcher.name}".`);
+              
+              // Still add to processed pages so we don't check it again
+              processedPageIds.add(watcherPageKey);
+              continue;
+            }
+            
+            // Skip if we already processed this page in this run
+            if (processedThisRun.has(pageId)) {
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed by another watcher in this run. Skipping duplicate notification.`);
+              processedPageIds.add(watcherPageKey);
+              continue;
+            }
+            
+            // Get the title
+            let title = null;
+            for (const propName of ["Project Name", "Name", "Title", "Page", "Project"]) {
+              if (page.properties[propName]?.title?.length > 0) {
+                title = page.properties[propName].title[0].plain_text;
+                break;
+              }
+            }
+            
+            // If no title found yet, check for any title property
+            if (!title) {
+              for (const [propName, prop] of Object.entries(page.properties)) {
+                if (prop.type === 'title' && prop.title?.length > 0) {
+                  title = prop.title[0].plain_text;
+                  break;
+                }
+              }
+              
+              // If still no title, use default
+              if (!title) {
+                title = '(untitled project)';
+              }
+            }
+            
+            logToFile(`🔔 Custom watcher "${watcher.name}" found updated page: "${title}"`);
+            logToFile(`   - Property: ${watcher.property} = ${watcher.value}`);
+            logToFile(`   - User to notify: <@${watcher.userId}>`);
+            
+            // Add to processed pages so we don't notify again
+            processedPageIds.add(watcherPageKey);
+            processedThisRun.add(pageId);
+            
+            // Send to the dedicated Notion channel
+            await sendNotionMessage(
+              `<@${watcher.userId}> Project **"${title}"** is now marked as **"${watcher.value}"** (${watcher.name})`
+            );
+            
+            notificationCount++;
+          }
+        } catch (err) {
+          logToFile(`❌ Error in custom watcher "${watcher.name}": ${err.message}`);
+          
+          if (err.code === 'validation_error') {
+            logToFile(`🔧 WATCHER ERROR: Property "${watcher.property}" may not exist or is not a Select type.`);
+            logToFile(`🔧 Consider disabling or deleting this watcher if the property no longer exists.`);
+          }
+        }
+      }
+    }
+    
+    if (notificationCount > 0) {
+      logToFile(`📊 Sent ${notificationCount} Notion notifications`);
+    }
+    
+    // Only update lastCheck if we actually checked the database successfully
+    lastCheck = new Date();
   } catch (err) {
     logToFile(`❌ Notion poll general error: ${err.message}`);
     logToFile(err.stack);
@@ -398,6 +506,62 @@ const commands = [
       option.setName('mention')
         .setDescription('Whether to mention the role')
         .setRequired(false)),
+        
+  new SlashCommandBuilder()
+    .setName('notion')
+    .setDescription('Manage Notion status watchers')
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('add')
+        .setDescription('Add a new Notion status watcher')
+        .addStringOption(option => 
+          option.setName('name')
+            .setDescription('A name for this watcher')
+            .setRequired(true))
+        .addStringOption(option => 
+          option.setName('property')
+            .setDescription('The Notion property to watch (e.g. "Status")')
+            .setRequired(true))
+        .addStringOption(option => 
+          option.setName('value')
+            .setDescription('The value to watch for (e.g. "In Progress")')
+            .setRequired(true))
+        .addUserOption(option => 
+          option.setName('user')
+            .setDescription('The user to notify when this status is found')
+            .setRequired(true)))
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('list')
+        .setDescription('List all Notion watchers'))
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('enable')
+        .setDescription('Enable a Notion watcher')
+        .addStringOption(option => 
+          option.setName('id')
+            .setDescription('The ID of the watcher to enable')
+            .setRequired(true)))
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('disable')
+        .setDescription('Disable a Notion watcher')
+        .addStringOption(option => 
+          option.setName('id')
+            .setDescription('The ID of the watcher to disable')
+            .setRequired(true)))
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('delete')
+        .setDescription('Delete a Notion watcher')
+        .addStringOption(option => 
+          option.setName('id')
+            .setDescription('The ID of the watcher to delete')
+            .setRequired(true)))
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('properties')
+        .setDescription('List available properties in the Notion database')),
         
   new SlashCommandBuilder()
     .setName('list')
@@ -566,6 +730,7 @@ function createHelpEmbed() {
       { name: '/status', value: 'Check the bot status and configuration' },
       { name: '/edit', value: 'Edit a scheduled reminder' },
       { name: '/add', value: 'Add a new scheduled reminder' },
+      { name: '/notion', value: 'Manage Notion status watchers (add/list/enable/disable/delete/properties)' },
       { name: '/help', value: 'Show this help information' }
     )
     .setTimestamp();
@@ -702,6 +867,45 @@ function createScheduleEmbed() {
     });
   }
   
+  return embed;
+}
+
+// Create a Notion watchers embed
+function createWatchersEmbed() {
+  const embed = new EmbedBuilder()
+    .setColor(0x8A2BE2) // BlueViolet color
+    .setTitle('Notion Status Watchers')
+    .setDescription('These watchers will check for specific status changes in Notion and notify the designated user:')
+    .setTimestamp()
+    .setFooter({ text: 'Notion integration' });
+
+  // Add default watcher
+  embed.addFields({
+    name: '🔍 Default Watcher',
+    value: `Property: **${TARGET_PROP}**\nValue: **${TARGET_VALUE}**\nNotifies: <@${RAY_ID}>\nStatus: ✅ Always enabled`,
+  });
+
+  // Add custom watchers
+  if (customWatchers.length === 0) {
+    embed.addFields({
+      name: '📝 Custom Watchers',
+      value: 'No custom watchers configured yet. Use `/notion add` to create one.',
+    });
+  } else {
+    embed.addFields({
+      name: '📝 Custom Watchers',
+      value: 'The following custom watchers are configured:',
+    });
+
+    customWatchers.forEach(watcher => {
+      const status = watcher.disabled ? '❌ Disabled' : '✅ Enabled';
+      embed.addFields({
+        name: `${watcher.name} (ID: ${watcher.id})`,
+        value: `Property: **${watcher.property}**\nValue: **${watcher.value}**\nNotifies: <@${watcher.userId}>\nStatus: ${status}`,
+      });
+    });
+  }
+
   return embed;
 }
 
@@ -887,6 +1091,157 @@ client.on('interactionCreate', async interaction => {
     
     await interaction.reply(`✅ Added new reminder "${tag}" scheduled for \`${cronExp}\`${executionInfo}`);
   }
+  
+  else if (commandName === 'notion') {
+    const subcommand = interaction.options.getSubcommand();
+    
+    if (subcommand === 'add') {
+      const name = interaction.options.getString('name');
+      const property = interaction.options.getString('property');
+      const value = interaction.options.getString('value');
+      const user = interaction.options.getUser('user');
+      
+      // Generate a unique ID
+      const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+      
+      // Create the new watcher
+      const newWatcher = {
+        id,
+        name,
+        property,
+        value,
+        userId: user.id,
+        createdAt: new Date().toISOString(),
+        createdBy: interaction.user.id,
+        disabled: false
+      };
+      
+      // Add to custom watchers
+      customWatchers.push(newWatcher);
+      
+      // Save to file
+      saveWatchers();
+      
+      await interaction.reply({
+        content: `✅ Created new Notion watcher "${name}" (ID: ${id}):\n- Property: ${property}\n- Value: ${value}\n- Notifies: ${user}\n\nThis watcher is now active and will notify ${user} when a Notion page's "${property}" property is set to "${value}".`,
+        ephemeral: true
+      });
+    }
+    
+    else if (subcommand === 'list') {
+      const embed = createWatchersEmbed();
+      await interaction.reply({ embeds: [embed] });
+    }
+    
+    else if (subcommand === 'enable') {
+      const id = interaction.options.getString('id');
+      
+      // Find the watcher
+      const watcher = customWatchers.find(w => w.id === id);
+      
+      if (!watcher) {
+        await interaction.reply({
+          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
+          ephemeral: true
+        });
+        return;
+      }
+      
+      // Enable the watcher
+      watcher.disabled = false;
+      
+      // Save to file
+      saveWatchers();
+      
+      await interaction.reply({
+        content: `✅ Enabled Notion watcher "${watcher.name}" (ID: ${id}).`,
+        ephemeral: true
+      });
+    }
+    
+    else if (subcommand === 'disable') {
+      const id = interaction.options.getString('id');
+      
+      // Find the watcher
+      const watcher = customWatchers.find(w => w.id === id);
+      
+      if (!watcher) {
+        await interaction.reply({
+          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
+          ephemeral: true
+        });
+        return;
+      }
+      
+      // Disable the watcher
+      watcher.disabled = true;
+      
+      // Save to file
+      saveWatchers();
+      
+      await interaction.reply({
+        content: `✅ Disabled Notion watcher "${watcher.name}" (ID: ${id}). It will no longer check for status changes.`,
+        ephemeral: true
+      });
+    }
+    
+    else if (subcommand === 'delete') {
+      const id = interaction.options.getString('id');
+      
+      // Find the watcher index
+      const watcherIndex = customWatchers.findIndex(w => w.id === id);
+      
+      if (watcherIndex === -1) {
+        await interaction.reply({
+          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
+          ephemeral: true
+        });
+        return;
+      }
+      
+      // Get the watcher name before removing
+      const watcherName = customWatchers[watcherIndex].name;
+      
+      // Remove the watcher
+      customWatchers.splice(watcherIndex, 1);
+      
+      // Save to file
+      saveWatchers();
+      
+      await interaction.reply({
+        content: `✅ Deleted Notion watcher "${watcherName}" (ID: ${id}).`,
+        ephemeral: true
+      });
+    }
+    
+    else if (subcommand === 'properties') {
+      await interaction.deferReply();
+      
+      try {
+        // Fetch database metadata to get properties
+        const database = await notion.databases.retrieve({
+          database_id: DB
+        });
+        
+        const properties = database.properties;
+        const propertyList = Object.entries(properties)
+          .map(([name, prop]) => `- **${name}** (${prop.type})`)
+          .join('\n');
+        
+        const embed = new EmbedBuilder()
+          .setColor(0x8A2BE2)
+          .setTitle('Notion Database Properties')
+          .setDescription(`The following properties are available in the Notion database:\n\n${propertyList}\n\nYou can use any property of type **select** with the \`/notion add\` command.`)
+          .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+      } catch (error) {
+        await interaction.editReply({
+          content: `❌ Error fetching database properties: ${error.message}\n\nMake sure your Notion integration is set up correctly.`
+        });
+      }
+    }
+  }
 });
 
 // Handle select menu interactions
@@ -1059,3 +1414,36 @@ client.once('ready', async () => {
 
 // Connect to Discord
 client.login(DISCORD_TOKEN);
+
+// Custom Notion watchers - will be loaded from file
+const customWatchers = [];
+
+// Load custom watchers from a file if it exists
+function loadWatchers() {
+  const watchersFilePath = path.join(__dirname, 'notion-watchers.json');
+  if (fs.existsSync(watchersFilePath)) {
+    try {
+      const data = fs.readFileSync(watchersFilePath, 'utf8');
+      return JSON.parse(data);
+    } catch (error) {
+      logToFile(`Error loading watchers file: ${error.message}`);
+    }
+  } else {
+    logToFile('No notion-watchers.json file found. Using default watcher only.');
+  }
+  return [];
+}
+
+// Save custom watchers to a file
+function saveWatchers() {
+  const watchersFilePath = path.join(__dirname, 'notion-watchers.json');
+  fs.writeFileSync(watchersFilePath, JSON.stringify(customWatchers, null, 2));
+  logToFile('Custom Notion watchers saved to notion-watchers.json');
+}
+
+// Initialize custom watchers
+const loadedWatchers = loadWatchers();
+if (loadedWatchers && loadedWatchers.length > 0) {
+  customWatchers.push(...loadedWatchers);
+  logToFile(`Loaded ${customWatchers.length} custom Notion watchers`);
+}

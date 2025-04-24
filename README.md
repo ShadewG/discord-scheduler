@@ -13,6 +13,7 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - 🔇 Silent operation (no startup announcements)
 - 📝 Send manual messages to the channel with optional role mentions
 - 📓 Notion integration to track changes in databases
+- 🔔 Custom Notion watchers for specific status changes
 
 ## Commands
 
@@ -25,6 +26,13 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - `/testjob` - Test a specific reminder
 - `/edit` - Edit an existing reminder
 - `/add` - Add a new reminder
+- `/notion` - Manage Notion status watchers:
+  - `/notion add` - Add a new status watcher
+  - `/notion list` - List all watchers
+  - `/notion enable` - Enable a watcher
+  - `/notion disable` - Disable a watcher
+  - `/notion delete` - Delete a watcher
+  - `/notion properties` - List available properties in database
 - `/help` - Show available commands
 
 ## Installation

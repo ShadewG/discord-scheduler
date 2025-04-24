@@ -36,8 +36,8 @@
  *    - NOTION_DB_ID: Your database ID (with or without hyphens)
  * 
  * 5. Database requirements:
- *    - Must have a "Caption Status" property of type "Select"
  *    - Must have a title property (any of these names will work: "Project Name", "Name", "Title", "Page", "Project")
+ *    - Should have one or more "Select" type properties to watch for changes
  * 
  * ## Features
  * 
@@ -55,9 +55,32 @@
  *    - Once a notification is sent for a page, it won't notify again for that same page
  * 
  * 4. Only Tracks New Changes:
- *    - The bot only processes pages that were marked "Ready For Captions" after the bot started
+ *    - The bot only processes pages that were marked with specific statuses after the bot started
  *    - Any pages that were already in that state before the bot started will be ignored
  *    - This prevents a flood of notifications for pre-existing content when restarting the bot
+ * 
+ * 5. Custom Status Watchers:
+ *    - Create custom watchers for any property and value combinations
+ *    - Each watcher can notify a different user
+ *    - Watchers can be enabled, disabled, or deleted
+ *    - Changes are only tracked from when the bot starts
+ * 
+ * ## Using Custom Watchers
+ * 
+ * 1. Viewing available properties:
+ *    - Use `/notion properties` to see all properties in your database
+ *    - Note which ones are of type "select" as these can be watched
+ * 
+ * 2. Creating a watcher:
+ *    - Use `/notion add` to create a new watcher
+ *    - Provide a name, property to watch, value to look for, and user to notify
+ *    - Example: `/notion add name:Design Review property:Status value:Ready for Review user:@Designer`
+ * 
+ * 3. Managing watchers:
+ *    - `/notion list` - See all configured watchers
+ *    - `/notion enable [id]` - Enable a watcher by ID
+ *    - `/notion disable [id]` - Temporarily disable a watcher
+ *    - `/notion delete [id]` - Permanently delete a watcher
  * 
  * ## Troubleshooting
  * 
@@ -67,17 +90,19 @@
  *    - Check if your integration has the correct capabilities
  * 
  * 2. Property not found errors:
- *    - Make sure your database has a "Caption Status" property
- *    - Ensure the property is a "Select" type
+ *    - Make sure your database has the properties you're trying to watch
+ *    - Ensure the properties are "Select" type
  *    - Ensure your database has at least one title-type property
  * 
  * ## Configuration
  * 
  * In index.js, you can configure:
- * - TARGET_PROP: The name of the property/column to check (default: "Caption Status")
- * - TARGET_VALUE: The value that triggers a notification (default: "Ready For Captions")
- * - RAY_ID: The Discord user ID to mention in notifications
+ * - TARGET_PROP: The name of the default property to check (default: "Caption Status")
+ * - TARGET_VALUE: The value that triggers the default notification (default: "Ready For Captions")
+ * - RAY_ID: The Discord user ID to mention in default notifications
  * - NOTION_CHANNEL_ID: Channel where Notion notifications are sent
+ * 
+ * Custom watchers are stored in notion-watchers.json
  */
 
 // This file is for documentation only and is not loaded by the application 
