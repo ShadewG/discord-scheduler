@@ -1470,6 +1470,11 @@ Your task is to identify the FINAL/LATEST mentions of key properties from a chat
 For example, if someone initially sets a due date to Friday but later changes it to Sunday, use Sunday.
 Resolve conflicts by preferring the most recent mentions.
 
+Important: Pay careful attention to URLs mentioned in the chat history.
+- For script URLs (Google Docs, Notion pages), set the script_url property
+- For Frame.io links (including f.io short links), set the frameio_url property
+- If you see other important links, include them in page_content
+
 If you find mentions of images, assets, or other important information that should be added to the page
 as notes rather than properties, include those in the page_content field.
 
@@ -1544,6 +1549,27 @@ Today's date is ${today}.`
             } catch (extractError) {
               logToFile(`Error extracting script link: ${extractError.message}`);
               errorProperties.push("Script extraction");
+            }
+          }
+          
+          // Try to extract Frame.io link if needed
+          if (hasPageContent && !props.frameio_url && !notionProps['Frame.io']) {
+            try {
+              const frameioLink = extractFrameioLink(props.page_content);
+              if (frameioLink) {
+                logToFile(`📝 Found potential Frame.io link in content: ${frameioLink}`);
+                // Add the Frame.io URL to properties
+                try {
+                  notionProps['Frame.io'] = { url: frameioLink };
+                  hasPropertiesToUpdate = true;
+                } catch (frameioError) {
+                  logToFile(`Error adding Frame.io URL to properties: ${frameioError.message}`);
+                  errorProperties.push("Frame.io URL");
+                }
+              }
+            } catch (extractError) {
+              logToFile(`Error extracting Frame.io link: ${extractError.message}`);
+              errorProperties.push("Frame.io extraction");
             }
           }
           
@@ -2488,6 +2514,24 @@ client.on('messageCreate', async msg => {
   const userText = msg.content.slice(TRIGGER_PREFIX.length).trim();
   if (!userText && !isNewPage) return;
 
+  // Check for URLs directly in the user message
+  let directFrameioLink = null;
+  let directScriptLink = null;
+
+  try {
+    directFrameioLink = extractFrameioLink(userText);
+    if (directFrameioLink) {
+      logToFile(`🔗 Found Frame.io link directly in user message: ${directFrameioLink}`);
+    }
+    
+    directScriptLink = extractScriptLink(userText);
+    if (directScriptLink) {
+      logToFile(`🔗 Found script link directly in user message: ${directScriptLink}`);
+    }
+  } catch (error) {
+    logToFile(`⚠️ Error checking for direct links: ${error.message}`);
+  }
+
   try {
     // Get current date in ISO format
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
@@ -2500,6 +2544,11 @@ client.on('messageCreate', async msg => {
 You can update both properties and add content to the page itself. 
 If the user mentions new images, notes, or other content that should be added to the page (not just as properties),
 include that in the page_content field.
+
+Important: Pay careful attention to URLs in the user's message. 
+- For script URLs (Google Docs, Notion pages), set the script_url property
+- For Frame.io links (including f.io short links), set the frameio_url property
+- If you see other important links, include them in page_content
 
 You can set the project category to "IB", "CL", or "Bodycam" based on user instructions.
 The category is automatically determined from the project code prefix (IB, CL, BC), but users can change it.` },
@@ -2522,6 +2571,17 @@ The category is automatically determined from the project code prefix (IB, CL, B
       console.error('JSON parse error', e, call.arguments);
       await msg.reply('❌ Error parsing GPT response.');
       return;
+    }
+
+    // Add direct links found in user message if GPT didn't capture them
+    if (directFrameioLink && !props.frameio_url) {
+      props.frameio_url = directFrameioLink;
+      logToFile(`📎 Adding Frame.io link from direct extraction: ${directFrameioLink}`);
+    }
+
+    if (directScriptLink && !props.script_url) {
+      props.script_url = directScriptLink;
+      logToFile(`📎 Adding script link from direct extraction: ${directScriptLink}`);
     }
 
     // Create the Notion properties object with error handling
@@ -2566,6 +2626,27 @@ The category is automatically determined from the project code prefix (IB, CL, B
       } catch (extractError) {
         logToFile(`Error extracting script link in !sync: ${extractError.message}`);
         errorProperties.push("Script extraction");
+      }
+    }
+    
+    // Try to extract Frame.io link if needed
+    if (hasPageContent && !props.frameio_url && !notionProps['Frame.io']) {
+      try {
+        const frameioLink = extractFrameioLink(props.page_content);
+        if (frameioLink) {
+          logToFile(`📝 Found potential Frame.io link in content: ${frameioLink}`);
+          // Add the Frame.io URL to properties
+          try {
+            notionProps['Frame.io'] = { url: frameioLink };
+            hasPropertiesToUpdate = true;
+          } catch (frameioError) {
+            logToFile(`Error adding Frame.io URL to properties in !sync: ${frameioError.message}`);
+            errorProperties.push("Frame.io URL");
+          }
+        }
+      } catch (extractError) {
+        logToFile(`Error extracting Frame.io link in !sync: ${extractError.message}`);
+        errorProperties.push("Frame.io extraction");
       }
     }
     
@@ -3052,10 +3133,51 @@ function extractScriptLink(content) {
     return scriptMatch[1];
   }
   
+  // Check for formatted "Script document link: URL" format
+  const formattedScriptMatch = content.match(/script\s*(?:document|doc)?\s*(?:link|url)?:?\s*(https?:\/\/[^\s]+)/i);
+  if (formattedScriptMatch) {
+    return formattedScriptMatch[1];
+  }
+  
+  // Look for any Google Docs link with "script" nearby
+  const nearbyScriptMatch = content.match(/script.*?(https:\/\/docs\.google\.com\/document\/[^\s]+)|(?:https:\/\/docs\.google\.com\/document\/[^\s]+).*?script/i);
+  if (nearbyScriptMatch) {
+    return nearbyScriptMatch[1] || nearbyScriptMatch[2];
+  }
+  
   // If no explicit script, look for any Google Docs link
   const docsMatch = content.match(/(https:\/\/docs\.google\.com\/document\/[^\s]+)/i);
   if (docsMatch) {
     return docsMatch[1];
+  }
+  
+  // Check for Notion document links that might be scripts
+  const notionMatch = content.match(/(https:\/\/[^\/]+\.notion\.site\/[^\s]+)/i);
+  if (notionMatch && content.toLowerCase().includes('script')) {
+    return notionMatch[1];
+  }
+  
+  return null;
+}
+
+// Function to extract Frame.io links
+function extractFrameioLink(content) {
+  // Check for explicit Frame.io URL with different formats
+  const explicitMatch = content.match(/(?:frame\.io|f\.io)\s*(?:link|url)?:?\s*(https?:\/\/(?:app\.)?(?:frame\.io|f\.io)\/[^\s]+)/i);
+  if (explicitMatch) {
+    return explicitMatch[1];
+  }
+  
+  // Check for formatted "Frame.io link: URL" format
+  const formattedMatch = content.match(/frame\.io\s*(?:link|url)?:?\s*(https?:\/\/[^\s]+)/i);
+  if (formattedMatch) {
+    return formattedMatch[1];
+  }
+  
+  // Look for any Frame.io link
+  const frameioMatch = content.match(/(https?:\/\/(?:app\.)?(?:frame\.io|f\.io)\/[^\s]+)/i);
+  if (frameioMatch) {
+    return frameioMatch[1];
   }
   
   return null;
