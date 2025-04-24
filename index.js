@@ -67,7 +67,16 @@ function logToFile(message) {
 async function ping(text) {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    await channel.send(text.replace('@Editor', `<@&${ROLE_ID}>`));
+    
+    // Check if the message already contains a role mention
+    if (text.includes('@Editor') || text.includes(`<@&${ROLE_ID}>`)) {
+      // Replace @Editor with the role mention if present
+      await channel.send(text.replace('@Editor', `<@&${ROLE_ID}>`));
+    } else {
+      // Add role mention at the beginning if not present
+      await channel.send(`<@&${ROLE_ID}> ${text}`);
+    }
+    
     logToFile(`📢 Sent message: ${text}`);
   } catch (error) {
     logToFile(`❌ Error sending message: ${error.message}`);
@@ -221,9 +230,21 @@ const commands = [
         )),
   
   new SlashCommandBuilder()
+    .setName('send')
+    .setDescription('Send a custom message to the channel')
+    .addStringOption(option => 
+      option.setName('message')
+        .setDescription('The message you want to send')
+        .setRequired(true))
+    .addBooleanOption(option =>
+      option.setName('mention')
+        .setDescription('Whether to mention the role')
+        .setRequired(false)),
+        
+  new SlashCommandBuilder()
     .setName('list')
     .setDescription('List all scheduled reminders'),
-  
+
   new SlashCommandBuilder()
     .setName('schedule')
     .setDescription('Show the complete schedule with countdown timers'),
@@ -380,6 +401,7 @@ function createHelpEmbed() {
     .addFields(
       { name: '/test', value: 'Send test messages for all scheduled reminders' },
       { name: '/testjob', value: 'Test a specific scheduled reminder (select from dropdown)' },
+      { name: '/send', value: 'Send a custom message to the channel (with optional role mention)' },
       { name: '/next', value: 'Show when the next reminders will run' },
       { name: '/schedule', value: 'Show the complete schedule with countdown timers in categories' },
       { name: '/list', value: 'List all scheduled reminders' },
@@ -571,6 +593,29 @@ client.on('interactionCreate', async interaction => {
     const nextExecution = getNextExecution(job.cron);
     if (nextExecution) {
       await interaction.followUp(`Next scheduled run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+    }
+  }
+  
+  else if (commandName === 'send') {
+    const messageText = interaction.options.getString('message');
+    const mentionRole = interaction.options.getBoolean('mention') || false;
+    
+    await interaction.deferReply();
+    
+    try {
+      // Send the message with or without role mention
+      if (mentionRole) {
+        await ping(messageText);
+        await interaction.editReply(`✅ Message sent with @Editor role mention: "${messageText}"`);
+      } else {
+        await sendMessage(messageText);
+        await interaction.editReply(`✅ Message sent: "${messageText}"`);
+      }
+      
+      logToFile(`📢 Manual message sent by ${interaction.user.tag}: "${messageText}"`);
+    } catch (error) {
+      await interaction.editReply(`❌ Error sending message: ${error.message}`);
+      logToFile(`Error sending manual message: ${error.message}`);
     }
   }
   

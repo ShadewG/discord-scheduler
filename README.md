@@ -11,12 +11,14 @@ A Discord bot for scheduling and sending reminders for meetings and work session
 - ➕ Add new reminders easily with slash commands
 - 🌐 Support for timezone-specific scheduling
 - 🔇 No startup announcement when the bot goes online (silent operation)
+- 📝 Send manual messages to the channel with optional role mentions
 
 ## Commands
 
 - `/schedule` - Show the complete schedule with countdown timers
 - `/next` - Show the next upcoming reminders
 - `/list` - List all scheduled reminders
+- `/send` - Send a custom message to the channel (with optional role mention)
 - `/status` - View bot configuration and status
 - `/test` - Test all scheduled reminders
 - `/testjob` - Test a specific reminder
