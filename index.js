@@ -156,6 +156,12 @@ Return **ONE** of the following:
 * If multiple owners/editors/writers are mentioned, return them as arrays,
   preserving first-mention order.
 
+* **URLs and latest references**:
+  - For Frame.io links, always use the MOST RECENT link mentioned.
+  - If messages say "new Frame.io link: https://f.io/abc" followed later by
+    "updated Frame.io: https://f.io/xyz", use ONLY the latter.
+  - This applies to all URLs - the latest mention always overrides earlier ones.
+
 * Reminder: DO NOT invent keys; omit anything you are not certain about.
 
 ### Today's date
@@ -1576,6 +1582,12 @@ client.on('interactionCreate', async interaction => {
                 name: 'update_properties',
                 arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12', priority: 'Medium' })
               }},
+              // New example showing latest link wins
+              { role: 'user', content: 'First edit on Frame.io: https://f.io/abc123. [Later message] We moved to a new Frame.io: https://f.io/xyz789.' },
+              { role: 'assistant', function_call: { 
+                name: 'update_properties',
+                arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
+              }},
               // Actual message
               { role: 'user', content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}` }
             ],
@@ -2642,6 +2654,12 @@ client.on('messageCreate', async msg => {
         { role: 'assistant', function_call: { 
           name: 'update_properties',
           arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12' })
+        }},
+        // New example showing latest link wins
+        { role: 'user', content: '!sync Here is our Frame.io: https://f.io/abc123. [Later] Actually use this updated Frame.io link: https://f.io/xyz789.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
         }},
         // Actual message
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
