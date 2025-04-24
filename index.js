@@ -28,6 +28,9 @@ const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion not
 
 // Cache for Notion database title property to avoid repeated lookups
 let CACHED_TITLE_PROPERTY = null;
+// Cache for available status options
+let CACHED_STATUS_OPTIONS = null;
+let CACHED_SELECT_OPTIONS = {};
 
 // Initialize Notion client
 const { Client: Notion } = require('@notionhq/client');
@@ -203,13 +206,139 @@ async function findPage(code) {
   }
 }
 
+// Function to find the closest matching option
+function findClosestOption(value, options) {
+  if (!value || !options || options.length === 0) return null;
+  
+  // Direct match
+  const directMatch = options.find(opt => 
+    opt.toLowerCase() === value.toLowerCase()
+  );
+  if (directMatch) return directMatch;
+  
+  // Contains match (e.g., "hold" matches "On Hold")
+  const containsMatch = options.find(opt => 
+    opt.toLowerCase().includes(value.toLowerCase()) || 
+    value.toLowerCase().includes(opt.toLowerCase())
+  );
+  if (containsMatch) return containsMatch;
+  
+  // Word-based match
+  const valueWords = value.toLowerCase().split(/\s+/);
+  for (const opt of options) {
+    const optWords = opt.toLowerCase().split(/\s+/);
+    // Check if any word matches between the values
+    for (const valueWord of valueWords) {
+      if (optWords.some(word => word === valueWord || 
+          word.includes(valueWord) || 
+          valueWord.includes(word))) {
+        return opt;
+      }
+    }
+  }
+  
+  // Semantic match for common status pairs
+  const statusPairs = [
+    ['on hold', 'pause'],
+    ['paused', 'pause'],
+    ['on pause', 'pause'],
+    ['hold', 'pause'],
+    ['ready', 'ready for production'],
+    ['done', 'completed'],
+    ['finished', 'completed'],
+    ['in progress', 'writing'],
+    ['working', 'writing'],
+    ['review', 'writing review']
+  ];
+  
+  const valueLower = value.toLowerCase();
+  for (const [from, to] of statusPairs) {
+    if (valueLower.includes(from)) {
+      const match = options.find(opt => opt.toLowerCase() === to.toLowerCase());
+      if (match) return match;
+    }
+  }
+  
+  // No match found
+  logToFile(`⚠️ No match found for "${value}" in available options: ${options.join(', ')}`);
+  return null;
+}
+
+// Function to fetch available options for select and status properties
+async function fetchNotionOptions() {
+  try {
+    if (!NOTION_TOKEN || !DB) {
+      logToFile('❌ Cannot fetch Notion options: Missing NOTION_TOKEN or DB_ID');
+      return;
+    }
+    
+    logToFile('🔍 Fetching available options from Notion database...');
+    
+    // Get database schema
+    const database = await notion.databases.retrieve({
+      database_id: DB
+    });
+    
+    // Extract options from all select and status properties
+    for (const [propName, prop] of Object.entries(database.properties)) {
+      if (prop.type === 'status') {
+        const options = prop.status.options.map(opt => opt.name);
+        CACHED_STATUS_OPTIONS = options;
+        logToFile(`✅ Cached ${options.length} status options: ${options.join(', ')}`);
+      }
+      else if (prop.type === 'select') {
+        const options = prop.select.options.map(opt => opt.name);
+        CACHED_SELECT_OPTIONS[propName] = options;
+        logToFile(`✅ Cached ${options.length} select options for "${propName}": ${options.join(', ')}`);
+      }
+      else if (prop.type === 'multi_select') {
+        const options = prop.multi_select.options.map(opt => opt.name);
+        CACHED_SELECT_OPTIONS[propName] = options;
+        logToFile(`✅ Cached ${options.length} multi-select options for "${propName}": ${options.join(', ')}`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    logToFile(`❌ Error fetching Notion options: ${error.message}`);
+    return false;
+  }
+}
+
 function toNotion(p) {
   const out = {};
   if (p.script_url)     out.Script          = { url: p.script_url };
   if (p.frameio_url)    out['Frame.io']     = { url: p.frameio_url };
   if (p.due_date)       out.Date            = { date:{ start:p.due_date } };
-  if (p.priority)       out.Priority        = { select:{ name:p.priority } };
-  if (p.caption_status) out['Caption Status']= { select:{ name:p.caption_status } };
+  
+  // Handle "Priority" with fuzzy matching
+  if (p.priority && CACHED_SELECT_OPTIONS['Priority']) {
+    const matchedPriority = findClosestOption(p.priority, CACHED_SELECT_OPTIONS['Priority']);
+    if (matchedPriority) {
+      out.Priority = { select: { name: matchedPriority } };
+    } else {
+      logToFile(`⚠️ Could not match priority "${p.priority}" to available options`);
+      // Use original value as fallback
+      out.Priority = { select: { name: p.priority } };
+    }
+  } else if (p.priority) {
+    out.Priority = { select: { name: p.priority } };
+  }
+  
+  // Handle "Caption Status" with fuzzy matching
+  if (p.caption_status && CACHED_SELECT_OPTIONS['Caption Status']) {
+    const matchedCaptionStatus = findClosestOption(p.caption_status, CACHED_SELECT_OPTIONS['Caption Status']);
+    if (matchedCaptionStatus) {
+      out['Caption Status'] = { select: { name: matchedCaptionStatus } };
+    } else {
+      logToFile(`⚠️ Could not match caption status "${p.caption_status}" to available options`);
+      // Use original value as fallback
+      out['Caption Status'] = { select: { name: p.caption_status } };
+    }
+  } else if (p.caption_status) {
+    out['Caption Status'] = { select: { name: p.caption_status } };
+  }
+  
   if (p.editor_discord && USER_TO_NOTION[p.editor_discord])
                         out.Editor          = { people:[{ id: USER_TO_NOTION[p.editor_discord] }] };
   
@@ -235,18 +364,72 @@ function toNotion(p) {
   // Handle Lead property - ensure it's a string even if an array was provided
   if (p.lead) {
     const leadName = Array.isArray(p.lead) ? p.lead[0] : p.lead;
-    out.Lead = { select: { name: leadName } };
+    // Try fuzzy matching if options are available
+    if (CACHED_SELECT_OPTIONS['Lead']) {
+      const matchedLead = findClosestOption(leadName, CACHED_SELECT_OPTIONS['Lead']);
+      if (matchedLead) {
+        out.Lead = { select: { name: matchedLead } };
+      } else {
+        logToFile(`⚠️ Could not match lead "${leadName}" to available options`);
+        // Use original value as fallback
+        out.Lead = { select: { name: leadName } };
+      }
+    } else {
+      out.Lead = { select: { name: leadName } };
+    }
   }
   
   // Brand Deal is a relation type, not a select
   if (p.brand_deal)     out['Brand Deal']   = { relation: [{ id: p.brand_deal }] };
   
-  // Status is a status type, not a select
-  if (p.status)         out.Status          = { status: { name: p.status } };
+  // Status is a status type, not a select - try fuzzy matching
+  if (p.status) {
+    if (CACHED_STATUS_OPTIONS) {
+      const matchedStatus = findClosestOption(p.status, CACHED_STATUS_OPTIONS);
+      if (matchedStatus) {
+        out.Status = { status: { name: matchedStatus } };
+        if (matchedStatus.toLowerCase() !== p.status.toLowerCase()) {
+          logToFile(`ℹ️ Mapped status "${p.status}" to closest option "${matchedStatus}"`);
+        }
+      } else {
+        logToFile(`⚠️ Could not match status "${p.status}" to available options`);
+        // Use original value as fallback
+        out.Status = { status: { name: p.status } };
+      }
+    } else {
+      out.Status = { status: { name: p.status } };
+    }
+  }
   
-  if (p.threed_status)  out['3D Status']    = { select: { name: p.threed_status } };
+  // Handle "3D Status" with fuzzy matching
+  if (p.threed_status && CACHED_SELECT_OPTIONS['3D Status']) {
+    const matched3DStatus = findClosestOption(p.threed_status, CACHED_SELECT_OPTIONS['3D Status']);
+    if (matched3DStatus) {
+      out['3D Status'] = { select: { name: matched3DStatus } };
+    } else {
+      logToFile(`⚠️ Could not match 3D status "${p.threed_status}" to available options`);
+      // Use original value as fallback
+      out['3D Status'] = { select: { name: p.threed_status } };
+    }
+  } else if (p.threed_status) {
+    out['3D Status'] = { select: { name: p.threed_status } };
+  }
+  
   if (p.current_stage_date) out['Current Stage Date'] = { date: { start: p.current_stage_date } };
-  if (p.category)       out.Category        = { select: { name: p.category } };
+  
+  // Handle "Category" with fuzzy matching
+  if (p.category && CACHED_SELECT_OPTIONS['Category']) {
+    const matchedCategory = findClosestOption(p.category, CACHED_SELECT_OPTIONS['Category']);
+    if (matchedCategory) {
+      out.Category = { select: { name: matchedCategory } };
+    } else {
+      logToFile(`⚠️ Could not match category "${p.category}" to available options`);
+      // Use original value as fallback
+      out.Category = { select: { name: p.category } };
+    }
+  } else if (p.category) {
+    out.Category = { select: { name: p.category } };
+  }
   
   return out;
 }
@@ -2112,6 +2295,9 @@ client.once('ready', async () => {
   
   // Register slash commands
   await registerCommands(client.user.id);
+  
+  // Fetch available Notion options for better matching
+  await fetchNotionOptions();
   
   logToFile('\n🔄  Bot is running! Press Ctrl+C to stop.');
   
