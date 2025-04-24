@@ -1584,6 +1584,35 @@ function saveWatchers() {
     }
   }
   
+  // Create a backup copy with timestamp to help recovery
+  const timestamp = new Date().toISOString().replace(/:/g, '-');
+  const backupDir = path.join(__dirname, 'backups');
+  
+  // Create backups directory if it doesn't exist
+  if (!fs.existsSync(backupDir)) {
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+    } catch (err) {
+      logToFile(`Failed to create backups directory: ${err.message}`);
+    }
+  }
+  
+  // Save backup with timestamp
+  try {
+    const backupPath = path.join(backupDir, `watchers-${timestamp}.json`);
+    fs.writeFileSync(backupPath, JSON.stringify(customWatchers, null, 2));
+    logToFile(`📦 Saved watchers backup to ${backupPath}`);
+  } catch (err) {
+    logToFile(`Failed to save watchers backup: ${err.message}`);
+  }
+  
+  // Log watcher details for manual restoration if needed
+  logToFile('📋 WATCHER DATA FOR MANUAL RESTORATION:');
+  logToFile('```json');
+  logToFile(JSON.stringify(customWatchers, null, 2));
+  logToFile('```');
+  logToFile('Copy the above JSON if needed to restore watchers after deployment');
+  
   fs.writeFileSync(watchersFilePath, JSON.stringify(customWatchers, null, 2));
   logToFile('Custom Notion watchers saved to notion-watchers.json');
 }
@@ -1594,6 +1623,49 @@ if (loadedWatchers && loadedWatchers.length > 0) {
   customWatchers.push(...loadedWatchers);
   logToFile(`${customWatchers.length} Notion watchers active`);
 }
+
+// Function to add a predefined watcher for easy recovery
+function addPredefinedWatcher() {
+  // Check for command line arguments to restore watcher
+  const args = process.argv.slice(2);
+  if (args.length > 0 && args[0] === '--add-watcher') {
+    try {
+      const watcher = {
+        id: args[1] || `m${Date.now().toString(36)}`,
+        name: args[2] || "3D Notif",
+        property: args[3] || "3D Status",
+        value: args[4] || "Storyboarding",
+        userId: args[5] || "348547268695162890", // Default to RAY_ID if not specified
+        createdAt: new Date().toISOString(),
+        createdBy: "system",
+        disabled: false
+      };
+      
+      // Don't add duplicate watchers
+      const existing = customWatchers.find(w => 
+        w.property === watcher.property && 
+        w.value === watcher.value && 
+        w.userId === watcher.userId
+      );
+      
+      if (existing) {
+        logToFile(`⚠️ Watcher with property "${watcher.property}" and value "${watcher.value}" already exists (ID: ${existing.id})`);
+        return;
+      }
+      
+      customWatchers.push(watcher);
+      saveWatchers();
+      logToFile(`✅ Predefined watcher "${watcher.name}" added successfully (ID: ${watcher.id})`);
+      logToFile(`   Property: ${watcher.property} = ${watcher.value}`);
+      logToFile(`   Notifies: <@${watcher.userId}>`);
+    } catch (error) {
+      logToFile(`❌ Error adding predefined watcher: ${error.message}`);
+    }
+  }
+}
+
+// Try to add predefined watcher if requested via command line
+addPredefinedWatcher();
 
 /* ─ Handle !sync messages for Notion updates ─────────────────────── */
 client.on('messageCreate', async msg => {
