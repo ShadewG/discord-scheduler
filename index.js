@@ -90,11 +90,11 @@ Return **ONE** of the following:
   "editor_discord":"348547268695162890", // snowflake as string
   "lead":          "Ray",
   "brand_deal":    "MySponsor2025",
-  "current_stage_date":"2025-04-15",
+  "current_stage_date":"2025-04-15",     // when next stage change is planned
 
   // ─────────── arrays of names ──────────
   "writer":       ["Anna","Michael"],
-  "project_owner":["Sam"],
+  "project_owner":"Sam",                // project owner is a SINGLE string (not array)
   "editor":       ["Ray","Jamie"],
 
   // ─────────── enums (use EXACT values) ─
@@ -154,7 +154,13 @@ Return **ONE** of the following:
   - "on pause / hold" → "Pause"
 
 * If multiple owners/editors/writers are mentioned, return them as arrays,
-  preserving first-mention order.
+  preserving first-mention order. Except for project_owner which should be a single name.
+
+* **Stage date and deadlines**:
+  - If messages mention a target date for stage completion like "aiming to finish writing by Friday" 
+    or "VA render will be done by tomorrow", set **current_stage_date** to that date.
+  - When updating the **status** field, also check if there's a target completion date
+    and update **current_stage_date** accordingly.
 
 * **URLs and latest references**:
   - For Frame.io links, always use the MOST RECENT link mentioned.
@@ -184,7 +190,7 @@ const FUNC_SCHEMA = {
       caption_status: { type:'string', enum:['Ready For Captions','Captions In Progress','Captions Done','Needs Captions'] },
       editor_discord: { type:'string' },
       writer:         { type:'array', items: { type:'string' } },
-      project_owner:  { type:'array', items: { type:'string' } },
+      project_owner:  { type:'string' },
       editor:         { type:'array', items: { type:'string' } },
       lead:           { type:'string' },
       brand_deal:     { type:'string', description: 'The ID of the related item in the brand deals database' },
@@ -457,9 +463,12 @@ function toNotion(p) {
   }
   
   if (p.project_owner && Array.isArray(p.project_owner) && p.project_owner.length > 0) {
-    // Ensure each project owner name is a string
-    const ownerNames = p.project_owner.map(o => typeof o === 'string' ? o : String(o));
-    out['Project Owner'] = { multi_select: ownerNames.map(name => ({ name })) };
+    // Project Owner is a select type, not multi_select
+    const ownerName = typeof p.project_owner[0] === 'string' ? p.project_owner[0] : String(p.project_owner[0]);
+    out['Project Owner'] = { select: { name: ownerName } };
+  } else if (p.project_owner && !Array.isArray(p.project_owner)) {
+    // Handle if it's directly a string
+    out['Project Owner'] = { select: { name: p.project_owner } };
   }
   
   if (p.editor && Array.isArray(p.editor) && p.editor.length > 0) {
@@ -990,7 +999,7 @@ const commands = [
     .setDescription('Analyze channel messages and update Notion with latest information')
     .addIntegerOption(option => 
       option.setName('messages')
-        .setDescription('Number of messages to analyze (default: 50, max: 100)')
+        .setDescription('Number of messages to analyze (default: 100, max: 300)')
         .setRequired(false)
     ),
   
@@ -1506,7 +1515,7 @@ client.on('interactionCreate', async interaction => {
           let isNewPage = false;
           
           // Fetch channel messages for analysis
-          const messages = await interaction.channel.messages.fetch({ limit: 100 });
+          const messages = await interaction.channel.messages.fetch({ limit: 300 });
           
           // Look for the first image in the messages for a thumbnail
           const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
@@ -1527,8 +1536,8 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply(`✅ Created new Notion page for project "${code}". Now analyzing messages...`);
           }
           
-          // Get number of messages to analyze (default: 50, max: 100)
-          const limit = Math.min(interaction.options.getInteger('messages') || 50, 100);
+          // Get number of messages to analyze (default: 100, max: 300)
+          const limit = Math.min(interaction.options.getInteger('messages') || 100, 300);
           
           await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
           
@@ -1587,6 +1596,15 @@ client.on('interactionCreate', async interaction => {
               { role: 'assistant', function_call: { 
                 name: 'update_properties',
                 arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
+              }},
+              // Add example for stage date
+              { role: 'user', content: 'Aiming to have the script revised and new VA render by tomorrow.' },
+              { role: 'assistant', function_call: { 
+                name: 'update_properties',
+                arguments: JSON.stringify({ 
+                  status: 'VA Render', 
+                  current_stage_date: new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().split('T')[0]
+                })
               }},
               // Actual message
               { role: 'user', content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}` }
@@ -2660,6 +2678,15 @@ client.on('messageCreate', async msg => {
         { role: 'assistant', function_call: { 
           name: 'update_properties',
           arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
+        }},
+        // Add example for stage date
+        { role: 'user', content: 'Aiming to have the script revised and new VA render by tomorrow.' },
+        { role: 'assistant', function_call: { 
+          name: 'update_properties',
+          arguments: JSON.stringify({ 
+            status: 'VA Render', 
+            current_stage_date: new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().split('T')[0]
+          })
         }},
         // Actual message
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
