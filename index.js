@@ -19,10 +19,11 @@ const { OpenAI } = require('openai');
 // ⬇⬇ Notion integration -----------------------------------------------------
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
-const DB = rawDB.replace(/-/g, '');
+// Both variables should point to the same database ID to avoid confusion
+const DB = rawDB.replace(/-/g, '');  // For legacy code usage
 const TARGET_PROP = 'Caption Status';
 const TARGET_VALUE = 'Ready For Captions';
-const RAY_ID = '669012345678901245';                     // User ID to notify
+const RAY_ID = '348547268695162890';            // User ID to notify
 const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
 
 // Initialize Notion client
@@ -54,7 +55,6 @@ if (!DISCORD_TOKEN || !CHANNEL_ID || !ROLE_ID) {
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // Constants for Notion/OpenAI integration
-const DB_ID = NOTION_DB_ID;
 const TRIGGER_PREFIX = '!sync';
 
 // Function calling schema for OpenAI
@@ -88,8 +88,16 @@ function projectCode(name) {
 
 async function findPage(code) {
   const res = await notion.databases.query({
-    database_id: DB_ID,
-    filter: { property:'Name', rich_text:{ starts_with: code } },
+    database_id: DB,
+    filter: { 
+      or: [
+        // Try different common title properties
+        { property:'Title', rich_text:{ starts_with: code } },
+        { property:'Name', rich_text:{ starts_with: code } },
+        { property:'Project Name', rich_text:{ starts_with: code } },
+        { property:'Project', rich_text:{ starts_with: code } }
+      ]
+    },
     page_size: 1
   });
   return res.results[0]?.id ?? null;
@@ -235,7 +243,7 @@ async function pollNotion() {
         
         // Skip pages that were edited before the bot started
         if (edited <= BOT_START_TIME) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for watcher "${watcher.name}".`);
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for default watcher.`);
           
           // Still add to processed pages so we don't check it again
           processedPageIds.add(pageId);
