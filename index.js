@@ -81,6 +81,7 @@ const FUNC_SCHEMA = {
       status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog'] },
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
       current_stage_date: { type:'string', format:'date' },
+      category:       { type:'string', enum:['IB','CL','Bodycam'], description: 'The category of the project (IB, CL, or Bodycam)' },
       page_content:   { type:'string', description: 'Text content to append to the bottom of the Notion page, such as notes about new images or important information' }
     },
     additionalProperties: false
@@ -94,8 +95,28 @@ const USER_TO_NOTION = {
 
 // Utility helpers for Notion integration
 function projectCode(name) {
-  const m = name.match(/^(cl|ib)\d{2}/i);   // extend prefixes if needed
-  return m ? m[0].toUpperCase() : null;
+  // Look for the project code pattern in the name (IB##, CL##, or BC##)
+  const m = name.match(/^(ib|cl|bc)\d{2}/i);
+  if (!m) return null;
+  
+  // Return the uppercase project code
+  return m[0].toUpperCase();
+}
+
+// Function to determine project category from code
+function getProjectCategory(code) {
+  if (!code) return null;
+  
+  // Get the prefix (first two letters)
+  const prefix = code.substring(0, 2).toUpperCase();
+  
+  // Map prefix to category
+  switch (prefix) {
+    case 'IB': return 'IB';
+    case 'CL': return 'CL';
+    case 'BC': return 'Bodycam';
+    default: return null;
+  }
 }
 
 async function findPage(code) {
@@ -209,6 +230,7 @@ function toNotion(p) {
   
   if (p.threed_status)  out['3D Status']    = { select: { name: p.threed_status } };
   if (p.current_stage_date) out['Current Stage Date'] = { date: { start: p.current_stage_date } };
+  if (p.category)       out.Category        = { select: { name: p.category } };
   
   return out;
 }
@@ -1567,6 +1589,9 @@ Resolve conflicts by preferring the most recent mentions.
 If you find mentions of images, assets, or other important information that should be added to the page
 as notes rather than properties, include those in the page_content field.
 
+You can also identify or update the project category to "IB", "CL", or "Bodycam" based on discussions.
+The category is usually determined from the project code (IB##, CL##, BC##), but can be changed.
+
 Today's date is ${today}.`
           },
           { 
@@ -2049,7 +2074,10 @@ client.on('messageCreate', async msg => {
         { role: 'system', content: `You update video-pipeline metadata from chat. Today's date is ${today}.
 You can update both properties and add content to the page itself. 
 If the user mentions new images, notes, or other content that should be added to the page (not just as properties),
-include that in the page_content field.` },
+include that in the page_content field.
+
+You can set the project category to "IB", "CL", or "Bodycam" based on user instructions.
+The category is automatically determined from the project code prefix (IB, CL, BC), but users can change it.` },
         { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
       ],
       functions: [FUNC_SCHEMA],
@@ -2180,6 +2208,12 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
     // Format a title for the new page
     const title = channelName.includes(code) ? channelName : `${code} - ${channelName}`;
     
+    // Determine the category from the project code
+    const category = getProjectCategory(code);
+    if (category) {
+      logToFile(`📝 Setting category to "${category}" based on project code ${code}`);
+    }
+    
     // Create the basic page properties
     const pageProperties = {
       [CACHED_TITLE_PROPERTY]: {
@@ -2193,6 +2227,15 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
       },
       ...properties
     };
+    
+    // Add category if determined from the code
+    if (category) {
+      pageProperties['Category'] = {
+        select: {
+          name: category
+        }
+      };
+    }
     
     // Create the page
     const response = await notion.pages.create({
