@@ -18,7 +18,9 @@ const { getTimeUntilNextExecution } = require('./utils');
 // ⬇⬇ Notion integration -----------------------------------------------------
 const { Client: Notion } = require('@notionhq/client');
 const notion  = new Notion({ auth: process.env.NOTION_TOKEN });
-const DB      = process.env.NOTION_DB_ID;              // 32-char DB id
+// Normalize the database ID by removing any hyphens
+const rawDB = process.env.NOTION_DB_ID || '';
+const DB = rawDB.replace(/-/g, '');  // Remove all hyphens from the ID
 const TARGET_PROP   = 'Caption Status';                // column name in Notion
 const TARGET_VALUE  = 'Ready For Captions';            // value that triggers ping
 const RAY_ID        = '669012345678901245';            // Ray's Discord user-ID
@@ -110,38 +112,64 @@ let lastCheck = new Date(0);            // marker to avoid repeat pings
 
 async function pollNotion() {
   try {
-    if (!process.env.NOTION_TOKEN || !DB) {
-      logToFile('❌ Notion poll skipped: Missing NOTION_TOKEN or NOTION_DB_ID');
+    if (!process.env.NOTION_TOKEN) {
+      logToFile('❌ Notion poll skipped: Missing NOTION_TOKEN');
       return;
     }
     
-    logToFile('🔍 Polling Notion database for Caption Status updates...');
-    
-    const res = await notion.databases.query({
-      database_id: DB,
-      filter: {
-        property: TARGET_PROP,
-        select: { equals: TARGET_VALUE }
-      },
-      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
-    });
-
-    for (const page of res.results) {
-      const edited = new Date(page.last_edited_time);
-      if (edited <= lastCheck) break;   // skip already-seen rows
-
-      const title =
-        page.properties.Name.title?.[0]?.plain_text ?? '(untitled page)';
-        
-      logToFile(`✅ Found updated Notion page with caption: "${title}"`);
-      
-      await sendMessage(
-        `<@${RAY_ID}> Captions are ready for project **"${title}"**`
-      );
+    if (!DB) {
+      logToFile('❌ Notion poll skipped: Missing NOTION_DB_ID');
+      return;
     }
-    lastCheck = new Date();             // move checkpoint forward
+    
+    logToFile(`🔍 Polling Notion database (ID: ${DB.substring(0, 6)}...${DB.substring(DB.length - 4)}) for Caption Status updates...`);
+    
+    try {
+      const res = await notion.databases.query({
+        database_id: DB,
+        filter: {
+          property: TARGET_PROP,
+          select: { equals: TARGET_VALUE }
+        },
+        sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+      });
+
+      logToFile(`✅ Successfully queried Notion database (found ${res.results.length} matching results)`);
+
+      for (const page of res.results) {
+        const edited = new Date(page.last_edited_time);
+        if (edited <= lastCheck) {
+          logToFile(`👀 Found page last edited at ${edited.toISOString()}, but it's before our last check (${lastCheck.toISOString()}). Skipping.`);
+          break;   // skip already-seen rows
+        }
+
+        const title =
+          page.properties.Name.title?.[0]?.plain_text ?? '(untitled page)';
+          
+        logToFile(`🔔 Found updated Notion page with caption ready: "${title}"`);
+        
+        await sendMessage(
+          `<@${RAY_ID}> Captions are ready for project **"${title}"**`
+        );
+      }
+      lastCheck = new Date();             // move checkpoint forward
+    } catch (err) {
+      logToFile(`❌ Notion database query error: ${err.message}`);
+      
+      // More detailed error logging
+      if (err.code === 'object_not_found') {
+        logToFile(`🔧 TROUBLESHOOTING: Make sure the database ID is correct and the integration has access to it.`);
+        logToFile(`🔧 Raw database ID from env: "${rawDB}"`);
+        logToFile(`🔧 Processed database ID: "${DB}"`);
+        logToFile(`🔧 Steps to fix:`);
+        logToFile(`   1. Verify the database ID in your .env file`);
+        logToFile(`   2. Go to the database in Notion and share it with your integration`);
+        logToFile(`   3. Make sure the "Caption Status" property exists and is a Select type`);
+      }
+    }
   } catch (err) {
-    logToFile(`❌ Notion poll error: ${err.message}`);
+    logToFile(`❌ Notion poll general error: ${err.message}`);
+    logToFile(err.stack);
   }
 }
 

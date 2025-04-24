@@ -12,7 +12,7 @@
  * 1. Create a Notion Integration:
  *    - Go to https://www.notion.so/my-integrations
  *    - Create a new integration
- *    - Copy the "Internal Integration Token"
+ *    - Copy the "Internal Integration Token" (starts with "secret_")
  * 
  * 2. Share your database with the integration:
  *    - Open your Notion database
@@ -21,13 +21,35 @@
  *    - Find and select your integration
  * 
  * 3. Get your database ID:
- *    - Open your database in Notion
- *    - The URL will look like: https://www.notion.so/workspace/83c7...a1a3?v=...
- *    - Copy the 32-character ID (83c7...a1a3 in this example)
+ *    - Option 1: From the URL
+ *      - Open your database in Notion
+ *      - The URL will look like: https://www.notion.so/workspace/83c7a9f1b48e4c6b9edeb3e21e3cb49d?v=...
+ *      - Copy the 32-character ID (83c7a9f1b48e4c6b9edeb3e21e3cb49d in this example)
+ *    
+ *    - Option 2: From the Share Link
+ *      - Click "Share" button
+ *      - Click "Copy link"
+ *      - Find the UUID in the URL (pattern: 32 characters with or without hyphens)
  * 
  * 4. Configure environment variables:
  *    - NOTION_TOKEN: Your Notion integration token (secret_xxx...)
- *    - NOTION_DB_ID: Your database ID
+ *    - NOTION_DB_ID: Your database ID (with or without hyphens)
+ * 
+ * 5. Database requirements:
+ *    - Must have a "Caption Status" property of type "Select"
+ *    - Must have a "Name" property (title property)
+ * 
+ * ## Troubleshooting
+ * 
+ * 1. "object_not_found" error:
+ *    - Verify your database ID is correct
+ *    - Make sure you've shared the database with your integration
+ *    - Check if your integration has the correct capabilities
+ * 
+ * 2. Property not found errors:
+ *    - Make sure your database has a "Caption Status" property
+ *    - Ensure the property is a "Select" type
+ *    - Verify your database has a title property named "Name"
  * 
  * ## Configuration
  * 
