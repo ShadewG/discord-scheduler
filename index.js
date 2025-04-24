@@ -2331,9 +2331,9 @@ The category is automatically determined from the project code prefix (IB, CL, B
 
 // Function to create a new Notion page if one doesn't exist
 async function createNotionPage(code, channelName, properties = {}, firstImageUrl = null) {
+  logToFile(`🔨 Creating new Notion page for project code "${code}" from channel "${channelName}"`);
+  
   try {
-    logToFile(`🔨 Creating new Notion page for project code "${code}" from channel "${channelName}"`);
-    
     // Make sure we have the database schema
     if (!CACHED_TITLE_PROPERTY) {
       // Get database schema to find the title property
@@ -2435,106 +2435,154 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
     // Create the page, using template if available
     let response;
     
-    if (templateId) {
-      // Duplicate the template
-      response = await notion.pages.create({
-        parent: {
-          database_id: DB
-        },
-        properties: pageProperties
-      });
-      
-      // Get the template's children blocks
-      const templateBlocks = await notion.blocks.children.list({
-        block_id: templateId
-      });
-      
-      // Copy template blocks to the new page
-      if (templateBlocks.results.length > 0) {
-        logToFile(`📋 Copying ${templateBlocks.results.length} blocks from template`);
-        
-        // We'll handle this differently - need to recreate each block type
-        const blocksToCopy = [];
-        
-        // Process and recreate each block type
-        for (const block of templateBlocks.results) {
-          // Skip if it's a child database/relation, we can't easily duplicate these
-          if (block.type === 'child_database') {
-            logToFile(`⚠️ Skipping child_database block - can't automatically duplicate`);
-            continue;
-          }
-          
-          // Create a simplified copy of the block object (structure depends on block type)
-          try {
-            // Create a basic copy with the same type and content
-            const newBlock = {
-              object: 'block',
-              type: block.type
-            };
-            
-            // Copy the content specific to this block type
-            newBlock[block.type] = block[block.type];
-            
-            blocksToCopy.push(newBlock);
-          } catch (blockErr) {
-            logToFile(`⚠️ Error processing template block: ${blockErr.message}`);
-          }
-        }
-        
-        // Add the blocks to the new page
-        if (blocksToCopy.length > 0) {
-          await notion.blocks.children.append({
-            block_id: response.id,
-            children: blocksToCopy
-          });
-          logToFile(`✅ Added ${blocksToCopy.length} template blocks to new page`);
-        }
-      }
-    } else {
-      // Create without a template
-      response = await notion.pages.create({
-        parent: {
-          database_id: DB
-        },
-        properties: pageProperties
-      });
-    }
+    // Create the basic page first
+    response = await notion.pages.create({
+      parent: {
+        database_id: DB
+      },
+      properties: pageProperties
+    });
     
     logToFile(`✅ Created new Notion page for "${title}" with ID: ${response.id}`);
+    
+    // Try to add template content if available
+    if (templateId) {
+      try {
+        // Get the template's children blocks
+        const templateBlocks = await notion.blocks.children.list({
+          block_id: templateId
+        });
+        
+        // Copy template blocks to the new page
+        if (templateBlocks.results.length > 0) {
+          logToFile(`📋 Copying ${templateBlocks.results.length} blocks from template`);
+          
+          // We'll handle this differently - need to recreate each block type
+          const blocksToCopy = [];
+          
+          // Process and recreate each block type
+          for (const block of templateBlocks.results) {
+            // Skip if it's a child database/relation, we can't easily duplicate these
+            if (block.type === 'child_database') {
+              logToFile(`⚠️ Skipping child_database block - can't automatically duplicate`);
+              continue;
+            }
+            
+            // Skip image blocks with empty URLs
+            if (block.type === 'image' && 
+                ((!block.image.external || !block.image.external.url) && 
+                 (!block.image.file || !block.image.file.url))) {
+              logToFile(`⚠️ Skipping image block with empty URL`);
+              continue;
+            }
+            
+            // Create a simplified copy of the block object (structure depends on block type)
+            try {
+              // Create a basic copy with the same type and content
+              const newBlock = {
+                object: 'block',
+                type: block.type
+              };
+              
+              // Copy the content specific to this block type
+              newBlock[block.type] = JSON.parse(JSON.stringify(block[block.type]));
+              
+              // Extra validation for specific block types to avoid API errors
+              if (newBlock.type === 'image') {
+                // Ensure image has a valid URL
+                if (newBlock.image.type === 'external' && (!newBlock.image.external || !newBlock.image.external.url)) {
+                  logToFile(`⚠️ Skipping image block with invalid external URL`);
+                  continue;
+                }
+                
+                // Convert file URLs to external if needed
+                if (newBlock.image.type === 'file' && newBlock.image.file && newBlock.image.file.url) {
+                  newBlock.image.type = 'external';
+                  newBlock.image.external = { url: newBlock.image.file.url };
+                  delete newBlock.image.file;
+                }
+              }
+              
+              blocksToCopy.push(newBlock);
+            } catch (blockErr) {
+              logToFile(`⚠️ Error processing template block: ${blockErr.message}`);
+            }
+          }
+          
+          // Add the blocks to the new page
+          if (blocksToCopy.length > 0) {
+            try {
+              await notion.blocks.children.append({
+                block_id: response.id,
+                children: blocksToCopy
+              });
+              logToFile(`✅ Added ${blocksToCopy.length} template blocks to new page`);
+            } catch (appendError) {
+              // If appending all blocks fails, try adding them one by one to identify problematic blocks
+              logToFile(`⚠️ Error appending all blocks: ${appendError.message}`);
+              logToFile(`🔄 Attempting to add blocks individually...`);
+              
+              let successCount = 0;
+              for (const block of blocksToCopy) {
+                try {
+                  await notion.blocks.children.append({
+                    block_id: response.id,
+                    children: [block]
+                  });
+                  successCount++;
+                } catch (singleBlockError) {
+                  logToFile(`⚠️ Failed to add block of type ${block.type}: ${singleBlockError.message}`);
+                }
+              }
+              logToFile(`✅ Successfully added ${successCount}/${blocksToCopy.length} blocks individually`);
+            }
+          }
+        }
+      } catch (templateError) {
+        // Template handling failed but we already have the basic page
+        logToFile(`⚠️ Error copying template content: ${templateError.message}`);
+        logToFile(`✅ Basic page was still created successfully without template content`);
+      }
+    }
     
     // Add the thumbnail image if provided
     if (firstImageUrl) {
       try {
-        await notion.blocks.children.append({
-          block_id: response.id,
-          children: [
-            {
-              object: 'block',
-              type: 'image',
-              image: {
-                type: 'external',
-                external: {
-                  url: firstImageUrl
+        // Validate the URL before adding it
+        if (!firstImageUrl.startsWith('http')) {
+          logToFile(`⚠️ Invalid thumbnail URL format: ${firstImageUrl}`);
+        } else {
+          await notion.blocks.children.append({
+            block_id: response.id,
+            children: [
+              {
+                object: 'block',
+                type: 'image',
+                image: {
+                  type: 'external',
+                  external: {
+                    url: firstImageUrl
+                  }
+                }
+              },
+              {
+                object: 'block',
+                type: 'paragraph',
+                paragraph: {
+                  rich_text: [
+                    {
+                      type: 'text',
+                      text: {
+                        content: `Project created from Discord channel ${channelName}`
+                      }
+                    }
+                  ]
                 }
               }
-            },
-            {
-              object: 'block',
-              type: 'paragraph',
-              paragraph: {
-                rich_text: [
-                  {
-                    type: 'text',
-                    text: {
-                      content: `Project created from Discord channel ${channelName}`
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        });
-        logToFile(`✅ Added thumbnail image to new page`);
+            ]
+          });
+          logToFile(`✅ Added thumbnail image to new page`);
+        }
       } catch (imgError) {
         logToFile(`❌ Error adding thumbnail image: ${imgError.message}`);
       }
@@ -2543,6 +2591,25 @@ async function createNotionPage(code, channelName, properties = {}, firstImageUr
     return response.id;
   } catch (error) {
     logToFile(`❌ Error creating Notion page: ${error.message}`);
+    // Provide more detailed error info for troubleshooting
+    if (error.code === 'validation_error') {
+      logToFile(`🔍 Validation error details: ${error.message}`);
+      
+      // Try creating a simpler page without template or thumbnail as fallback
+      logToFile(`🔄 Attempting to create a basic page without template...`);
+      try {
+        const basicResponse = await notion.pages.create({
+          parent: {
+            database_id: DB
+          },
+          properties: pageProperties
+        });
+        logToFile(`✅ Created basic page as fallback`);
+        return basicResponse.id;
+      } catch (fallbackError) {
+        logToFile(`❌ Fallback page creation also failed: ${fallbackError.message}`);
+      }
+    }
     return null;
   }
 }
@@ -2556,6 +2623,7 @@ function findFirstImageUrl(messages) {
     if (msg.attachments && msg.attachments.size > 0) {
       const attachment = Array.from(msg.attachments.values())[0];
       if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+        logToFile(`📸 Found image attachment with URL: ${attachment.url}`);
         return attachment.url;
       }
     }
@@ -2564,6 +2632,7 @@ function findFirstImageUrl(messages) {
     if (msg.embeds && msg.embeds.length > 0) {
       for (const embed of msg.embeds) {
         if (embed.image && embed.image.url) {
+          logToFile(`📸 Found image in embed with URL: ${embed.image.url}`);
           return embed.image.url;
         }
       }
@@ -2571,14 +2640,17 @@ function findFirstImageUrl(messages) {
     
     // Look for image URLs in the content
     if (msg.content) {
-      const urlRegex = /(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp))/i;
+      // More comprehensive image URL regex
+      const urlRegex = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|svg)(\?[^\s]*)?)/i;
       const match = msg.content.match(urlRegex);
       if (match && match[1]) {
+        logToFile(`📸 Found image URL in message content: ${match[1]}`);
         return match[1];
       }
     }
   }
   
+  logToFile(`⚠️ No image found in channel messages`);
   return null;
 }
 
