@@ -1,9 +1,18 @@
 // index.js - Discord Scheduler Bot with time logging
-require('dotenv').config();
+// Load environment variables first, before any other requires
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Try to load from .env file
+const result = dotenv.config({ path: path.resolve(__dirname, '.env') });
+if (result.error) {
+  console.warn('Warning: .env file not found or could not be parsed.');
+  console.log('Using environment variables from system if available.');
+}
+
 const cron = require('node-cron');
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const { getTimeUntilNextExecution } = require('./utils');
 
 // Load environment variables
@@ -11,7 +20,7 @@ const {
   DISCORD_TOKEN,
   CHANNEL_ID,
   ROLE_ID,
-  TZ
+  TZ = 'Europe/Berlin' // Set default if not defined
 } = process.env;
 
 // Check for required environment variables
@@ -164,7 +173,7 @@ function scheduleJob(job) {
   const scheduledJob = cron.schedule(job.cron, () => {
     // Log the execution with timestamp in Berlin time
     const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
-    logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (Berlin time)`);
+    logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
     
     // Send the message
     ping(job.text);

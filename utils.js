@@ -11,6 +11,9 @@ function getTimeUntilNextExecution(cronExpression, timezone) {
     // Use provided timezone or default to Europe/Berlin
     const TZ = timezone || process.env.TZ || 'Europe/Berlin';
     
+    // For debugging - log the timezone being used
+    console.log(`Using timezone for calculation: ${TZ}`);
+    
     // Parse the cron expression
     const parts = cronExpression.split(' ');
     if (parts.length !== 5) {
