@@ -630,6 +630,15 @@ const commands = [
     .setDescription('List all Notion watchers in detail'),
   
   new SlashCommandBuilder()
+    .setName('analyze')
+    .setDescription('Analyze channel messages and update Notion with latest information')
+    .addIntegerOption(option => 
+      option.setName('messages')
+        .setDescription('Number of messages to analyze (default: 50, max: 100)')
+        .setRequired(false)
+    ),
+  
+  new SlashCommandBuilder()
     .setName('test')
     .setDescription('Send test messages for all scheduled reminders'),
   
@@ -1437,6 +1446,144 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
       logToFile(`Error in /watchers command: ${error.message}`);
       await interaction.editReply('❌ Error retrieving watchers. Check logs for details.');
+    }
+  }
+
+  else if (commandName === 'analyze') {
+    await interaction.deferReply();
+    
+    try {
+      // Extract the project code from the channel name
+      const code = projectCode(interaction.channel.name);
+      if (!code) {
+        await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
+        return;
+      }
+      
+      // Find the Notion page for this project
+      const pageId = await findPage(code);
+      if (!pageId) {
+        await interaction.editReply(`No Notion page found for project code "${code}". Please make sure a Notion page exists with this code.`);
+        return;
+      }
+      
+      // Get number of messages to analyze (default: 50, max: 100)
+      const limit = Math.min(interaction.options.getInteger('messages') || 50, 100);
+      
+      await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
+      
+      // Fetch channel messages
+      const messages = await interaction.channel.messages.fetch({ limit });
+      if (!messages || messages.size === 0) {
+        await interaction.editReply('No messages found to analyze.');
+        return;
+      }
+      
+      // Sort messages by timestamp (oldest first)
+      const sortedMessages = Array.from(messages.values())
+        .filter(msg => !msg.author.bot) // Skip bot messages
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+      
+      if (sortedMessages.length === 0) {
+        await interaction.editReply('No user messages found to analyze.');
+        return;
+      }
+      
+      // Format messages for analysis
+      const formattedMessages = sortedMessages.map(msg => {
+        return {
+          author: msg.author.username,
+          timestamp: new Date(msg.createdTimestamp).toISOString(),
+          content: msg.content
+        };
+      });
+      
+      // Convert to plain text format for GPT
+      const chatHistory = formattedMessages.map(m => 
+        `[${m.timestamp.split('T')[0]} ${m.timestamp.split('T')[1].substring(0, 8)}] ${m.author}: ${m.content}`
+      ).join('\n');
+      
+      // Get current date
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Send to OpenAI for analysis
+      const gpt = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        temperature: 0,
+        messages: [
+          { 
+            role: 'system', 
+            content: `You analyze project discussions to extract the latest decisions about project details.
+Your task is to identify the FINAL/LATEST mentions of key properties from a chat history.
+For example, if someone initially sets a due date to Friday but later changes it to Sunday, use Sunday.
+Resolve conflicts by preferring the most recent mentions.
+
+Today's date is ${today}.`
+          },
+          { 
+            role: 'user', 
+            content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}`
+          }
+        ],
+        functions: [FUNC_SCHEMA],
+        function_call: 'auto'
+      });
+      
+      const call = gpt.choices[0].message.function_call;
+      if (!call) {
+        await interaction.editReply('No relevant information found in the chat history.');
+        return;
+      }
+      
+      let props;
+      try {
+        props = JSON.parse(call.arguments);
+      } catch (e) {
+        logToFile(`JSON parse error in analyze command: ${e}, raw: ${call.arguments}`);
+        await interaction.editReply('❌ Error parsing the analysis results.');
+        return;
+      }
+      
+      const notionProps = toNotion(props);
+      if (Object.keys(notionProps).length === 0) {
+        await interaction.editReply('No updates needed based on the chat history analysis.');
+        return;
+      }
+      
+      // Update Notion
+      await notion.pages.update({ page_id: pageId, properties: notionProps });
+      
+      // Format analysis for display
+      const analysisEmbed = new EmbedBuilder()
+        .setColor(0x00FF00)
+        .setTitle(`📊 Analysis Results for ${code}`)
+        .setDescription(`I've analyzed ${sortedMessages.length} messages and updated the following properties:`)
+        .addFields(
+          Object.keys(notionProps).map(propName => ({
+            name: propName,
+            value: propName === 'Date' ? 
+                  `Due date: ${props.due_date}` : 
+                  propName === 'Priority' ?
+                  `Priority: ${props.priority}` :
+                  propName === 'Caption Status' ?
+                  `Status: ${props.caption_status}` :
+                  propName === 'Script' ?
+                  `Script URL: ${props.script_url}` :
+                  propName === 'Frame.io' ?
+                  `Frame.io URL: ${props.frameio_url}` :
+                  propName === 'Editor' ?
+                  `Editor: <@${props.editor_discord}>` :
+                  JSON.stringify(notionProps[propName])
+          }))
+        )
+        .setFooter({ text: `Analyzed ${limit} messages` })
+        .setTimestamp();
+      
+      await interaction.editReply({ content: '✅ Analysis complete!', embeds: [analysisEmbed] });
+      
+    } catch (error) {
+      logToFile(`Error in /analyze command: ${error.message}`);
+      await interaction.editReply(`❌ Error analyzing channel history: ${error.message}`);
     }
   }
 });
