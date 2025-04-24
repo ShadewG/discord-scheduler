@@ -1825,7 +1825,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply(`No Notion page found for project code "${code}". Creating a new page...`);
             
             // Create a new page with the channel name as the title
-            pageId = await createNotionPage(code, interaction.channel.name, {}, firstImageUrl);
+            pageId = await createNotionPage(code, interaction.channel.name, {}, firstImageUrl, interaction.channel);
             
             if (!pageId) {
               await interaction.editReply('❌ Failed to create Notion page. Check logs for details.');
@@ -3039,6 +3039,311 @@ if (loadedMeetings && loadedMeetings.length > 0) {
   customMeetings.push(...loadedMeetings);
 }
 
+// Function to extract the first image URL from messages
+function findFirstImageUrl(messages) {
+  if (!messages || messages.length === 0) return null;
+  
+  for (const msg of messages) {
+    // Check for attachments
+    if (msg.attachments && msg.attachments.size > 0) {
+      const attachment = Array.from(msg.attachments.values())[0];
+      if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+        logToFile(`📸 Found image attachment with URL: ${attachment.url}`);
+        return attachment.url;
+      }
+    }
+    
+    // Check for embeds with images
+    if (msg.embeds && msg.embeds.length > 0) {
+      for (const embed of msg.embeds) {
+        if (embed.image && embed.image.url) {
+          logToFile(`📸 Found image in embed with URL: ${embed.image.url}`);
+          return embed.image.url;
+        }
+      }
+    }
+    
+    // Look for image URLs in the content
+    if (msg.content) {
+      // More comprehensive image URL regex
+      const urlRegex = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|svg)(\?[^\s]*)?)/i;
+      const match = msg.content.match(urlRegex);
+      if (match && match[1]) {
+        logToFile(`📸 Found image URL in message content: ${match[1]}`);
+        return match[1];
+      }
+    }
+  }
+  
+  logToFile(`⚠️ No image found in channel messages`);
+  return null;
+}
+
+// Function to properly format content for Notion blocks with proper link handling
+function formatNotionContent(content) {
+  // Split the content into lines
+  const lines = content.trim().split('\n');
+  const blocks = [];
+  
+  // Process each line to create appropriate blocks
+  for (const line of lines) {
+    // Skip empty lines
+    if (!line.trim()) {
+      continue;
+    }
+    
+    // Check if it's a link line (e.g., "SCRIPT: https://...")
+    const linkMatch = line.match(/^([^:]+):\s+(https?:\/\/\S+)$/i);
+    if (linkMatch) {
+      const [_, label, url] = linkMatch;
+      
+      // Create a paragraph with a link
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [
+            {
+              type: 'text',
+              text: {
+                content: `${label}: `,
+                link: null
+              },
+              annotations: {
+                bold: true
+              }
+            },
+            {
+              type: 'text',
+              text: {
+                content: url,
+                link: {
+                  url: url
+                }
+              }
+            }
+          ]
+        }
+      });
+    } 
+    // Check if it's a bullet point or an actionable item (starting with - or •)
+    else if (line.trim().match(/^[-•]\s+/)) {
+      const text = line.trim().replace(/^[-•]\s+/, '');
+      
+      // Detect if this is an actionable item (contains action verbs or is a task)
+      const isActionable = 
+        text.match(/\b(do|add|create|update|change|fix|implement|review|check|test|verify|complete|finish|make|build|set up|configure|write|design|develop)\b/i) ||
+        text.includes('task') || 
+        text.includes('TODO') || 
+        text.includes('to-do') ||
+        text.includes('action item');
+      
+      if (isActionable) {
+        // Create a to-do item (unchecked)
+        blocks.push({
+          object: 'block',
+          type: 'to_do',
+          to_do: {
+            rich_text: [
+              {
+                type: 'text',
+                text: {
+                  content: text
+                }
+              }
+            ],
+            checked: false
+          }
+        });
+      } else {
+        // Regular bullet point
+        blocks.push({
+          object: 'block',
+          type: 'bulleted_list_item',
+          bulleted_list_item: {
+            rich_text: [
+              {
+                type: 'text',
+                text: {
+                  content: text
+                }
+              }
+            ]
+          }
+        });
+      }
+    } else {
+      // Regular paragraph block
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [
+            {
+              type: 'text',
+              text: {
+                content: line
+              }
+            }
+          ]
+        }
+      });
+    }
+  }
+  
+  return blocks;
+}
+
+// Function to extract Google Doc links as potential script links
+function extractScriptLink(content) {
+  // Check for an explicit script URL
+  const scriptMatch = content.match(/script:?\s*(https:\/\/docs\.google\.com\/document\/[^\s]+)/i);
+  if (scriptMatch) {
+    return scriptMatch[1];
+  }
+  
+  // Check for formatted "Script document link: URL" format
+  const formattedScriptMatch = content.match(/script\s*(?:document|doc)?\s*(?:link|url)?:?\s*(https?:\/\/[^\s]+)/i);
+  if (formattedScriptMatch) {
+    return formattedScriptMatch[1];
+  }
+  
+  // Look for any Google Docs link with "script" nearby
+  const nearbyScriptMatch = content.match(/script.*?(https:\/\/docs\.google\.com\/document\/[^\s]+)|(?:https:\/\/docs\.google\.com\/document\/[^\s]+).*?script/i);
+  if (nearbyScriptMatch) {
+    return nearbyScriptMatch[1] || nearbyScriptMatch[2];
+  }
+  
+  // If no explicit script, look for any Google Docs link
+  const docsMatch = content.match(/(https:\/\/docs\.google\.com\/document\/[^\s]+)/i);
+  if (docsMatch) {
+    return docsMatch[1];
+  }
+  
+  // Check for Notion document links that might be scripts
+  const notionMatch = content.match(/(https:\/\/[^\/]+\.notion\.site\/[^\s]+)/i);
+  if (notionMatch && content.toLowerCase().includes('script')) {
+    return notionMatch[1];
+  }
+  
+  return null;
+}
+
+// Function to extract Frame.io links
+function extractFrameioLink(content) {
+  // Check for explicit Frame.io URL with different formats
+  const explicitMatch = content.match(/(?:frame\.io|f\.io)\s*(?:link|url)?:?\s*(https?:\/\/(?:app\.)?(?:frame\.io|f\.io)\/[^\s]+)/i);
+  if (explicitMatch) {
+    return explicitMatch[1];
+  }
+  
+  // Check for formatted "Frame.io link: URL" format
+  const formattedMatch = content.match(/frame\.io\s*(?:link|url)?:?\s*(https?:\/\/[^\s]+)/i);
+  if (formattedMatch) {
+    return formattedMatch[1];
+  }
+  
+  // Look for any Frame.io link
+  const frameioMatch = content.match(/(https?:\/\/(?:app\.)?(?:frame\.io|f\.io)\/[^\s]+)/i);
+  if (frameioMatch) {
+    return frameioMatch[1];
+  }
+  
+  return null;
+}
+
+// Function to get the URL for a Notion page
+function getNotionPageUrl(pageId) {
+  if (!pageId) return null;
+  
+  // Format the pageId by adding hyphens in the correct positions
+  // 32 chars total, with hyphens after positions 8, 12, 16, 20
+  try {
+    const formatted = pageId.replace(/-/g, ''); // Remove any existing hyphens
+    if (formatted.length !== 32) {
+      logToFile(`⚠️ Invalid page ID format: ${pageId} (should be 32 chars)`);
+      return null;
+    }
+    
+    const withHyphens = [
+      formatted.slice(0, 8),
+      formatted.slice(8, 12),
+      formatted.slice(12, 16),
+      formatted.slice(16, 20),
+      formatted.slice(20)
+    ].join('-');
+    
+    return `https://www.notion.so/${withHyphens}`;
+  } catch (error) {
+    logToFile(`❌ Error formatting Notion URL: ${error.message}`);
+    return null;
+  }
+}
+
+// Function to create a new Notion page
+async function createNotionPage(code, title, properties = {}, thumbnailUrl = null, channel = null) {
+  try {
+    // Determine the project category from the code
+    const category = getProjectCategory(code);
+    
+    // Base properties object
+    const baseProperties = {
+      [CACHED_TITLE_PROPERTY]: {
+        title: [
+          {
+            text: {
+              content: `${code} ${title}`
+            }
+          }
+        ]
+      }
+    };
+    
+    // Add category property if available
+    if (category && CACHED_SELECT_OPTIONS['Category']) {
+      baseProperties.Category = {
+        select: {
+          name: category
+        }
+      };
+    }
+    
+    // Add Discord Channel property only if channel is provided
+    if (channel) {
+      baseProperties['Discord Channel'] = {
+        url: `https://discord.com/channels/${channel.guild.id}/${channel.id}`
+      };
+    }
+    
+    // Merge base properties with any custom properties
+    const mergedProperties = { ...baseProperties, ...properties };
+    
+    // Create the page
+    const response = await notion.pages.create({
+      parent: {
+        database_id: DB
+      },
+      properties: mergedProperties,
+      // Add cover image if available
+      ...(thumbnailUrl ? {
+        cover: {
+          type: "external",
+          external: {
+            url: thumbnailUrl
+          }
+        }
+      } : {})
+    });
+    
+    logToFile(`✅ Created new Notion page for "${code}" with title "${title}"`);
+    
+    return response.id;
+  } catch (error) {
+    logToFile(`❌ Error creating Notion page: ${error.message}`);
+    return null;
+  }
+}
+
 // Refactored !sync handler function
 async function handleSyncMessage(msg) {
   // Create a reply function that suppresses notifications
@@ -3072,7 +3377,6 @@ async function handleSyncMessage(msg) {
   
   // Remove dry run flag from the text
   const userText = msg.content.slice(TRIGGER_PREFIX.length).trim().replace('--dry', '').trim();
-  if (!userText && !isNewPage) return;
 
   // Check for URLs directly in the user message
   let directFrameioLink = null;
@@ -3102,7 +3406,7 @@ async function handleSyncMessage(msg) {
     
     // Create a new page with the channel name as the title
     if (!isDryRun) {
-      pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
+      pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl, msg.channel);
       
       if (!pageId) {
         await quietReply('❌ Failed to create Notion page. Check logs for details.');
@@ -3113,6 +3417,12 @@ async function handleSyncMessage(msg) {
     }
     
     isNewPage = true;
+  }
+
+  // Make sure we have text or it's a new page
+  if (!userText && !isNewPage) {
+    await quietReply('No text provided for update.');
+    return;
   }
 
   try {
@@ -3369,5 +3679,3 @@ async function handleSyncMessage(msg) {
     quietReply('❌ Error updating Notion; check logs.');
   }
 }
-
-// Load custom watchers from a file if it exists
