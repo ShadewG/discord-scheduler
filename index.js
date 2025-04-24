@@ -77,7 +77,7 @@ const FUNC_SCHEMA = {
       project_owner:  { type:'array', items: { type:'string' } },
       editor:         { type:'array', items: { type:'string' } },
       lead:           { type:'string' },
-      brand_deal:     { type:'string' },
+      brand_deal:     { type:'string', description: 'The ID of the related item in the brand deals database' },
       status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog'] },
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
       current_stage_date: { type:'string', format:'date' }
@@ -199,8 +199,13 @@ function toNotion(p) {
   if (p.editor && Array.isArray(p.editor) && p.editor.length > 0)
                         out.Editor          = { multi_select: p.editor.map(name => ({ name })) };
   if (p.lead)           out.Lead            = { select: { name: p.lead } };
-  if (p.brand_deal)     out['Brand Deal']   = { select: { name: p.brand_deal } };
-  if (p.status)         out.Status          = { select: { name: p.status } };
+  
+  // Brand Deal is a relation type, not a select
+  if (p.brand_deal)     out['Brand Deal']   = { relation: [{ id: p.brand_deal }] };
+  
+  // Status is a status type, not a select
+  if (p.status)         out.Status          = { status: { name: p.status } };
+  
   if (p.threed_status)  out['3D Status']    = { select: { name: p.threed_status } };
   if (p.current_stage_date) out['Current Stage Date'] = { date: { start: p.current_stage_date } };
   
@@ -1595,6 +1600,10 @@ Today's date is ${today}.`
                   `Frame.io URL: ${props.frameio_url}` :
                   propName === 'Editor' ?
                   `Editor: <@${props.editor_discord}>` :
+                  propName === 'Brand Deal' ?
+                  `Brand Deal: Updated` :
+                  propName === 'Status' ?
+                  `Status: ${props.status}` :
                   JSON.stringify(notionProps[propName])
           }))
         )
