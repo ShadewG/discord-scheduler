@@ -3257,30 +3257,43 @@ function getNotionPageUrl(pageId) {
   if (!pageId) return null;
   
   try {
-    // Format the pageId by removing any hyphens and ensuring it's 32 chars
-    const formatted = pageId.replace(/-/g, ''); // Remove any existing hyphens
+    // Format the pageId properly - Notion requires specific formatting
+    // Remove any existing hyphens first
+    const formatted = pageId.replace(/-/g, '');
+    
+    // Log the ID for debugging
+    logToFile(`🔍 Generating URL for page ID: ${pageId}, formatted: ${formatted}`);
+    
+    // Check if the ID is the expected length, but don't fail if not
     if (formatted.length !== 32) {
-      logToFile(`⚠️ Invalid page ID format: ${pageId} (should be 32 chars)`);
-      return null;
+      logToFile(`⚠️ Warning: Page ID length is ${formatted.length}, expected 32 chars`);
+      // We'll still try to format it anyway
     }
     
     // Format with hyphens at the correct positions
-    const withHyphens = [
-      formatted.slice(0, 8),
-      formatted.slice(8, 12),
-      formatted.slice(12, 16),
-      formatted.slice(16, 20),
-      formatted.slice(20)
-    ].join('-');
+    let withHyphens;
+    if (formatted.length >= 32) {
+      withHyphens = [
+        formatted.slice(0, 8),
+        formatted.slice(8, 12),
+        formatted.slice(12, 16),
+        formatted.slice(16, 20),
+        formatted.slice(20, 32)
+      ].join('-');
+    } else {
+      // For shorter IDs, just use what we have
+      withHyphens = formatted;
+    }
     
     // If we have a NOTION_WORKSPACE environment variable, use it
     // Otherwise use the direct page URL
     const workspaceName = process.env.NOTION_WORKSPACE;
     if (workspaceName) {
+      // Use the workspace-specific URL format
       return `https://${workspaceName}.notion.site/${withHyphens}`;
     } else {
-      // Direct link to Notion.so without workspace
-      return `https://www.notion.so/${withHyphens}`;
+      // Use the universal notion.so format which should redirect properly
+      return `https://notion.so/${withHyphens}`;
     }
   } catch (error) {
     logToFile(`❌ Error formatting Notion URL: ${error.message}`);
@@ -3357,11 +3370,13 @@ async function handleSyncMessage(msg) {
   // Create a reply function that suppresses notifications
   const quietReply = async (content) => {
     try {
-      let replyOptions = typeof content === 'string' 
-        ? { content, flags: [1 << 2] } // 1 << 2 is SUPPRESS_EMBEDS flag
-        : { ...content, flags: [1 << 2] };
-      
-      return await msg.reply(replyOptions);
+      // Don't apply SUPPRESS_EMBEDS flag to embed content
+      if (typeof content === 'string') {
+        return await msg.reply({ content, flags: [1 << 2] }); // SUPPRESS_EMBEDS flag
+      } else {
+        // For embeds, don't suppress them so they're visible
+        return await msg.reply(content);
+      }
     } catch (err) {
       // Fallback to regular reply if something goes wrong
       logToFile(`Error sending quiet reply: ${err.message}`);
@@ -3675,11 +3690,9 @@ async function handleSyncMessage(msg) {
       // If we have a URL, send it back to the channel
       if (notionUrl) {
         try {
-          // Send URL in a separate message
-          const linkMsg = await msg.channel.send({
-            content: `🔗 **Notion Page**: ${notionUrl}`,
-            flags: [1 << 2] // SUPPRESS_EMBEDS 
-          });
+          // Send URL in a separate message without suppressing embeds
+          logToFile(`📎 Sending Notion URL for ${code}: ${notionUrl} (page ID: ${pageId})`);
+          const linkMsg = await msg.channel.send(`🔗 **Notion Page**: ${notionUrl}`);
           
           // Pin the message with the link if it's a new page
           if (isNewPage && !isDryRun) {
@@ -3693,6 +3706,8 @@ async function handleSyncMessage(msg) {
         } catch (urlError) {
           logToFile(`Error sending Notion URL: ${urlError.message}`);
         }
+      } else {
+        logToFile(`⚠️ Could not generate Notion URL for page ID: ${pageId}`);
       }
     }
   } catch (err) {
