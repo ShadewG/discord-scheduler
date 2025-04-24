@@ -20,6 +20,7 @@ CHANNEL_ID=your_default_channel_id
 ROLE_ID=your_editor_role_id
 NOTION_TOKEN=your_notion_integration_token
 NOTION_DB_ID=your_notion_database_id
+NOTION_WORKSPACE=your_notion_workspace_name (optional, for correct URL linking)
 OPENAI_API_KEY=your_openai_api_key
 TZ=your_timezone (e.g., Europe/Berlin)
 ```

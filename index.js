@@ -3256,15 +3256,15 @@ function extractFrameioLink(content) {
 function getNotionPageUrl(pageId) {
   if (!pageId) return null;
   
-  // Format the pageId by adding hyphens in the correct positions
-  // 32 chars total, with hyphens after positions 8, 12, 16, 20
   try {
+    // Format the pageId by removing any hyphens and ensuring it's 32 chars
     const formatted = pageId.replace(/-/g, ''); // Remove any existing hyphens
     if (formatted.length !== 32) {
       logToFile(`⚠️ Invalid page ID format: ${pageId} (should be 32 chars)`);
       return null;
     }
     
+    // Format with hyphens at the correct positions
     const withHyphens = [
       formatted.slice(0, 8),
       formatted.slice(8, 12),
@@ -3273,7 +3273,15 @@ function getNotionPageUrl(pageId) {
       formatted.slice(20)
     ].join('-');
     
-    return `https://www.notion.so/${withHyphens}`;
+    // If we have a NOTION_WORKSPACE environment variable, use it
+    // Otherwise use the direct page URL
+    const workspaceName = process.env.NOTION_WORKSPACE;
+    if (workspaceName) {
+      return `https://${workspaceName}.notion.site/${withHyphens}`;
+    } else {
+      // Direct link to Notion.so without workspace
+      return `https://www.notion.so/${withHyphens}`;
+    }
   } catch (error) {
     logToFile(`❌ Error formatting Notion URL: ${error.message}`);
     return null;
@@ -3624,7 +3632,20 @@ async function handleSyncMessage(msg) {
     }
     
     if (updatedProperties) {
-      responseDescription += `${isDryRun ? 'Would update' : 'Updated'} properties:\n` + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
+      responseDescription += `${isDryRun ? 'Would update' : 'Updated'} properties:\n` + 
+        Object.entries(props).map(([key, value]) => {
+          // Format the value based on its type
+          let formattedValue = '';
+          if (Array.isArray(value)) {
+            formattedValue = value.join(', ');
+          } else if (typeof value === 'object' && value !== null) {
+            formattedValue = JSON.stringify(value);
+          } else {
+            formattedValue = String(value);
+          }
+          
+          return `• **${key}**: ${formattedValue}`;
+        }).join('\n');
     }
     
     if (updatedContent) {
