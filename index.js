@@ -1303,48 +1303,94 @@ Today's date is ${today}.`
             return;
           }
           
-          const notionProps = toNotion(props);
-          const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
-          const hasPageContent = props.page_content && props.page_content.trim().length > 0;
+          // Create the Notion properties object
+          let notionProps = {};
+          let hasPropertiesToUpdate = false;
+          let hasPageContent = false;
+          let errorProperties = [];
           
-          if (!hasPropertiesToUpdate && !hasPageContent) {
-            await interaction.editReply('No updates needed based on the chat history analysis.');
-            return;
+          // Process each property individually with error handling
+          try {
+            notionProps = toNotion(props);
+            hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+          } catch (propsError) {
+            logToFile(`Error converting properties: ${propsError.message}`);
+            errorProperties.push("Base properties");
+            // Continue with empty properties rather than failing completely
+            notionProps = {};
           }
           
-          // Update page properties if needed
-          if (hasPropertiesToUpdate) {
-            await notion.pages.update({ 
-              page_id: pageId, 
-              properties: notionProps 
-            });
+          try {
+            hasPageContent = props.page_content && props.page_content.trim().length > 0;
+          } catch (contentError) {
+            logToFile(`Error checking page content: ${contentError.message}`);
+            hasPageContent = false;
           }
           
-          // Add page content if provided
-          if (hasPageContent) {
-            // Format the content with a timestamp
-            const timestamp = new Date().toLocaleString();
-            const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
-            
-            // Look for a Google Docs link that could be a script
-            if (!props.script_url && !notionProps.Script) {
+          // Try to extract script link if needed
+          if (hasPageContent && !props.script_url && !notionProps.Script) {
+            try {
               const scriptLink = extractScriptLink(props.page_content);
               if (scriptLink) {
                 logToFile(`📝 Found potential script link in content: ${scriptLink}`);
                 // Add the script URL to properties
-                notionProps.Script = { url: scriptLink };
-                hasPropertiesToUpdate = true;
+                try {
+                  notionProps.Script = { url: scriptLink };
+                  hasPropertiesToUpdate = true;
+                } catch (scriptError) {
+                  logToFile(`Error adding script URL to properties: ${scriptError.message}`);
+                  errorProperties.push("Script URL");
+                }
               }
+            } catch (extractError) {
+              logToFile(`Error extracting script link: ${extractError.message}`);
+              errorProperties.push("Script extraction");
             }
-            
-            // Format the content into proper Notion blocks with clickable links
-            const contentBlocks = formatNotionContent(formattedContent);
-            
-            // Append the formatted blocks to the page
-            await notion.blocks.children.append({
-              block_id: pageId,
-              children: contentBlocks
-            });
+          }
+          
+          if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
+            await interaction.editReply('No updates needed based on the chat history analysis.');
+            return;
+          }
+          
+          // Track what was updated successfully
+          let updatedProperties = false;
+          let updatedContent = false;
+          
+          // Update page properties if needed
+          if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
+            try {
+              await notion.pages.update({ 
+                page_id: pageId, 
+                properties: notionProps 
+              });
+              updatedProperties = true;
+            } catch (updateError) {
+              logToFile(`Error updating properties: ${updateError.message}`);
+              errorProperties.push("Notion properties update");
+            }
+          }
+          
+          // Add page content if provided
+          if (hasPageContent) {
+            try {
+              // Format the content with a timestamp
+              const timestamp = new Date().toLocaleString();
+              const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+              
+              // Format the content into proper Notion blocks with clickable links
+              const contentBlocks = formatNotionContent(formattedContent);
+              
+              // Append the formatted blocks to the page
+              await notion.blocks.children.append({
+                block_id: pageId,
+                children: contentBlocks
+              });
+              updatedContent = true;
+            } catch (contentError) {
+              logToFile(`Error adding page content: ${contentError.message}`);
+              errorProperties.push("Page content");
+            }
           }
           
           // Format analysis for display
@@ -1364,7 +1410,7 @@ Today's date is ${today}.`
           }
           
           // Add fields for updated properties
-          if (hasPropertiesToUpdate) {
+          if (updatedProperties) {
             analysisEmbed.addFields({
               name: 'Updated Properties:',
               value: Object.keys(notionProps).map(propName => {
@@ -1375,7 +1421,7 @@ Today's date is ${today}.`
                       propName === 'Caption Status' ?
                       `• **${propName}:** ${props.caption_status}` :
                       propName === 'Script' ?
-                      `• **${propName}:** ${props.script_url}` :
+                      `• **${propName}:** ${props.script_url || 'From content'}` :
                       propName === 'Frame.io' ?
                       `• **${propName}:** ${props.frameio_url}` :
                       propName === 'Editor' ?
@@ -1385,12 +1431,12 @@ Today's date is ${today}.`
                       propName === 'Status' ?
                       `• **${propName}:** ${props.status}` :
                       `• **${propName}**`;
-              }).join('\n')
+              }).join('\n') || 'No properties updated'
             });
           }
           
           // Add field for page content
-          if (hasPageContent) {
+          if (updatedContent) {
             analysisEmbed.addFields({
               name: 'Added Notes to Page:',
               value: props.page_content.length > 1000 
@@ -1399,7 +1445,21 @@ Today's date is ${today}.`
             });
           }
           
-          await interaction.editReply({ content: `✅ Analysis complete! ${isNewPage ? 'New page created and' : ''} Notion has been updated.`, embeds: [analysisEmbed] });
+          // Add field for errors if any occurred
+          if (errorProperties.length > 0) {
+            analysisEmbed.addFields({
+              name: '⚠️ Errors:',
+              value: `There were issues with the following: ${errorProperties.join(', ')}.\nOther updates were still applied.`
+            });
+          }
+          
+          let completionMessage = '✅ Analysis complete!';
+          if (isNewPage) completionMessage += ' New page created!';
+          if (updatedProperties) completionMessage += ' Properties updated!';
+          if (updatedContent) completionMessage += ' Content added!';
+          if (errorProperties.length > 0) completionMessage += ' (Some errors occurred)';
+          
+          await interaction.editReply({ content: completionMessage, embeds: [analysisEmbed] });
         } catch (analyzeError) {
           logToFile(`Error in /analyze command: ${analyzeError.message}`);
           await interaction.editReply(`❌ Error analyzing channel history: ${analyzeError.message}`);
@@ -2251,51 +2311,94 @@ The category is automatically determined from the project code prefix (IB, CL, B
       return;
     }
 
-    // Update properties
-    const notionProps = toNotion(props);
-    const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+    // Create the Notion properties object with error handling
+    let notionProps = {};
+    let hasPropertiesToUpdate = false;
+    let hasPageContent = false;
+    let errorProperties = [];
     
-    // Check if there's page content to add
-    const hasPageContent = props.page_content && props.page_content.trim().length > 0;
+    // Process each property individually with error handling
+    try {
+      notionProps = toNotion(props);
+      hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+    } catch (propsError) {
+      logToFile(`Error converting properties in !sync: ${propsError.message}`);
+      errorProperties.push("Base properties");
+      // Continue with empty properties rather than failing completely
+      notionProps = {};
+    }
+    
+    try {
+      hasPageContent = props.page_content && props.page_content.trim().length > 0;
+    } catch (contentError) {
+      logToFile(`Error checking page content in !sync: ${contentError.message}`);
+      hasPageContent = false;
+    }
+    
+    // Try to extract script link if needed
+    if (hasPageContent && !props.script_url && !notionProps.Script) {
+      try {
+        const scriptLink = extractScriptLink(props.page_content);
+        if (scriptLink) {
+          logToFile(`📝 Found potential script link in content: ${scriptLink}`);
+          // Add the script URL to properties
+          try {
+            notionProps.Script = { url: scriptLink };
+            hasPropertiesToUpdate = true;
+          } catch (scriptError) {
+            logToFile(`Error adding script URL to properties in !sync: ${scriptError.message}`);
+            errorProperties.push("Script URL");
+          }
+        }
+      } catch (extractError) {
+        logToFile(`Error extracting script link in !sync: ${extractError.message}`);
+        errorProperties.push("Script extraction");
+      }
+    }
     
     if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
       await msg.reply('Nothing to update.');
       return;
     }
 
+    // Track what was updated successfully
+    let updatedProperties = false;
+    let updatedContent = false;
+    
     // Update page properties if needed
-    if (hasPropertiesToUpdate) {
-      await notion.pages.update({ 
-        page_id: pageId, 
-        properties: notionProps 
-      });
+    if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
+      try {
+        await notion.pages.update({ 
+          page_id: pageId, 
+          properties: notionProps 
+        });
+        updatedProperties = true;
+      } catch (updateError) {
+        logToFile(`Error updating properties in !sync: ${updateError.message}`);
+        errorProperties.push("Notion properties update");
+      }
     }
     
     // Add page content if provided
     if (hasPageContent) {
-      // Format the content with a timestamp
-      const timestamp = new Date().toLocaleString();
-      const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
-      
-      // Look for a Google Docs link that could be a script
-      if (!props.script_url && !notionProps.Script) {
-        const scriptLink = extractScriptLink(props.page_content);
-        if (scriptLink) {
-          logToFile(`📝 Found potential script link in content: ${scriptLink}`);
-          // Add the script URL to properties
-          notionProps.Script = { url: scriptLink };
-          hasPropertiesToUpdate = true;
-        }
+      try {
+        // Format the content with a timestamp
+        const timestamp = new Date().toLocaleString();
+        const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+        
+        // Format the content into proper Notion blocks
+        const contentBlocks = formatNotionContent(formattedContent);
+        
+        // Append the formatted blocks to the page
+        await notion.blocks.children.append({
+          block_id: pageId,
+          children: contentBlocks
+        });
+        updatedContent = true;
+      } catch (contentError) {
+        logToFile(`Error adding page content in !sync: ${contentError.message}`);
+        errorProperties.push("Page content");
       }
-      
-      // Format the content into proper Notion blocks
-      const contentBlocks = formatNotionContent(formattedContent);
-      
-      // Append the formatted blocks to the page
-      await notion.blocks.children.append({
-        block_id: pageId,
-        children: contentBlocks
-      });
     }
 
     // Create response message
@@ -2307,20 +2410,26 @@ The category is automatically determined from the project code prefix (IB, CL, B
       }
     }
     
-    if (hasPropertiesToUpdate) {
+    if (updatedProperties) {
       responseDescription += 'Updated properties:\n' + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
     }
     
-    if (hasPageContent) {
+    if (updatedContent) {
       if (responseDescription) responseDescription += '\n\n';
       responseDescription += 'Added notes to page content';
+    }
+    
+    // Add error information if any
+    if (errorProperties.length > 0) {
+      if (responseDescription) responseDescription += '\n\n';
+      responseDescription += `⚠️ **Errors:** There were issues with: ${errorProperties.join(', ')}.\nOther updates were still applied.`;
     }
 
     await msg.reply({
       embeds: [{
-        title: `✅ ${code} ${isNewPage ? 'created' : 'updated'}`,
+        title: `✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
         description: responseDescription,
-        color: 0x57F287
+        color: errorProperties.length > 0 ? 0xFFA500 : 0x57F287
       }]
     });
   } catch (err) {
