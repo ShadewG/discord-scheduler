@@ -11,7 +11,7 @@ if (result.error) {
 }
 
 const cron = require('node-cron');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType } = require('discord.js');
 const fs = require('fs');
 const { getTimeUntilNextExecution } = require('./utils');
 const { OpenAI } = require('openai');
@@ -198,6 +198,7 @@ const FUNC_SCHEMA = {
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
       current_stage_date: { type:'string', format:'date' },
       category:       { type:'string', enum:['IB','CL','Bodycam'], description: 'The category of the project (IB, CL, or Bodycam)' },
+      discord_channel: { type:'string', description: 'Channel ID where project is discussed' },
       page_content:   { type:'string', description: 'Text content to append to the bottom of the Notion page, such as notes about new images or important information' }
     },
     additionalProperties: false
@@ -508,8 +509,7 @@ function toNotion(p) {
           logToFile(`ℹ️ Mapped status "${p.status}" to closest option "${matchedStatus}"`);
         }
       } else {
-        logToFile(`⚠️ Could not match status "${p.status}" to available options`);
-        // Use original value as fallback
+        logToFile(`⚠️ Could not match status "${p.status}" to available options - using as is`);
         out.Status = { status: { name: p.status } };
       }
     } else {
@@ -517,21 +517,32 @@ function toNotion(p) {
     }
   }
   
-  // Handle "3D Status" with fuzzy matching
+  // Discord Channel - store the channel ID as rich text
+  if (p.discord_channel) {
+    out['Discord Channel'] = { 
+      rich_text: [{ 
+        type: 'text', 
+        text: { content: p.discord_channel } 
+      }]
+    };
+  }
+  
+  // 3D Status is a select type
   if (p.threed_status && CACHED_SELECT_OPTIONS['3D Status']) {
-    const matched3DStatus = findClosestOption(p.threed_status, CACHED_SELECT_OPTIONS['3D Status']);
-    if (matched3DStatus) {
-      out['3D Status'] = { select: { name: matched3DStatus } };
+    const matched3dStatus = findClosestOption(p.threed_status, CACHED_SELECT_OPTIONS['3D Status']);
+    if (matched3dStatus) {
+      out['3D Status'] = { select: { name: matched3dStatus } };
     } else {
-      logToFile(`⚠️ Could not match 3D status "${p.threed_status}" to available options`);
-      // Use original value as fallback
       out['3D Status'] = { select: { name: p.threed_status } };
     }
   } else if (p.threed_status) {
     out['3D Status'] = { select: { name: p.threed_status } };
   }
   
-  if (p.current_stage_date) out['Current Stage Date'] = { date: { start: p.current_stage_date } };
+  // Current Stage Date
+  if (p.current_stage_date) {
+    out['Current Stage Date'] = { date: { start: p.current_stage_date } };
+  }
   
   // Handle "Category" with fuzzy matching
   if (p.category && CACHED_SELECT_OPTIONS['Category']) {
@@ -545,6 +556,16 @@ function toNotion(p) {
     }
   } else if (p.category) {
     out.Category = { select: { name: p.category } };
+  }
+  
+  // Page content for appending to the Notion page
+  if (p.page_content) {
+    out['Page Content'] = { 
+      rich_text: [{ 
+        type: 'text', 
+        text: { content: p.page_content } 
+      }]
+    };
   }
   
   return out;
@@ -584,7 +605,7 @@ function logToFile(message) {
 /* ─ Helper : Send a ping with role mention ───────── */
 async function ping(text) {
   try {
-    const channel = await client.channels.fetch(CHANNEL_ID);
+  const channel = await client.channels.fetch(CHANNEL_ID);
     
     // Check if the message already contains a role mention
     if (text.includes('@Editor') || text.includes(`<@&${ROLE_ID}>`)) {
@@ -592,7 +613,7 @@ async function ping(text) {
       await channel.send(text.replace('@Editor', `<@&${ROLE_ID}>`));
     } else {
       // Add role mention at the beginning if not present
-      await channel.send(`<@&${ROLE_ID}> ${text}`);
+  await channel.send(`<@&${ROLE_ID}> ${text}`);
     }
     
     logToFile(`📢 Sent message: ${text}`);
@@ -879,6 +900,107 @@ async function pollNotion() {
   }
 }
 
+/* ─ Check for missing properties in Notion ─────────────────────────── */
+async function checkForMissingProperties() {
+  try {
+    if (!process.env.NOTION_TOKEN || !DB) {
+      logToFile('❌ Property check skipped: Missing NOTION_TOKEN or DB_ID');
+      return;
+    }
+    
+    logToFile('🔍 Checking Notion database for missing properties...');
+    
+    // Query the database to find pages missing the Discord Channel property
+    const response = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        property: 'Discord Channel',
+        rich_text: {
+          is_empty: true
+        }
+      },
+      page_size: 10 // Process a few pages at a time
+    });
+    
+    if (response.results.length === 0) {
+      logToFile('✅ No pages with missing Discord Channel properties found');
+      return;
+    }
+    
+    logToFile(`📊 Found ${response.results.length} pages with missing Discord Channel property`);
+    
+    // Process each page
+    for (const page of response.results) {
+      try {
+        // Get the page title to extract project code
+        const titleProp = Object.values(page.properties).find(prop => prop.type === 'title');
+        if (!titleProp || !titleProp.title || titleProp.title.length === 0) {
+          logToFile(`⚠️ Skipping page ${page.id}: Could not find title property`);
+          continue;
+        }
+        
+        const pageTitle = titleProp.title.map(t => t.plain_text).join('');
+        const code = projectCode(pageTitle);
+        
+        if (!code) {
+          logToFile(`⚠️ Skipping page "${pageTitle}": Could not extract project code`);
+          continue;
+        }
+        
+        // Look for matching Discord channels
+        logToFile(`🔍 Looking for Discord channels matching code "${code}"...`);
+        
+        // Find channels with this code in the name
+        const matchingChannels = client.channels.cache.filter(channel => 
+          channel.type === ChannelType.GuildText && 
+          channel.name.toLowerCase().includes(code.toLowerCase())
+        );
+        
+        if (matchingChannels.size === 0) {
+          logToFile(`⚠️ No matching Discord channels found for code "${code}"`);
+          continue;
+        }
+        
+        // Use the first matching channel
+        const channel = matchingChannels.first();
+        logToFile(`✅ Found matching channel for "${code}": #${channel.name} (${channel.id})`);
+        
+        // Update the Notion page with the Discord channel ID
+        await notion.pages.update({
+          page_id: page.id,
+          properties: {
+            'Discord Channel': {
+              rich_text: [{
+                type: 'text',
+                text: { content: channel.id }
+              }]
+            }
+          }
+        });
+        
+        logToFile(`✅ Updated Discord Channel for page "${pageTitle}" to ${channel.id}`);
+        
+        // Notify in the Notion update channel if available
+        if (NOTION_CHANNEL_ID) {
+          sendNotionMessage(`🔄 Automatically linked project **${code}** to channel <#${channel.id}>`);
+        }
+      } catch (pageError) {
+        logToFile(`❌ Error processing page ${page.id}: ${pageError.message}`);
+      }
+    }
+    
+    logToFile('✅ Completed missing properties check');
+  } catch (error) {
+    logToFile(`❌ Error checking for missing properties: ${error.message}`);
+  }
+}
+
+// Schedule the missing properties check to run hourly
+setInterval(checkForMissingProperties, 3600 * 1000); // Every hour
+
+// Run once on startup (with delay to allow bot to initialize)
+setTimeout(checkForMissingProperties, 30 * 1000); // 30 seconds after startup
+
 // Save jobs to a file
 function saveJobs() {
   const jobsFilePath = path.join(__dirname, 'jobs.json');
@@ -1046,6 +1168,22 @@ const commands = [
           { name: 'Wrap-up Heads-up (16:50)', value: 'wrap-up-heads-up' }
         )),
   
+  new SlashCommandBuilder()
+    .setName('meeting')
+    .setDescription('Schedule a meeting with another user')
+    .addUserOption(option =>
+      option.setName('participant')
+        .setDescription('The user to meet with')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('time')
+        .setDescription('Meeting time (e.g. "30m" for 30 min from now, or "1400" for 2:00 PM)')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('topic')
+        .setDescription('Meeting topic (optional)')
+        .setRequired(false)),
+        
   new SlashCommandBuilder()
     .setName('send')
     .setDescription('Send a custom message to the channel')
@@ -2707,7 +2845,7 @@ client.on('guildCreate', async guild => {
 });
 
 // Connect to Discord
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN); 
 
 // Custom Notion watchers - will be loaded from file
 const customWatchers = [];
@@ -3877,4 +4015,234 @@ else if (commandName === 'watch') {
       await interaction.editReply(`❌ Error: ${cmdError.message}`);
     }
   }
+}
+
+else if (commandName === 'meeting') {
+  try {
+    await interaction.deferReply({ ephemeral: false });
+    hasResponded = true;
+    clearTimeout(timeoutWarning);
+    
+    // Get the parameters
+    const participant = interaction.options.getUser('participant');
+    const timeStr = interaction.options.getString('time');
+    const topic = interaction.options.getString('topic') || 'Discussion';
+    
+    // Parse the meeting time
+    const meetingTime = parseTimeString(timeStr);
+    if (!meetingTime) {
+      await interaction.editReply(`❌ Invalid time format: "${timeStr}". Use "30m" for 30 minutes from now, or "1400" for 2:00 PM today.`);
+      return;
+    }
+    
+    // Calculate the reminder time (10 minutes before)
+    const reminderTime = new Date(meetingTime.getTime() - 10 * 60 * 1000);
+    
+    // Format time for display
+    const timeDisplay = meetingTime.toLocaleString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+    
+    // Generate a unique ID
+    const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    
+    // Create the new meeting
+    const newMeeting = {
+      id,
+      participant: participant.id,
+      time: timeStr,
+      scheduledTime: meetingTime.toISOString(),
+      reminderTime: reminderTime.toISOString(),
+      topic,
+      notified: false,
+      createdAt: new Date().toISOString(),
+      createdBy: interaction.user.id
+    };
+    
+    // Add to custom meetings
+    customMeetings.push(newMeeting);
+    
+    // Save to file
+    saveMeetings();
+    
+    await interaction.editReply({
+      content: `✅ Meeting scheduled with ${participant} for **${timeDisplay}**\n📋 Topic: ${topic}\n⏰ A reminder will be sent to both of you 10 minutes before the meeting.`,
+      allowedMentions: { users: [participant.id] }
+    });
+    
+    // Send a DM to the participant
+    await sendDirectMessage(
+      participant.id,
+      `📅 <@${interaction.user.id}> has scheduled a meeting with you for **${timeDisplay}**\n📋 Topic: ${topic}\n⏰ I'll send you both a reminder 10 minutes before the meeting.`
+    );
+  } catch (cmdError) {
+    logToFile(`Error in /meeting command: ${cmdError.message}`);
+    if (!hasResponded) {
+      await interaction.reply(`❌ Error scheduling meeting: ${cmdError.message}`);
+      hasResponded = true;
+    } else {
+      await interaction.editReply(`❌ Error scheduling meeting: ${cmdError.message}`);
+    }
+  }
+}
+
+// Add custom meetings support
+const meetingsFilePath = path.join(__dirname, 'meetings.json');
+const customMeetings = [];
+
+// Load meetings from file
+function loadMeetings() {
+  if (fs.existsSync(meetingsFilePath)) {
+    try {
+      const data = fs.readFileSync(meetingsFilePath, 'utf8');
+      const loadedMeetings = JSON.parse(data);
+      logToFile(`Loaded ${loadedMeetings.length} existing meetings from file`);
+      return loadedMeetings;
+    } catch (error) {
+      logToFile(`Error loading meetings file: ${error.message}`);
+    }
+  } else {
+    logToFile('No meetings.json file found. Starting with empty meetings list.');
+  }
+  return [];
+}
+
+// Save meetings to file
+function saveMeetings() {
+  if (customMeetings.length === 0) {
+    logToFile('No meetings to save');
+    return;
+  }
+  
+  fs.writeFileSync(meetingsFilePath, JSON.stringify(customMeetings, null, 2));
+  logToFile(`Saved ${customMeetings.length} meetings to meetings.json`);
+}
+
+// Parse a time string into a Date
+function parseTimeString(timeStr) {
+  const now = new Date();
+  
+  // Handle relative time format (e.g., "30m" for 30 minutes from now)
+  const relativeMatch = timeStr.match(/^(\d+)([mh])$/i);
+  if (relativeMatch) {
+    const [_, amount, unit] = relativeMatch;
+    const milliseconds = unit.toLowerCase() === 'm' 
+      ? parseInt(amount) * 60 * 1000 // minutes
+      : parseInt(amount) * 60 * 60 * 1000; // hours
+    
+    const futureTime = new Date(now.getTime() + milliseconds);
+    return futureTime;
+  }
+  
+  // Handle absolute time format (e.g., "1400" for 2:00 PM today)
+  const absoluteMatch = timeStr.match(/^(\d{1,2})(\d{2})$/);
+  if (absoluteMatch) {
+    const [_, hours, minutes] = absoluteMatch;
+    const futureTime = new Date(now);
+    futureTime.setHours(parseInt(hours));
+    futureTime.setMinutes(parseInt(minutes));
+    futureTime.setSeconds(0);
+    
+    // If the time is in the past, assume it's for tomorrow
+    if (futureTime < now) {
+      futureTime.setDate(futureTime.getDate() + 1);
+    }
+    
+    return futureTime;
+  }
+  
+  // Return null if format is not recognized
+  return null;
+}
+
+// Send a DM to a user
+async function sendDirectMessage(userId, message) {
+  try {
+    const user = await client.users.fetch(userId);
+    await user.send(message);
+    logToFile(`Sent DM to ${user.tag}: ${message}`);
+    return true;
+  } catch (error) {
+    logToFile(`Error sending DM to user ${userId}: ${error.message}`);
+    return false;
+  }
+}
+
+// Check for upcoming meetings and send reminders
+async function checkMeetings() {
+  if (customMeetings.length === 0) return;
+  
+  const now = new Date();
+  
+  // Check each meeting
+  for (let i = customMeetings.length - 1; i >= 0; i--) {
+    const meeting = customMeetings[i];
+    
+    // Skip if already notified
+    if (meeting.notified) continue;
+    
+    // Parse the meeting time
+    const meetingTime = meeting.scheduledTime 
+      ? new Date(meeting.scheduledTime) 
+      : parseTimeString(meeting.time);
+    
+    // Store the parsed time back to the meeting
+    if (!meeting.scheduledTime && meetingTime) {
+      meeting.scheduledTime = meetingTime.toISOString();
+      saveMeetings();
+    }
+    
+    // If time couldn't be parsed, skip
+    if (!meetingTime) continue;
+    
+    // Calculate the reminder time (10 minutes before meeting)
+    const reminderTime = new Date(meetingTime.getTime() - 10 * 60 * 1000);
+    
+    // Check if it's time for the reminder
+    if (now >= reminderTime && now < meetingTime) {
+      // Send reminders
+      const topicText = meeting.topic ? ` about "${meeting.topic}"` : '';
+      const timeText = meetingTime.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      
+      // Remind the creator
+      await sendDirectMessage(
+        meeting.createdBy,
+        `🔔 Reminder: Your meeting${topicText} with <@${meeting.participant}> starts in 10 minutes (${timeText})!`
+      );
+      
+      // Remind the participant
+      await sendDirectMessage(
+        meeting.participant,
+        `🔔 Reminder: <@${meeting.createdBy}> has scheduled a meeting${topicText} with you in 10 minutes (${timeText})!`
+      );
+      
+      // Mark as notified
+      meeting.notified = true;
+      saveMeetings();
+      
+      logToFile(`Sent reminders for meeting ${meeting.id}`);
+    }
+    
+    // Remove meetings that are more than an hour old
+    if (meetingTime && (now.getTime() - meetingTime.getTime() > 60 * 60 * 1000)) {
+      customMeetings.splice(i, 1);
+      saveMeetings();
+      logToFile(`Removed old meeting ${meeting.id}`);
+    }
+  }
+}
+
+// Schedule meeting checks
+setInterval(checkMeetings, 60 * 1000); // Check every minute
+
+// Load existing meetings
+const loadedMeetings = loadMeetings();
+if (loadedMeetings && loadedMeetings.length > 0) {
+  customMeetings.push(...loadedMeetings);
 }
