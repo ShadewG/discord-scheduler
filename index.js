@@ -1130,458 +1130,143 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isCommand()) return;
 
   const { commandName } = interaction;
+  
+  // Add global error handling for all command interactions
+  try {
+    // Create a timeout to track if we're at risk of hitting Discord's 3-second limit
+    let hasResponded = false;
+    const timeoutWarning = setTimeout(() => {
+      if (!hasResponded) {
+        logToFile(`⚠️ Warning: Interaction ${commandName} is taking too long to respond`);
+      }
+    }, 2500); // Set a warning at 2.5 seconds
 
-  if (commandName === 'test') {
-    await interaction.deferReply();
-    
-    // Send a test message for each job
-    let testMsg = '📢 Sending test messages for all reminders:\n\n';
-    
-    for (const job of jobs) {
-      testMsg += `▸ Testing: ${job.tag}\n`;
-    }
-    
-    await interaction.editReply(testMsg);
-    
-    // Send each message with a delay to avoid rate limits
-    for (const job of jobs) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      await ping(`[TEST] ${job.text}`);
-    }
-    
-    await interaction.followUp('✅ All test messages sent!');
-    
-    // Log next executions after tests
-    logNextExecutions();
-  }
-  
-  else if (commandName === 'testjob') {
-    const tag = interaction.options.getString('tag');
-    const job = jobs.find(j => j.tag === tag);
-    
-    if (!job) {
-      await interaction.reply({ content: `❌ Could not find job with tag: ${tag}`, ephemeral: true });
-      return;
-    }
-    
-    await interaction.reply(`📢 Sending test message for: **${job.tag}**`);
-    await ping(`[TEST] ${job.text}`);
-    
-    // Log next execution for this job
-    const nextExecution = getNextExecution(job.cron);
-    if (nextExecution) {
-      await interaction.followUp(`Next scheduled run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
-    }
-  }
-  
-  else if (commandName === 'send') {
-    const messageText = interaction.options.getString('message');
-    const mentionRole = interaction.options.getBoolean('mention') || false;
-    
-    await interaction.deferReply();
-    
-    try {
-      // Send the message with or without role mention
-      if (mentionRole) {
-        await ping(messageText);
-        await interaction.editReply(`✅ Message sent with @Editor role mention: "${messageText}"`);
-      } else {
-        await sendMessage(messageText);
-        await interaction.editReply(`✅ Message sent: "${messageText}"`);
-      }
-      
-      logToFile(`📢 Manual message sent by ${interaction.user.tag}: "${messageText}"`);
-    } catch (error) {
-      await interaction.editReply(`❌ Error sending message: ${error.message}`);
-      logToFile(`Error sending manual message: ${error.message}`);
-    }
-  }
-  
-  else if (commandName === 'schedule') {
-    await interaction.deferReply();
-    
-    const scheduleEmbed = createScheduleEmbed();
-    
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('refresh_schedule')
-          .setLabel('Refresh Timers')
-          .setStyle(ButtonStyle.Primary),
-      );
-    
-    await interaction.editReply({
-      content: '📅 Here is the complete schedule with countdown timers:',
-      embeds: [scheduleEmbed],
-      components: [row]
-    });
-  }
-  
-  else if (commandName === 'next') {
-    const nextRemindersEmbed = createNextRemindersEmbed();
-    
-    await interaction.reply({ 
-      content: '⏱️ Here are the upcoming scheduled reminders:',
-      embeds: [nextRemindersEmbed] 
-    });
-  }
-  
-  else if (commandName === 'list') {
-    const jobsEmbed = createJobsEmbed();
-    
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('refresh_list')
-          .setLabel('Refresh')
-          .setStyle(ButtonStyle.Primary),
-      );
-    
-    await interaction.reply({ embeds: [jobsEmbed], components: [row] });
-  }
-  
-  else if (commandName === 'status') {
-    const statusEmbed = createStatusEmbed();
-    await interaction.reply({ embeds: [statusEmbed] });
-  }
-  
-  else if (commandName === 'help') {
-    const helpEmbed = createHelpEmbed();
-    await interaction.reply({ embeds: [helpEmbed] });
-  }
-  
-  else if (commandName === 'edit') {
-    // Create a select menu with all job tags as options
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('select_job_to_edit')
-      .setPlaceholder('Select a reminder to edit')
-      .addOptions(jobs.map(job => ({
-        label: job.tag,
-        description: `Cron: ${job.cron}`,
-        value: job.tag
-      })));
-    
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    
-    await interaction.reply({ 
-      content: 'Select a reminder to edit:',
-      components: [row]
-    });
-  }
-  
-  else if (commandName === 'add') {
-    const tag = interaction.options.getString('tag');
-    const cronExp = interaction.options.getString('cron');
-    const text = interaction.options.getString('text');
-    
-    // Check if job with same tag already exists
-    if (jobs.some(job => job.tag === tag)) {
-      await interaction.reply({ content: '❌ A reminder with this tag already exists. Please use a unique tag or edit the existing one.', ephemeral: true });
-      return;
-    }
-    
-    // Validate cron expression
-    try {
-      cron.validate(cronExp);
-    } catch (error) {
-      await interaction.reply({ content: `❌ Invalid cron expression: ${error.message}`, ephemeral: true });
-      return;
-    }
-    
-    // Add the new job
-    const newJob = { tag, cron: cronExp, text };
-    jobs.push(newJob);
-    
-    // Schedule the job
-    scheduleJob(newJob);
-    
-    // Save the updated jobs
-    saveJobs();
-    
-    // Get next execution time
-    const nextExecution = getNextExecution(cronExp);
-    let executionInfo = '';
-    if (nextExecution) {
-      executionInfo = `\nNext run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
-    }
-    
-    await interaction.reply(`✅ Added new reminder "${tag}" scheduled for \`${cronExp}\`${executionInfo}`);
-  }
-  
-  else if (commandName === 'notion') {
-    const subcommand = interaction.options.getSubcommand();
-    
-    if (subcommand === 'add') {
-      const name = interaction.options.getString('name');
-      const property = interaction.options.getString('property');
-      const value = interaction.options.getString('value');
-      const user = interaction.options.getUser('user');
-      
-      // Generate a unique ID
-      const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-      
-      // Create the new watcher
-      const newWatcher = {
-        id,
-        name,
-        property,
-        value,
-        userId: user.id,
-        createdAt: new Date().toISOString(),
-        createdBy: interaction.user.id,
-        disabled: false
-      };
-      
-      // Add to custom watchers
-      customWatchers.push(newWatcher);
-      
-      // Save to file
-      saveWatchers();
-      
-      await interaction.reply({
-        content: `✅ Created new Notion watcher "${name}" (ID: ${id}):\n- Property: ${property}\n- Value: ${value}\n- Notifies: ${user}\n\nThis watcher is now active and will notify ${user} when a Notion page's "${property}" property is set to "${value}".`,
-        ephemeral: true
-      });
-    }
-    
-    else if (subcommand === 'list') {
-      const embed = createWatchersEmbed();
-      await interaction.reply({ embeds: [embed] });
-    }
-    
-    else if (subcommand === 'enable') {
-      const id = interaction.options.getString('id');
-      
-      // Find the watcher
-      const watcher = customWatchers.find(w => w.id === id);
-      
-      if (!watcher) {
-        await interaction.reply({
-          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
-          ephemeral: true
-        });
-        return;
-      }
-      
-      // Enable the watcher
-      watcher.disabled = false;
-      
-      // Save to file
-      saveWatchers();
-      
-      await interaction.reply({
-        content: `✅ Enabled Notion watcher "${watcher.name}" (ID: ${id}).`,
-        ephemeral: true
-      });
-    }
-    
-    else if (subcommand === 'disable') {
-      const id = interaction.options.getString('id');
-      
-      // Find the watcher
-      const watcher = customWatchers.find(w => w.id === id);
-      
-      if (!watcher) {
-        await interaction.reply({
-          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
-          ephemeral: true
-        });
-        return;
-      }
-      
-      // Disable the watcher
-      watcher.disabled = true;
-      
-      // Save to file
-      saveWatchers();
-      
-      await interaction.reply({
-        content: `✅ Disabled Notion watcher "${watcher.name}" (ID: ${id}). It will no longer check for status changes.`,
-        ephemeral: true
-      });
-    }
-    
-    else if (subcommand === 'delete') {
-      const id = interaction.options.getString('id');
-      
-      // Find the watcher index
-      const watcherIndex = customWatchers.findIndex(w => w.id === id);
-      
-      if (watcherIndex === -1) {
-        await interaction.reply({
-          content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
-          ephemeral: true
-        });
-        return;
-      }
-      
-      // Get the watcher name before removing
-      const watcherName = customWatchers[watcherIndex].name;
-      
-      // Remove the watcher
-      customWatchers.splice(watcherIndex, 1);
-      
-      // Save to file
-      saveWatchers();
-      
-      await interaction.reply({
-        content: `✅ Deleted Notion watcher "${watcherName}" (ID: ${id}).`,
-        ephemeral: true
-      });
-    }
-    
-    else if (subcommand === 'properties') {
-      await interaction.deferReply();
-      
+    // Process command based on name
+    if (commandName === 'test') {
       try {
-        // Fetch database metadata to get properties
-        const database = await notion.databases.retrieve({
-          database_id: DB
-        });
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
         
-        const properties = database.properties;
-        const propertyList = Object.entries(properties)
-          .map(([name, prop]) => `- **${name}** (${prop.type})`)
-          .join('\n');
+        // Send a test message for each job
+        let testMsg = '📢 Sending test messages for all reminders:\n\n';
         
-        const embed = new EmbedBuilder()
-          .setColor(0x8A2BE2)
-          .setTitle('Notion Database Properties')
-          .setDescription(`The following properties are available in the Notion database:\n\n${propertyList}\n\nYou can use any property of type **select** with the \`/notion add\` command.`)
-          .setTimestamp();
-        
-        await interaction.editReply({ embeds: [embed] });
-      } catch (error) {
-        await interaction.editReply({
-          content: `❌ Error fetching database properties: ${error.message}\n\nMake sure your Notion integration is set up correctly.`
-        });
-      }
-    }
-  }
-  
-  else if (commandName === 'watchers') {
-    await interaction.deferReply();
-    
-    try {
-      // Create a rich embed to display all watchers
-      const embed = new EmbedBuilder()
-        .setColor(0x0099FF)
-        .setTitle('📋 All Notion Watchers')
-        .setDescription('Here are all configured Notion watchers that notify users when properties change.')
-        .setTimestamp();
-      
-      // Add field for default watcher
-      embed.addFields({
-        name: '🔍 Default Watcher',
-        value: `**Property:** ${TARGET_PROP}\n**Value:** ${TARGET_VALUE}\n**Notifies:** <@${RAY_ID}>`
-      });
-      
-      // Add fields for custom watchers
-      if (customWatchers && customWatchers.length > 0) {
-        customWatchers.forEach(watcher => {
-          const status = watcher.disabled ? '🔴 Disabled' : '🟢 Active';
-          embed.addFields({
-            name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
-            value: `**Property:** ${watcher.property}\n**Value:** ${watcher.value}\n**Notifies:** <@${watcher.userId}>\n**Created:** ${new Date(watcher.createdAt).toLocaleDateString()}`
-          });
-        });
-      } else {
-        embed.addFields({
-          name: 'Custom Watchers',
-          value: '*No custom watchers configured*\nUse `/notion add` to create watchers.'
-        });
-      }
-      
-      await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      logToFile(`Error in /watchers command: ${error.message}`);
-      await interaction.editReply('❌ Error retrieving watchers. Check logs for details.');
-    }
-  }
-
-  else if (commandName === 'analyze') {
-    await interaction.deferReply();
-    
-    try {
-      // Extract the project code from the channel name
-      const code = projectCode(interaction.channel.name);
-      if (!code) {
-        await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
-        return;
-      }
-      
-      // Find the Notion page for this project
-      let pageId = await findPage(code);
-      let isNewPage = false;
-      
-      // Fetch channel messages for analysis
-      const messages = await interaction.channel.messages.fetch({ limit: 100 });
-      
-      // Look for the first image in the messages for a thumbnail
-      const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
-      
-      // If no page exists, create one
-      if (!pageId) {
-        await interaction.editReply(`No Notion page found for project code "${code}". Creating a new page...`);
-        
-        // Create a new page with the channel name as the title
-        pageId = await createNotionPage(code, interaction.channel.name, {}, firstImageUrl);
-        
-        if (!pageId) {
-          await interaction.editReply('❌ Failed to create Notion page. Check logs for details.');
-          return;
+        for (const job of jobs) {
+          testMsg += `▸ Testing: ${job.tag}\n`;
         }
         
-        isNewPage = true;
-        await interaction.editReply(`✅ Created new Notion page for project "${code}". Now analyzing messages...`);
+        await interaction.editReply(testMsg);
+        
+        // Send each message with a delay to avoid rate limits
+        for (const job of jobs) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await ping(`[TEST] ${job.text}`);
+        }
+        
+        await interaction.followUp('✅ All test messages sent!');
+        
+        // Log next executions after tests
+        logNextExecutions();
+      } catch (cmdError) {
+        logToFile(`Error in /test command: ${cmdError.message}`);
+        // Only try to reply if we haven't already
+        if (!hasResponded) {
+          await interaction.reply({ content: '❌ An error occurred while processing this command.', ephemeral: true });
+          hasResponded = true;
+        } else {
+          await interaction.followUp({ content: '❌ An error occurred while processing this command.', ephemeral: true });
+        }
       }
-      
-      // Get number of messages to analyze (default: 50, max: 100)
-      const limit = Math.min(interaction.options.getInteger('messages') || 50, 100);
-      
-      await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
-      
-      if (!messages || messages.size === 0) {
-        await interaction.editReply('No messages found to analyze.');
-        return;
-      }
-      
-      // Sort messages by timestamp (oldest first)
-      const sortedMessages = Array.from(messages.values())
-        .filter(msg => !msg.author.bot) // Skip bot messages
-        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-        .slice(0, limit); // Limit to the requested number
-      
-      if (sortedMessages.length === 0) {
-        await interaction.editReply('No user messages found to analyze.');
-        return;
-      }
-      
-      // Format messages for analysis
-      const formattedMessages = sortedMessages.map(msg => {
-        return {
-          author: msg.author.username,
-          timestamp: new Date(msg.createdTimestamp).toISOString(),
-          content: msg.content
-        };
-      });
-      
-      // Convert to plain text format for GPT
-      const chatHistory = formattedMessages.map(m => 
-        `[${m.timestamp.split('T')[0]} ${m.timestamp.split('T')[1].substring(0, 8)}] ${m.author}: ${m.content}`
-      ).join('\n');
-      
-      // Get current date
-      const today = new Date().toISOString().split('T')[0];
-      
-      // Send to OpenAI for analysis
-      const gpt = await openai.chat.completions.create({
-        model: 'gpt-4o',
-        temperature: 0,
-        messages: [
-          { 
-            role: 'system', 
-            content: `You analyze project discussions to extract the latest decisions about project details.
+    }
+    
+    else if (commandName === 'analyze') {
+      try {
+        // Immediately defer reply to prevent timeout
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Continue with the analyze command logic
+        try {
+          // Extract the project code from the channel name
+          const code = projectCode(interaction.channel.name);
+          if (!code) {
+            await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
+            return;
+          }
+          
+          // Find the Notion page for this project
+          let pageId = await findPage(code);
+          let isNewPage = false;
+          
+          // Fetch channel messages for analysis
+          const messages = await interaction.channel.messages.fetch({ limit: 100 });
+          
+          // Look for the first image in the messages for a thumbnail
+          const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
+          
+          // If no page exists, create one
+          if (!pageId) {
+            await interaction.editReply(`No Notion page found for project code "${code}". Creating a new page...`);
+            
+            // Create a new page with the channel name as the title
+            pageId = await createNotionPage(code, interaction.channel.name, {}, firstImageUrl);
+            
+            if (!pageId) {
+              await interaction.editReply('❌ Failed to create Notion page. Check logs for details.');
+              return;
+            }
+            
+            isNewPage = true;
+            await interaction.editReply(`✅ Created new Notion page for project "${code}". Now analyzing messages...`);
+          }
+          
+          // Get number of messages to analyze (default: 50, max: 100)
+          const limit = Math.min(interaction.options.getInteger('messages') || 50, 100);
+          
+          await interaction.editReply(`🔍 Analyzing the last ${limit} messages in this channel to update Notion...`);
+          
+          if (!messages || messages.size === 0) {
+            await interaction.editReply('No messages found to analyze.');
+            return;
+          }
+          
+          // Sort messages by timestamp (oldest first)
+          const sortedMessages = Array.from(messages.values())
+            .filter(msg => !msg.author.bot) // Skip bot messages
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+            .slice(0, limit); // Limit to the requested number
+          
+          if (sortedMessages.length === 0) {
+            await interaction.editReply('No user messages found to analyze.');
+            return;
+          }
+          
+          // Format messages for analysis
+          const formattedMessages = sortedMessages.map(msg => {
+            return {
+              author: msg.author.username,
+              timestamp: new Date(msg.createdTimestamp).toISOString(),
+              content: msg.content
+            };
+          });
+          
+          // Convert to plain text format for GPT
+          const chatHistory = formattedMessages.map(m => 
+            `[${m.timestamp.split('T')[0]} ${m.timestamp.split('T')[1].substring(0, 8)}] ${m.author}: ${m.content}`
+          ).join('\n');
+          
+          // Get current date
+          const today = new Date().toISOString().split('T')[0];
+          
+          // Send to OpenAI for analysis
+          const gpt = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            temperature: 0,
+            messages: [
+              { 
+                role: 'system', 
+                content: `You analyze project discussions to extract the latest decisions about project details.
 Your task is to identify the FINAL/LATEST mentions of key properties from a chat history.
 For example, if someone initially sets a due date to Friday but later changes it to Sunday, use Sunday.
 Resolve conflicts by preferring the most recent mentions.
@@ -1593,131 +1278,599 @@ You can also identify or update the project category to "IB", "CL", or "Bodycam"
 The category is usually determined from the project code (IB##, CL##, BC##), but can be changed.
 
 Today's date is ${today}.`
-          },
-          { 
-            role: 'user', 
-            content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}`
+              },
+              { 
+                role: 'user', 
+                content: `Here's the chat history for project ${code}. Extract the latest information about project properties like due dates, priorities, etc.:\n\n${chatHistory}`
+              }
+            ],
+            functions: [FUNC_SCHEMA],
+            function_call: 'auto'
+          });
+          
+          const call = gpt.choices[0].message.function_call;
+          if (!call) {
+            await interaction.editReply('No relevant information found in the chat history.');
+            return;
           }
-        ],
-        functions: [FUNC_SCHEMA],
-        function_call: 'auto'
-      });
-      
-      const call = gpt.choices[0].message.function_call;
-      if (!call) {
-        await interaction.editReply('No relevant information found in the chat history.');
-        return;
+          
+          let props;
+          try {
+            props = JSON.parse(call.arguments);
+          } catch (e) {
+            logToFile(`JSON parse error in analyze command: ${e}, raw: ${call.arguments}`);
+            await interaction.editReply('❌ Error parsing the analysis results.');
+            return;
+          }
+          
+          const notionProps = toNotion(props);
+          const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
+          const hasPageContent = props.page_content && props.page_content.trim().length > 0;
+          
+          if (!hasPropertiesToUpdate && !hasPageContent) {
+            await interaction.editReply('No updates needed based on the chat history analysis.');
+            return;
+          }
+          
+          // Update page properties if needed
+          if (hasPropertiesToUpdate) {
+            await notion.pages.update({ 
+              page_id: pageId, 
+              properties: notionProps 
+            });
+          }
+          
+          // Add page content if provided
+          if (hasPageContent) {
+            // Format the content with a timestamp
+            const timestamp = new Date().toLocaleString();
+            const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+            
+            // Look for a Google Docs link that could be a script
+            if (!props.script_url && !notionProps.Script) {
+              const scriptLink = extractScriptLink(props.page_content);
+              if (scriptLink) {
+                logToFile(`📝 Found potential script link in content: ${scriptLink}`);
+                // Add the script URL to properties
+                notionProps.Script = { url: scriptLink };
+                hasPropertiesToUpdate = true;
+              }
+            }
+            
+            // Format the content into proper Notion blocks with clickable links
+            const contentBlocks = formatNotionContent(formattedContent);
+            
+            // Append the formatted blocks to the page
+            await notion.blocks.children.append({
+              block_id: pageId,
+              children: contentBlocks
+            });
+          }
+          
+          // Format analysis for display
+          const analysisEmbed = new EmbedBuilder()
+            .setColor(0x00FF00)
+            .setTitle(`📊 Analysis Results for ${code}`)
+            .setDescription(`I've analyzed ${sortedMessages.length} messages and ${isNewPage ? 'created a new page with' : 'updated the following:'}`)
+            .setFooter({ text: `Analyzed ${limit} messages` })
+            .setTimestamp();
+          
+          // Add note about page creation if applicable
+          if (isNewPage) {
+            analysisEmbed.addFields({
+              name: '✨ New Page Created',
+              value: `Created a new Notion page for project **${code}**${firstImageUrl ? ' with thumbnail image' : ''}`
+            });
+          }
+          
+          // Add fields for updated properties
+          if (hasPropertiesToUpdate) {
+            analysisEmbed.addFields({
+              name: 'Updated Properties:',
+              value: Object.keys(notionProps).map(propName => {
+                return propName === 'Date' ? 
+                      `• **${propName}:** ${props.due_date}` : 
+                      propName === 'Priority' ?
+                      `• **${propName}:** ${props.priority}` :
+                      propName === 'Caption Status' ?
+                      `• **${propName}:** ${props.caption_status}` :
+                      propName === 'Script' ?
+                      `• **${propName}:** ${props.script_url}` :
+                      propName === 'Frame.io' ?
+                      `• **${propName}:** ${props.frameio_url}` :
+                      propName === 'Editor' ?
+                      `• **${propName}:** <@${props.editor_discord}>` :
+                      propName === 'Brand Deal' ?
+                      `• **${propName}:** Updated` :
+                      propName === 'Status' ?
+                      `• **${propName}:** ${props.status}` :
+                      `• **${propName}**`;
+              }).join('\n')
+            });
+          }
+          
+          // Add field for page content
+          if (hasPageContent) {
+            analysisEmbed.addFields({
+              name: 'Added Notes to Page:',
+              value: props.page_content.length > 1000 
+                ? props.page_content.substring(0, 997) + '...' 
+                : props.page_content
+            });
+          }
+          
+          await interaction.editReply({ content: `✅ Analysis complete! ${isNewPage ? 'New page created and' : ''} Notion has been updated.`, embeds: [analysisEmbed] });
+        } catch (analyzeError) {
+          logToFile(`Error in /analyze command: ${analyzeError.message}`);
+          await interaction.editReply(`❌ Error analyzing channel history: ${analyzeError.message}`);
+        }
+      } catch (deferError) {
+        logToFile(`Failed to defer reply for /analyze command: ${deferError.message}`);
+        try {
+          // Try to send an immediate reply instead if deferring failed
+          await interaction.reply({ content: '❌ Error initializing command. Please try again.', ephemeral: true });
+        } catch (replyError) {
+          logToFile(`Failed to send error reply for /analyze command: ${replyError.message}`);
+        }
       }
-      
-      let props;
+    }
+    
+    else if (commandName === 'testjob') {
       try {
-        props = JSON.parse(call.arguments);
-      } catch (e) {
-        logToFile(`JSON parse error in analyze command: ${e}, raw: ${call.arguments}`);
-        await interaction.editReply('❌ Error parsing the analysis results.');
-        return;
-      }
-      
-      const notionProps = toNotion(props);
-      const hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
-      const hasPageContent = props.page_content && props.page_content.trim().length > 0;
-      
-      if (!hasPropertiesToUpdate && !hasPageContent) {
-        await interaction.editReply('No updates needed based on the chat history analysis.');
-        return;
-      }
-      
-      // Update page properties if needed
-      if (hasPropertiesToUpdate) {
-        await notion.pages.update({ 
-          page_id: pageId, 
-          properties: notionProps 
-        });
-      }
-      
-      // Add page content if provided
-      if (hasPageContent) {
-        // Format the content with a timestamp
-        const timestamp = new Date().toLocaleString();
-        const formattedContent = `**Analysis from Discord (${timestamp}):**\n${props.page_content.trim()}`;
+        // Get parameters first - do quick operations before deferring
+        const tag = interaction.options.getString('tag');
+        const job = jobs.find(j => j.tag === tag);
         
-        // Look for a Google Docs link that could be a script
-        if (!props.script_url && !notionProps.Script) {
-          const scriptLink = extractScriptLink(props.page_content);
-          if (scriptLink) {
-            logToFile(`📝 Found potential script link in content: ${scriptLink}`);
-            // Add the script URL to properties
-            notionProps.Script = { url: scriptLink };
-            hasPropertiesToUpdate = true;
+        if (!job) {
+          await interaction.reply({ content: `❌ Could not find job with tag: ${tag}`, ephemeral: true });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+          return;
+        }
+        
+        await interaction.reply(`📢 Sending test message for: **${job.tag}**`);
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        await ping(`[TEST] ${job.text}`);
+        
+        // Log next execution for this job
+        const nextExecution = getNextExecution(job.cron);
+        if (nextExecution) {
+          await interaction.followUp(`Next scheduled run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /testjob command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error testing job: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    else if (commandName === 'send') {
+      try {
+        const messageText = interaction.options.getString('message');
+        const mentionRole = interaction.options.getBoolean('mention') || false;
+        
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        try {
+          // Send the message with or without role mention
+          if (mentionRole) {
+            await ping(messageText);
+            await interaction.editReply(`✅ Message sent with @Editor role mention: "${messageText}"`);
+          } else {
+            await sendMessage(messageText);
+            await interaction.editReply(`✅ Message sent: "${messageText}"`);
+          }
+          
+          logToFile(`📢 Manual message sent by ${interaction.user.tag}: "${messageText}"`);
+        } catch (sendError) {
+          logToFile(`Error sending message: ${sendError.message}`);
+          await interaction.editReply(`❌ Error sending message: ${sendError.message}`);
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /send command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error sending message: ${cmdError.message}`, ephemeral: true });
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    else if (commandName === 'schedule') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        const scheduleEmbed = createScheduleEmbed();
+        
+        const row = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('refresh_schedule')
+              .setLabel('Refresh Timers')
+              .setStyle(ButtonStyle.Primary),
+          );
+        
+        await interaction.editReply({
+          content: '📅 Here is the complete schedule with countdown timers:',
+          embeds: [scheduleEmbed],
+          components: [row]
+        });
+      } catch (cmdError) {
+        logToFile(`Error in /schedule command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error showing schedule: ${cmdError.message}`, ephemeral: true });
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          try {
+            await interaction.editReply(`❌ Error showing schedule: ${cmdError.message}`);
+          } catch (editError) {
+            logToFile(`Failed to edit reply: ${editError.message}`);
+          }
+        }
+      }
+    }
+    
+    // Handle simpler commands with standardized error handling
+    else if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
+      try {
+        let response;
+        let components = [];
+        
+        // Prepare response based on command
+        if (commandName === 'next') {
+          response = { 
+            content: '⏱️ Here are the upcoming scheduled reminders:',
+            embeds: [createNextRemindersEmbed()]
+          };
+        }
+        else if (commandName === 'list') {
+          response = { embeds: [createJobsEmbed()] };
+          components = [
+            new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setCustomId('refresh_list')
+                  .setLabel('Refresh')
+                  .setStyle(ButtonStyle.Primary),
+              )
+          ];
+        }
+        else if (commandName === 'status') {
+          response = { embeds: [createStatusEmbed()] };
+        }
+        else if (commandName === 'help') {
+          response = { embeds: [createHelpEmbed()] };
+        }
+        else if (commandName === 'edit') {
+          const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('select_job_to_edit')
+            .setPlaceholder('Select a reminder to edit')
+            .addOptions(jobs.map(job => ({
+              label: job.tag,
+              description: `Cron: ${job.cron}`,
+              value: job.tag
+            })));
+          
+          response = { content: 'Select a reminder to edit:' };
+          components = [new ActionRowBuilder().addComponents(selectMenu)];
+        }
+        
+        // Send the response
+        if (components.length > 0) {
+          response.components = components;
+        }
+        
+        await interaction.reply(response);
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+      } catch (cmdError) {
+        logToFile(`Error in /${commandName} command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error processing command: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    // More complex commands
+    else if (commandName === 'add') {
+      try {
+        const tag = interaction.options.getString('tag');
+        const cronExp = interaction.options.getString('cron');
+        const text = interaction.options.getString('text');
+        
+        // Check if job with same tag already exists
+        if (jobs.some(job => job.tag === tag)) {
+          await interaction.reply({ content: '❌ A reminder with this tag already exists. Please use a unique tag or edit the existing one.', ephemeral: true });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+          return;
+        }
+        
+        // Validate cron expression
+        try {
+          cron.validate(cronExp);
+        } catch (cronError) {
+          await interaction.reply({ content: `❌ Invalid cron expression: ${cronError.message}`, ephemeral: true });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+          return;
+        }
+        
+        // Add the new job
+        const newJob = { tag, cron: cronExp, text };
+        jobs.push(newJob);
+        
+        // Schedule the job
+        scheduleJob(newJob);
+        
+        // Save the updated jobs
+        saveJobs();
+        
+        // Get next execution time
+        const nextExecution = getNextExecution(cronExp);
+        let executionInfo = '';
+        if (nextExecution) {
+          executionInfo = `\nNext run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
+        }
+        
+        await interaction.reply(`✅ Added new reminder "${tag}" scheduled for \`${cronExp}\`${executionInfo}`);
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+      } catch (cmdError) {
+        logToFile(`Error in /add command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error adding job: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    else if (commandName === 'notion') {
+      try {
+        const subcommand = interaction.options.getSubcommand();
+        
+        if (subcommand === 'add') {
+          const name = interaction.options.getString('name');
+          const property = interaction.options.getString('property');
+          const value = interaction.options.getString('value');
+          const user = interaction.options.getUser('user');
+          
+          // Generate a unique ID
+          const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+          
+          // Create the new watcher
+          const newWatcher = {
+            id,
+            name,
+            property,
+            value,
+            userId: user.id,
+            createdAt: new Date().toISOString(),
+            createdBy: interaction.user.id,
+            disabled: false
+          };
+          
+          // Add to custom watchers
+          customWatchers.push(newWatcher);
+          
+          // Save to file
+          saveWatchers();
+          
+          await interaction.reply({
+            content: `✅ Created new Notion watcher "${name}" (ID: ${id}):\n- Property: ${property}\n- Value: ${value}\n- Notifies: ${user}\n\nThis watcher is now active and will notify ${user} when a Notion page's "${property}" property is set to "${value}".`,
+            ephemeral: true
+          });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+        }
+        
+        else if (subcommand === 'list') {
+          const embed = createWatchersEmbed();
+          await interaction.reply({ embeds: [embed] });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+        }
+        
+        else if (subcommand === 'properties') {
+          await interaction.deferReply();
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+          
+          try {
+            // Fetch database metadata to get properties
+            const database = await notion.databases.retrieve({
+              database_id: DB
+            });
+            
+            const properties = database.properties;
+            const propertyList = Object.entries(properties)
+              .map(([name, prop]) => `- **${name}** (${prop.type})`)
+              .join('\n');
+            
+            const embed = new EmbedBuilder()
+              .setColor(0x8A2BE2)
+              .setTitle('Notion Database Properties')
+              .setDescription(`The following properties are available in the Notion database:\n\n${propertyList}\n\nYou can use any property of type **select** with the \`/notion add\` command.`)
+              .setTimestamp();
+            
+            await interaction.editReply({ embeds: [embed] });
+          } catch (propError) {
+            logToFile(`Error fetching database properties: ${propError.message}`);
+            await interaction.editReply({
+              content: `❌ Error fetching database properties: ${propError.message}\n\nMake sure your Notion integration is set up correctly.`
+            });
           }
         }
         
-        // Format the content into proper Notion blocks with clickable links
-        const contentBlocks = formatNotionContent(formattedContent);
+        else if (['enable', 'disable', 'delete'].includes(subcommand)) {
+          const id = interaction.options.getString('id');
+          
+          // Find the watcher
+          let watcher, watcherIndex;
+          
+          if (subcommand === 'delete') {
+            watcherIndex = customWatchers.findIndex(w => w.id === id);
+            if (watcherIndex !== -1) {
+              watcher = customWatchers[watcherIndex];
+            }
+          } else {
+            watcher = customWatchers.find(w => w.id === id);
+          }
+          
+          if (!watcher) {
+            await interaction.reply({
+              content: `❌ Watcher with ID ${id} not found. Use \`/notion list\` to see available watchers.`,
+              ephemeral: true
+            });
+            hasResponded = true;
+            clearTimeout(timeoutWarning);
+            return;
+          }
+          
+          let responseMessage = '';
+          
+          if (subcommand === 'enable') {
+            watcher.disabled = false;
+            responseMessage = `✅ Enabled Notion watcher "${watcher.name}" (ID: ${id}).`;
+          }
+          else if (subcommand === 'disable') {
+            watcher.disabled = true;
+            responseMessage = `✅ Disabled Notion watcher "${watcher.name}" (ID: ${id}). It will no longer check for status changes.`;
+          }
+          else if (subcommand === 'delete') {
+            const watcherName = watcher.name;
+            customWatchers.splice(watcherIndex, 1);
+            responseMessage = `✅ Deleted Notion watcher "${watcherName}" (ID: ${id}).`;
+          }
+          
+          // Save to file
+          saveWatchers();
+          
+          await interaction.reply({
+            content: responseMessage,
+            ephemeral: true
+          });
+          hasResponded = true;
+          clearTimeout(timeoutWarning);
+        }
+      } catch (notionError) {
+        logToFile(`Error in /notion ${interaction.options?.getSubcommand() || ''} command: ${notionError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error processing Notion command: ${notionError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    else if (commandName === 'watchers') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
         
-        // Append the formatted blocks to the page
-        await notion.blocks.children.append({
-          block_id: pageId,
-          children: contentBlocks
+        try {
+          // Create a rich embed to display all watchers
+          const embed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setTitle('📋 All Notion Watchers')
+            .setDescription('Here are all configured Notion watchers that notify users when properties change.')
+            .setTimestamp();
+          
+          // Add field for default watcher
+          embed.addFields({
+            name: '🔍 Default Watcher',
+            value: `**Property:** ${TARGET_PROP}\n**Value:** ${TARGET_VALUE}\n**Notifies:** <@${RAY_ID}>`
+          });
+          
+          // Add fields for custom watchers
+          if (customWatchers && customWatchers.length > 0) {
+            customWatchers.forEach(watcher => {
+              const status = watcher.disabled ? '🔴 Disabled' : '🟢 Active';
+              embed.addFields({
+                name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
+                value: `**Property:** ${watcher.property}\n**Value:** ${watcher.value}\n**Notifies:** <@${watcher.userId}>\n**Created:** ${new Date(watcher.createdAt).toLocaleDateString()}`
+              });
+            });
+          } else {
+            embed.addFields({
+              name: 'Custom Watchers',
+              value: '*No custom watchers configured*\nUse `/notion add` to create watchers.'
+            });
+          }
+          
+          await interaction.editReply({ embeds: [embed] });
+        } catch (watcherError) {
+          logToFile(`Error displaying watchers: ${watcherError.message}`);
+          await interaction.editReply('❌ Error retrieving watchers. Check logs for details.');
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /watchers command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: '❌ Error retrieving watchers. Please try again.', ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
+    // Add similar error handling patterns for other commands...
+    // For brevity, I'm not showing all commands, but you should apply the same pattern
+    
+  } catch (error) {
+    // Global error handling for any unexpected errors
+    logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
+    logToFile(error.stack);
+    
+    try {
+      // Try to notify the user if possible
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ 
+          content: '❌ An unexpected error occurred. Please try again later.',
+          ephemeral: true 
+        });
+      } else {
+        await interaction.followUp({ 
+          content: '❌ An unexpected error occurred. Please try again later.',
+          ephemeral: true 
         });
       }
-      
-      // Format analysis for display
-      const analysisEmbed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle(`📊 Analysis Results for ${code}`)
-        .setDescription(`I've analyzed ${sortedMessages.length} messages and ${isNewPage ? 'created a new page with' : 'updated the following:'}`)
-        .setFooter({ text: `Analyzed ${limit} messages` })
-        .setTimestamp();
-      
-      // Add note about page creation if applicable
-      if (isNewPage) {
-        analysisEmbed.addFields({
-          name: '✨ New Page Created',
-          value: `Created a new Notion page for project **${code}**${firstImageUrl ? ' with thumbnail image' : ''}`
-        });
-      }
-      
-      // Add fields for updated properties
-      if (hasPropertiesToUpdate) {
-        analysisEmbed.addFields({
-          name: 'Updated Properties:',
-          value: Object.keys(notionProps).map(propName => {
-            return propName === 'Date' ? 
-                  `• **${propName}:** ${props.due_date}` : 
-                  propName === 'Priority' ?
-                  `• **${propName}:** ${props.priority}` :
-                  propName === 'Caption Status' ?
-                  `• **${propName}:** ${props.caption_status}` :
-                  propName === 'Script' ?
-                  `• **${propName}:** ${props.script_url}` :
-                  propName === 'Frame.io' ?
-                  `• **${propName}:** ${props.frameio_url}` :
-                  propName === 'Editor' ?
-                  `• **${propName}:** <@${props.editor_discord}>` :
-                  propName === 'Brand Deal' ?
-                  `• **${propName}:** Updated` :
-                  propName === 'Status' ?
-                  `• **${propName}:** ${props.status}` :
-                  `• **${propName}**`;
-          }).join('\n')
-        });
-      }
-      
-      // Add field for page content
-      if (hasPageContent) {
-        analysisEmbed.addFields({
-          name: 'Added Notes to Page:',
-          value: props.page_content.length > 1000 
-            ? props.page_content.substring(0, 997) + '...' 
-            : props.page_content
-        });
-      }
-      
-      await interaction.editReply({ content: `✅ Analysis complete! ${isNewPage ? 'New page created and' : ''} Notion has been updated.`, embeds: [analysisEmbed] });
-    } catch (error) {
-      logToFile(`Error in /analyze command: ${error.message}`);
-      await interaction.editReply(`❌ Error analyzing channel history: ${error.message}`);
+    } catch (replyError) {
+      logToFile(`Failed to send error message: ${replyError.message}`);
     }
   }
 });
