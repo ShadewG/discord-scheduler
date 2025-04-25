@@ -478,22 +478,13 @@ function toNotion(p) {
     out.Editor = { multi_select: editorNames.map(name => ({ name })) };
   }
   
-  // Handle Lead property - ensure it's a string even if an array was provided
+  // Handle Lead property as a People type (not select)
   if (p.lead) {
     const leadName = Array.isArray(p.lead) ? p.lead[0] : p.lead;
-    // Try fuzzy matching if options are available
-    if (CACHED_SELECT_OPTIONS['Lead']) {
-      const matchedLead = findClosestOption(leadName, CACHED_SELECT_OPTIONS['Lead']);
-      if (matchedLead) {
-        out.Lead = { select: { name: matchedLead } };
-      } else {
-        logToFile(`⚠️ Could not match lead "${leadName}" to available options`);
-        // Use original value as fallback
-        out.Lead = { select: { name: leadName } };
-      }
-    } else {
-      out.Lead = { select: { name: leadName } };
-    }
+    // For People type properties, we need a user's ID, not their name
+    // Since we don't have a mapping of names to IDs, we'll log this issue
+    logToFile(`Note: Lead property "${leadName}" is a People type in Notion but we don't have user IDs`);
+    // We'll skip this property since we can't set it properly without user IDs
   }
   
   // Brand Deal is a relation type, not a select
@@ -558,16 +549,6 @@ function toNotion(p) {
     out.Category = { select: { name: p.category } };
   }
   
-  // Page content for appending to the Notion page
-  if (p.page_content) {
-    out['Page Content'] = { 
-      rich_text: [{ 
-        type: 'text', 
-        text: { content: p.page_content } 
-      }]
-    };
-  }
-  
   return out;
 }
 
@@ -578,14 +559,6 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ]
-});
-
-// Store active cron jobs for management
-const activeJobs = new Map();
-
-// Log directory and file
-const logsDir = path.join(__dirname, 'logs');
-if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 const logFile = path.join(logsDir, 'bot-activity.log');
@@ -1874,7 +1847,9 @@ client.on('interactionCreate', async interaction => {
           
           case 'lead':
             propValue = interaction.options.getString('name');
-            notionProps.Lead = { select: { name: propValue } };
+            // Lead is a People type - we can't set it with a string name
+            logToFile(`Note: Lead property "${propValue}" is a People type in Notion but we don't have user IDs`);
+            // Skip setting this property
             break;
           
           case 'caption_status':
