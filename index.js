@@ -1172,10 +1172,10 @@ const commands = [
   
   new SlashCommandBuilder()
     .setName('meeting')
-    .setDescription('Schedule a meeting with another user')
+    .setDescription('Schedule a meeting with other users')
     .addUserOption(option =>
       option.setName('participant')
-        .setDescription('The user to meet with')
+        .setDescription('The primary user to meet with')
         .setRequired(true))
     .addStringOption(option =>
       option.setName('time')
@@ -1184,6 +1184,10 @@ const commands = [
     .addStringOption(option =>
       option.setName('topic')
         .setDescription('Meeting topic (optional)')
+        .setRequired(false))
+    .addStringOption(option =>
+      option.setName('additional_participants')
+        .setDescription('Additional participants (mention them with @user1 @user2)')
         .setRequired(false)),
         
   new SlashCommandBuilder()
@@ -1951,8 +1955,30 @@ client.on('interactionCreate', async interaction => {
         const participant = interaction.options.getUser('participant');
         const timeStr = interaction.options.getString('time');
         const topic = interaction.options.getString('topic') || 'Discussion';
+        const additionalParticipants = interaction.options.getString('additional_participants');
         
-        logToFile(`Meeting details: with ${participant.tag}, time: ${timeStr}, topic: ${topic}`);
+        // Modify to handle multiple participants
+        let participants = [participant];
+        if (additionalParticipants) {
+          // Get the additional participant mentions and extract the IDs
+          const additionalParticipantIds = additionalParticipants.match(/<@!?(\d+)>/g) || [];
+          if (additionalParticipantIds.length > 0) {
+            for (const mention of additionalParticipantIds) {
+              const id = mention.replace(/<@!?(\d+)>/g, '$1');
+              // Try to fetch the user to ensure they exist
+              try {
+                const user = await client.users.fetch(id);
+                if (user && !participants.some(p => p.id === user.id)) {
+                  participants.push(user);
+                }
+              } catch (userError) {
+                logToFile(`Warning: Could not fetch user with ID ${id}: ${userError.message}`);
+              }
+            }
+          }
+        }
+        
+        logToFile(`Meeting details: with ${participants.map(p => p.tag).join(', ')}, time: ${timeStr}, topic: ${topic}`);
         
         // Parse the meeting time
         const meetingTime = parseTimeString(timeStr);
@@ -1961,8 +1987,8 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
-        // Calculate the reminder time (10 minutes before)
-        const reminderTime = new Date(meetingTime.getTime() - 10 * 60 * 1000);
+        // Calculate the reminder time (5 minutes before)
+        const reminderTime = new Date(meetingTime.getTime() - 5 * 60 * 1000);
         
         // Format time for display
         const timeDisplay = meetingTime.toLocaleString('en-US', {
@@ -1977,7 +2003,7 @@ client.on('interactionCreate', async interaction => {
         // Create the new meeting
         const newMeeting = {
           id,
-          participant: participant.id,
+          participants: participants.map(p => p.id),
           time: timeStr,
           scheduledTime: meetingTime.toISOString(),
           reminderTime: reminderTime.toISOString(),
@@ -1995,24 +2021,17 @@ client.on('interactionCreate', async interaction => {
         // Save to file
         saveMeetings();
         
-        // Reply first to ensure we don't time out
+        // Participant mentions for message
+        const participantMentions = participants.map(p => `<@${p.id}>`).join(', ');
+        
+        // Reply to confirm meeting creation (only one message)
         await interaction.editReply({
-          content: `✅ Meeting scheduled with ${participant} for **${timeDisplay}**\n📋 Topic: ${topic}\n⏰ A reminder will be sent to both of you 10 minutes before the meeting.`,
-          allowedMentions: { users: [participant.id] }
+          content: `✅ Meeting scheduled with ${participantMentions} for **${timeDisplay}**\n📋 Topic: ${topic}\n⏰ A reminder will be sent 5 minutes before the meeting.`,
+          allowedMentions: { users: participants.map(p => p.id) }
         });
         
-        // Send a DM to the participant after replying to the interaction
-        try {
-          await sendDirectMessage(
-            participant.id,
-            `📅 <@${interaction.user.id}> has scheduled a meeting with you for **${timeDisplay}**\n📋 Topic: ${topic}\n⏰ I'll send you both a reminder 10 minutes before the meeting.`
-          );
-          logToFile(`Sent DM to participant ${participant.tag} for meeting ${id}`);
-        } catch (dmError) {
-          // Log but don't fail the command if DM fails
-          logToFile(`Warning: Could not send DM to participant: ${dmError.message}`);
-          // Still continue with the meeting creation
-        }
+        // No DM sent at creation time per request
+        
       } catch (cmdError) {
         logToFile(`Error in /meeting command: ${cmdError.message}`);
         logToFile(cmdError.stack);
@@ -2055,7 +2074,7 @@ client.on('interactionCreate', async interaction => {
           let isNewPage = false;
           
           // Fetch channel messages for analysis
-          const messages = await interaction.channel.messages.fetch({ limit: 300 });
+          const messages = await interaction.channel.messages.fetch({ limit: 100 });
           
           // Look for the first image in the messages for a thumbnail
           const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
@@ -3068,7 +3087,11 @@ client.once('ready', async () => {
   
   // Fetch available Notion options for better matching
   await fetchNotionOptions();
-  
+
+  // Add this line to load watchers
+  customWatchers = loadWatchers();
+  logToFile(`Loaded ${customWatchers.length} custom watchers from file`);
+
   logToFile('\n🔄  Bot is running! Press Ctrl+C to stop.');
   
   // Log the next execution times for all jobs
@@ -3090,7 +3113,7 @@ client.on('guildCreate', async guild => {
 client.login(DISCORD_TOKEN); 
 
 // Custom Notion watchers - will be loaded from file
-const customWatchers = [];
+let customWatchers = [];
 
 // Load custom watchers from a file if it exists
 function loadWatchers() {
@@ -3202,6 +3225,46 @@ async function sendDirectMessage(userId, message) {
   }
 }
 
+// Function to find the first image URL in a set of messages
+function findFirstImageUrl(messages) {
+  if (!messages || messages.length === 0) return null;
+  
+  for (const msg of messages) {
+    // Check for attachments
+    if (msg.attachments && msg.attachments.size > 0) {
+      const attachment = Array.from(msg.attachments.values())[0];
+      if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+        logToFile(`📸 Found image attachment with URL: ${attachment.url}`);
+        return attachment.url;
+      }
+    }
+    
+    // Check for embeds with images
+    if (msg.embeds && msg.embeds.length > 0) {
+      for (const embed of msg.embeds) {
+        if (embed.image && embed.image.url) {
+          logToFile(`📸 Found image in embed with URL: ${embed.image.url}`);
+          return embed.image.url;
+        }
+      }
+    }
+    
+    // Look for image URLs in the content
+    if (msg.content) {
+      // More comprehensive image URL regex
+      const urlRegex = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|svg)(\?[^\s]*)?)/i;
+      const match = msg.content.match(urlRegex);
+      if (match && match[1]) {
+        logToFile(`📸 Found image URL in message content: ${match[1]}`);
+        return match[1];
+      }
+    }
+  }
+  
+  logToFile(`⚠️ No image found in channel messages`);
+  return null;
+}
+
 // Check for upcoming meetings and send reminders
 async function checkMeetings() {
   if (customMeetings.length === 0) return;
@@ -3229,8 +3292,8 @@ async function checkMeetings() {
     // If time couldn't be parsed, skip
     if (!meetingTime) continue;
     
-    // Calculate the reminder time (10 minutes before meeting)
-    const reminderTime = new Date(meetingTime.getTime() - 10 * 60 * 1000);
+    // Calculate the reminder time (5 minutes before meeting)
+    const reminderTime = new Date(meetingTime.getTime() - 5 * 60 * 1000);
     
     // Check if it's time for the reminder
     if (now >= reminderTime && now < meetingTime) {
@@ -3242,17 +3305,46 @@ async function checkMeetings() {
         hour12: true
       });
       
-      // Remind the creator
-      await sendDirectMessage(
-        meeting.createdBy,
-        `🔔 Reminder: Your meeting${topicText} with <@${meeting.participant}> starts in 10 minutes (${timeText})!`
-      );
+      // Handle multiple participants
+      const participants = Array.isArray(meeting.participants) ? meeting.participants : 
+                           (meeting.participant ? [meeting.participant] : []);
       
-      // Remind the participant
-      await sendDirectMessage(
-        meeting.participant,
-        `🔔 Reminder: <@${meeting.createdBy}> has scheduled a meeting${topicText} with you in 10 minutes (${timeText})!`
-      );
+      // Handle legacy meeting format
+      if (!Array.isArray(meeting.participants) && meeting.participant) {
+        meeting.participants = [meeting.participant];
+        delete meeting.participant;
+        saveMeetings();
+      }
+      
+      // Get participants as mentions
+      const participantMentions = participants
+        .filter(pid => pid !== meeting.createdBy) // Filter out creator if they're in the list
+        .map(pid => `<@${pid}>`)
+        .join(', ');
+      
+      // Add creator to the list for notification
+      const allParticipants = [...new Set([meeting.createdBy, ...participants])];
+      
+      // Send DM to all participants
+      for (const userId of allParticipants) {
+        try {
+          // Customize message based on whether user is creator or participant
+          let message;
+          if (userId === meeting.createdBy) {
+            message = `🔔 Reminder: Your meeting${topicText} starts in 5 minutes (${timeText})!`;
+            if (participantMentions) {
+              message += ` Participants: ${participantMentions}`;
+            }
+          } else {
+            message = `🔔 Reminder: <@${meeting.createdBy}> has scheduled a meeting${topicText} in 5 minutes (${timeText})!`;
+          }
+          
+          await sendDirectMessage(userId, message);
+          logToFile(`Sent reminder to user ${userId} for meeting ${meeting.id}`);
+        } catch (dmError) {
+          logToFile(`Failed to send reminder to user ${userId}: ${dmError.message}`);
+        }
+      }
       
       // Mark as notified
       meeting.notified = true;
