@@ -694,9 +694,13 @@ async function pollNotion() {
       for (const page of res.results) {
         const pageId = page.id;
         
-        // Skip if we've already processed this page
-        if (processedPageIds.has(pageId)) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed previously. Skipping.`);
+        // Create a unique key for this page that includes timestamp to prevent hourly repeats
+        const pageLastEditTime = new Date(page.last_edited_time).getTime();
+        const uniquePageKey = `${pageId}-${pageLastEditTime}`;
+        
+        // Skip if we've already processed this page with this specific edit timestamp
+        if (processedPageIds.has(uniquePageKey)) {
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... with edit time ${page.last_edited_time} was already processed previously. Skipping.`);
           continue;
         }
         
@@ -707,7 +711,7 @@ async function pollNotion() {
           logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for default watcher.`);
           
           // Still add to processed pages so we don't check it again
-          processedPageIds.add(pageId);
+          processedPageIds.add(uniquePageKey);
           continue;
         }
         
@@ -752,7 +756,7 @@ async function pollNotion() {
         logToFile(`   - Current check time: ${new Date().toISOString()}`);
         
         // Add to processed pages so we don't notify again
-        processedPageIds.add(pageId);
+        processedPageIds.add(uniquePageKey);
         processedThisRun.add(pageId);
         
         // Send to the dedicated Notion channel instead of regular channel
@@ -888,13 +892,16 @@ async function pollNotion() {
       logToFile(`📊 Sent ${notificationCount} Notion notifications`);
     }
     
-    // Periodically clear the processedPageIds cache to prevent it from growing too large
-    // We'll clear it every hour based on the current minute
+    // MODIFIED: Only clear cache once per day instead of every hour
+    // to prevent repeated notifications within the same day
+    const currentHour = new Date().getHours();
     const currentMinute = new Date().getMinutes();
-    if (currentMinute === 0) { // At the top of each hour
+    
+    // Clear only at midnight (0:00)
+    if (currentHour === 0 && currentMinute === 0) {
       const oldSize = processedPageIds.size;
       processedPageIds.clear();
-      logToFile(`🧹 Cleared processed pages cache (cleared ${oldSize} page IDs)`);
+      logToFile(`🧹 Cleared processed pages cache at midnight (cleared ${oldSize} page IDs)`);
     }
     
     // Only update lastCheck if we actually checked the database successfully
