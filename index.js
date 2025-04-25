@@ -1146,7 +1146,7 @@ const commands = [
         .setRequired(false)),
   
   new SlashCommandBuilder()
-    .setName('availability"),
+    .setName("availability"),
   
   new SlashCommandBuilder()
     .setName('sync')
