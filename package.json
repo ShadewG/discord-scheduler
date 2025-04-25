@@ -18,11 +18,12 @@
   "license": "ISC",
   "dependencies": {
     "@notionhq/client": "^2.3.0",
-    "openai": "^4.22.0",
     "chrono-node": "^2.6.3",
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.1",
-    "node-cron": "^3.0.3"
+    "moment-timezone": "^0.5.48",
+    "node-cron": "^3.0.3",
+    "openai": "^4.96.0"
   },
   "engines": {
     "node": ">=20.0.0"

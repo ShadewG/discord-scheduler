@@ -20,6 +20,8 @@ if (!DISCORD_TOKEN || !clientId) {
 const commands = [
   new SlashCommandBuilder().setName('link').setDescription('Get the Notion link for the current project')
     .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+  new SlashCommandBuilder().setName('availability').setDescription('Show a live time board of who is currently working')
+    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
   new SlashCommandBuilder().setName('sync').setDescription('Update Notion with properties from your message')
     .addStringOption(option => option.setName('text').setDescription('The properties to update').setRequired(true))
     .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion')),

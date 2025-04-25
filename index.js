@@ -1054,11 +1054,6 @@ if (loadedJobs) {
   jobs = loadedJobs;
 }
 
-// Map that tracks all active cron jobs
-const activeJobs = new Map();
-
-}
-
 // Add this code:
 // Add custom meetings support
 const meetingsFilePath = path.join(__dirname, 'meetings.json');
@@ -2896,6 +2891,93 @@ client.on('interactionCreate', async interaction => {
       }
     }
     
+    // Availability command to show team availability
+    else if (commandName === 'availability') {
+      try {
+        // Check if response should be ephemeral
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Create embed for availability display
+        const embed = new EmbedBuilder()
+          .setColor(0x00AAFF)
+          .setTitle('Team Availability')
+          .setDescription(`Current Berlin time: **${getCurrentBerlinTime()}**\nShowing who is currently working and how much time they have left in their shift.`)
+          .setTimestamp();
+        
+        // Get active and inactive staff members
+        const activeStaff = STAFF_AVAILABILITY.filter(staff => isStaffActive(staff));
+        const inactiveStaff = STAFF_AVAILABILITY.filter(staff => !isStaffActive(staff));
+        
+        // Add fields for active staff
+        if (activeStaff.length > 0) {
+          const activeList = activeStaff.map(staff => {
+            const timeLeft = getTimeLeftInShift(staff);
+            const progressBar = createTimeProgressBar(staff);
+            return `**${staff.name}**: ${timeLeft}\n${progressBar}`;
+          }).join('\n\n');
+          
+          embed.addFields({
+            name: '🟢 Currently Working',
+            value: activeList || 'Nobody is currently working'
+          });
+        } else {
+          embed.addFields({
+            name: '🟢 Currently Working',
+            value: 'Nobody is currently working at this time'
+          });
+        }
+        
+        // Add fields for inactive staff
+        if (inactiveStaff.length > 0) {
+          const inactiveList = inactiveStaff.map(staff => {
+            return `**${staff.name}**: Working hours ${staff.startHour}:00-${staff.endHour}:00`;
+          }).join('\n');
+          
+          embed.addFields({
+            name: '⚪ Offline',
+            value: inactiveList
+          });
+        }
+        
+        // Send the response
+        await interaction.editReply({ embeds: [embed] });
+        
+        // If not ephemeral, auto-delete after 5 minutes
+        if (!ephemeral) {
+          setTimeout(async () => {
+            try {
+              const fetchedReply = await interaction.fetchReply().catch(() => null);
+              if (fetchedReply) {
+                await interaction.deleteReply();
+                logToFile(`🗑️ Auto-deleted availability results after 5 minutes`);
+              }
+            } catch (deleteError) {
+              logToFile(`Error deleting availability reply: ${deleteError.message}`);
+            }
+          }, 5 * 60 * 1000); // 5 minutes
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /availability command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ 
+              content: `❌ Error showing availability: ${cmdError.message}`, 
+              ephemeral: true 
+            });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          await interaction.editReply(`❌ Error showing availability: ${cmdError.message}`);
+        }
+      }
+    }
+    
     // Handle simpler commands with standardized error handling
     else if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
       try {
@@ -4279,257 +4361,6 @@ async function handleSyncMessage(msg) {
   } catch (err) {
     console.error(err);
     quietReply('❌ Error updating Notion; check logs.');
-  }
-}
-
-// Function to create a new Notion page if one doesn't exist
-
-// Add these new functions before the existing function:
-// Function to find a project by code or link
-async function findProjectByQuery(query) {
-  if (!query) return null;
-  query = query.trim();
-  
-  // Case 1: Query is a project code (CL27, IB23, etc.)
-  const codeMatch = query.match(/^(CL|IB|BC)\d{2}$/i);
-  if (codeMatch) {
-    const code = codeMatch[0].toUpperCase();
-    return await findProjectByCode(code);
-  }
-  
-  // Case 2: Query is a Frame.io link
-  if (query.includes('frame.io') || query.includes('f.io')) {
-    return await findProjectByLink(query, 'Frame.io');
-  }
-  
-  // Case 3: Query is a script link (Google Docs, Notion, etc.)
-  if (query.includes('docs.google.com') || 
-      query.includes('script') || 
-      query.includes('notion.site')) {
-    return await findProjectByLink(query, 'Script');
-  }
-  
-  // Case 4: Query is a YouTube link or ID
-  if (query.includes('youtube.com') || 
-      query.includes('youtu.be') || 
-      query.match(/^[a-zA-Z0-9_-]{11}$/)) {
-    return await findProjectByLink(query, 'YouTube');
-  }
-  
-  // If nothing matched, try to find by partial match
-  return await findProjectByPartialMatch(query);
-}
-
-// Find a project by its code
-async function findProjectByCode(code) {
-  try {
-    const pageId = await findPage(code);
-    if (!pageId) return null;
-    
-    // Get the page details
-    const page = await notion.pages.retrieve({ page_id: pageId });
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by code ${code}: ${error.message}`);
-    return null;
-  }
-}
-
-// Find a project by a link in its properties
-async function findProjectByLink(link, propertyType) {
-  try {
-    // Query the database to find pages with matching links
-    let query = {};
-    
-    if (propertyType === 'Frame.io') {
-      query = {
-        database_id: DB,
-        filter: {
-          property: 'Frame.io',
-          url: { contains: link }
-        },
-        page_size: 5
-      };
-    } else if (propertyType === 'Script') {
-      query = {
-        database_id: DB,
-        filter: {
-          property: 'Script',
-          url: { contains: link }
-        },
-        page_size: 5
-      };
-    } else if (propertyType === 'YouTube') {
-      // YouTube links might be in the title, content, or a custom property
-      // Let's try a general search approach
-      query = {
-        database_id: DB,
-        filter: {
-          or: [
-            {
-              property: CACHED_TITLE_PROPERTY || 'Project name',
-              rich_text: { contains: link }
-            }
-          ]
-        },
-        page_size: 5
-      };
-    }
-    
-    const response = await notion.databases.query(query);
-    
-    if (response.results.length === 0) {
-      return null;
-    }
-    
-    // Get the first matching page
-    const page = response.results[0];
-    
-    // Extract code from title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    const title = titleProp.title.map(t => t.plain_text).join('');
-    const code = projectCode(title);
-    
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by ${propertyType} link: ${error.message}`);
-    return null;
-  }
-}
-
-// Find a project by partial match in various properties
-async function findProjectByPartialMatch(query) {
-  try {
-    // Query the database with a general text search
-    const response = await notion.databases.query({
-      database_id: DB,
-      filter: {
-        or: [
-          {
-            property: CACHED_TITLE_PROPERTY || 'Project name',
-            rich_text: { contains: query }
-          }
-        ]
-      },
-      page_size: 5
-    });
-    
-    if (response.results.length === 0) {
-      return null;
-    }
-    
-    // Get the first matching page
-    const page = response.results[0];
-    
-    // Extract code from title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    const title = titleProp.title.map(t => t.plain_text).join('');
-    const code = projectCode(title);
-    
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by partial match: ${error.message}`);
-    return null;
-  }
-}
-
-// Helper function to extract relevant information from a project
-async function extractProjectInfo(page, code) {
-  if (!page) return null;
-  
-  const result = {
-    code,
-    title: null,
-    notionUrl: getNotionPageUrl(page.id),
-    discordChannel: null,
-    frameioUrl: null,
-    scriptUrl: null,
-    editors: [],
-    status: null
-  };
-  
-  try {
-    // Extract title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    if (titleProp && titleProp.title && titleProp.title.length > 0) {
-      result.title = titleProp.title.map(t => t.plain_text).join('');
-    }
-    
-    // Extract Discord channel
-    const discordProp = page.properties['Discord Channel'];
-    if (discordProp && discordProp.url) {
-      result.discordChannel = discordProp.url;
-      
-      // Extract channel ID from the URL
-      const channelMatch = discordProp.url.match(/channels\/\d+\/(\d+)/);
-      if (channelMatch && channelMatch[1]) {
-        const channelId = channelMatch[1];
-        try {
-          const channel = await client.channels.fetch(channelId);
-          if (channel) {
-            result.discordChannelName = channel.name;
-            result.discordChannelId = channelId;
-          }
-        } catch (channelError) {
-          logToFile(`Couldn't fetch Discord channel: ${channelError.message}`);
-        }
-      }
-    }
-    
-    // Extract Frame.io URL
-    const frameIoProp = page.properties['Frame.io'];
-    if (frameIoProp && frameIoProp.url) {
-      result.frameioUrl = frameIoProp.url;
-    }
-    
-    // Extract Script URL
-    const scriptProp = page.properties['Script'];
-    if (scriptProp && scriptProp.url) {
-      result.scriptUrl = scriptProp.url;
-    }
-    
-    // Extract Editors
-    const editorProp = page.properties['Editor'];
-    if (editorProp && editorProp.multi_select) {
-      result.editors = editorProp.multi_select.map(option => option.name);
-    } else if (editorProp && editorProp.people) {
-      result.editors = editorProp.people.map(person => person.name);
-    }
-    
-    // Extract Status
-    const statusProp = page.properties['Status'];
-    if (statusProp && statusProp.status) {
-      result.status = statusProp.status.name;
-    }
-    
-    // Extract other relevant properties
-    const dateProp = page.properties['Date'];
-    if (dateProp && dateProp.date) {
-      result.dueDate = dateProp.date.start;
-    }
-    
-    return result;
-  } catch (error) {
-    logToFile(`Error extracting project info: ${error.message}`);
-    return result;  // Return what we have so far
-  }
-}
-
-// Find Discord channels for a project code
-async function findDiscordChannels(code) {
-  if (!code) return [];
-  
-  try {
-    // Find channels with this code in the name
-    const matchingChannels = client.channels.cache.filter(channel => 
-      channel.type === ChannelType.GuildText && 
-      channel.name.toLowerCase().includes(code.toLowerCase())
-    );
-    
-    return Array.from(matchingChannels.values());
-  } catch (error) {
-    logToFile(`Error finding Discord channels for ${code}: ${error.message}`);
-    return [];
   }
 }
 
