@@ -1287,6 +1287,18 @@ const commands = [
         .setRequired(false)),
     
   new SlashCommandBuilder()
+    .setName('where')
+    .setDescription('Find all info about a project by code or link')
+    .addStringOption(option => 
+      option.setName('query')
+        .setDescription('Project code (CL27) or any link (Frame.io, Script, YouTube)')
+        .setRequired(true))
+    .addBooleanOption(option =>
+      option.setName('ephemeral')
+        .setDescription('Make the response only visible to you')
+        .setRequired(false)),
+        
+  new SlashCommandBuilder()
     .setName('register')
     .setDescription('Force re-register all slash commands (admin only)'),
     
@@ -1570,6 +1582,7 @@ function createHelpEmbed() {
       { name: '📋 Notion Integration', value: '__________________________' },
       { name: '/sync', value: 'Update Notion with details from your message' },
       { name: '/analyze', value: 'Analyze channel messages and update Notion automatically' },
+      { name: '/where', value: 'Find all project links and info by code or any link (works in DMs too)' },
       { name: '/link', value: 'Get the Notion link for the current project' },
       { name: '/set', value: 'Set a specific property on the Notion page for this channel' },
       { name: '/notion', value: 'Manage Notion status watchers (add/list/enable/disable/delete/properties)' },
@@ -2676,6 +2689,189 @@ client.on('interactionCreate', async interaction => {
           }
         } else {
           await interaction.editReply(`❌ Error getting Notion link: ${cmdError.message}`);
+        }
+      }
+    }
+    
+    // Where command to find all project info
+    else if (commandName === 'where') {
+      try {
+        // Get query and ephemeral setting
+        const query = interaction.options.getString('query');
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Log the query
+        logToFile(`/where command used with query: "${query}" by ${interaction.user.tag}`);
+        
+        // Search for the project
+        const result = await findProjectByQuery(query);
+        
+        if (!result) {
+          await interaction.editReply({
+            content: `❌ No project found matching "${query}". Try a different search.`,
+            ephemeral: true
+          });
+          return;
+        }
+        
+        // Extract project information
+        const projectInfo = await extractProjectInfo(result.page, result.code);
+        
+        if (!projectInfo) {
+          await interaction.editReply({
+            content: `❌ Error extracting project info for "${query}".`,
+            ephemeral: true
+          });
+          return;
+        }
+        
+        // Find Discord channels if not already found
+        let discordChannels = [];
+        if (!projectInfo.discordChannelId) {
+          discordChannels = await findDiscordChannels(projectInfo.code);
+        }
+        
+        // Create an embed to display project info
+        const embed = new EmbedBuilder()
+          .setColor(0x0099FF)
+          .setTitle(`Project: ${projectInfo.title || projectInfo.code}`)
+          .setDescription(`Here's everything you need for project **${projectInfo.code}**:`)
+          .setTimestamp();
+        
+        // Add fields for each piece of information
+        // Notion Link
+        if (projectInfo.notionUrl) {
+          embed.addFields({
+            name: '📋 Notion Card',
+            value: projectInfo.notionUrl
+          });
+        }
+        
+        // Discord Channel
+        let discordValue = 'No Discord channel found';
+        if (projectInfo.discordChannelId) {
+          discordValue = `<#${projectInfo.discordChannelId}>`;
+        } else if (discordChannels.length > 0) {
+          discordValue = discordChannels.map(channel => `<#${channel.id}>`).join('\n');
+        }
+        embed.addFields({
+          name: '💬 Discord Channel',
+          value: discordValue
+        });
+        
+        // Frame.io
+        if (projectInfo.frameioUrl) {
+          embed.addFields({
+            name: '🎬 Frame.io',
+            value: projectInfo.frameioUrl
+          });
+        }
+        
+        // Script
+        if (projectInfo.scriptUrl) {
+          embed.addFields({
+            name: '📝 Script',
+            value: projectInfo.scriptUrl
+          });
+        }
+        
+        // Editors
+        if (projectInfo.editors && projectInfo.editors.length > 0) {
+          embed.addFields({
+            name: '✂️ Editors',
+            value: projectInfo.editors.join(', ')
+          });
+        }
+        
+        // Status & Due Date
+        let statusText = projectInfo.status || 'N/A';
+        if (projectInfo.dueDate) {
+          statusText += ` (Due: ${projectInfo.dueDate})`;
+        }
+        embed.addFields({
+          name: '📊 Status',
+          value: statusText
+        });
+        
+        // Create buttons for easy access
+        const buttons = [];
+        
+        // Notion button
+        if (projectInfo.notionUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open in Notion')
+              .setStyle(ButtonStyle.Link)
+              .setURL(projectInfo.notionUrl)
+          );
+        }
+        
+        // Frame.io button
+        if (projectInfo.frameioUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open Frame.io')
+              .setStyle(ButtonStyle.Link)
+              .setURL(projectInfo.frameioUrl)
+          );
+        }
+        
+        // Script button
+        if (projectInfo.scriptUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open Script')
+              .setStyle(ButtonStyle.Link)
+              .setURL(projectInfo.scriptUrl)
+          );
+        }
+        
+        // Add buttons if we have any
+        const components = [];
+        if (buttons.length > 0) {
+          const row = new ActionRowBuilder().addComponents(...buttons);
+          components.push(row);
+        }
+        
+        // Send the response
+        await interaction.editReply({
+          embeds: [embed],
+          components
+        });
+        
+        // If not ephemeral, auto-delete after 5 minutes
+        if (!ephemeral) {
+          setTimeout(async () => {
+            try {
+              // Check if the reply still exists and delete it
+              const fetchedReply = await interaction.fetchReply().catch(() => null);
+              if (fetchedReply) {
+                await interaction.deleteReply();
+                logToFile(`🗑️ Auto-deleted where command results for ${projectInfo.code} after 5 minutes`);
+              }
+            } catch (deleteError) {
+              logToFile(`Error deleting where command reply: ${deleteError.message}`);
+            }
+          }, 5 * 60 * 1000); // 5 minutes
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /where command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ 
+              content: `❌ Error finding project: ${cmdError.message}`, 
+              ephemeral: true 
+            });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          await interaction.editReply(`❌ Error finding project: ${cmdError.message}`);
         }
       }
     }
@@ -4038,6 +4234,257 @@ async function handleSyncMessage(msg) {
   } catch (err) {
     console.error(err);
     quietReply('❌ Error updating Notion; check logs.');
+  }
+}
+
+// Function to create a new Notion page if one doesn't exist
+
+// Add these new functions before the existing function:
+// Function to find a project by code or link
+async function findProjectByQuery(query) {
+  if (!query) return null;
+  query = query.trim();
+  
+  // Case 1: Query is a project code (CL27, IB23, etc.)
+  const codeMatch = query.match(/^(CL|IB|BC)\d{2}$/i);
+  if (codeMatch) {
+    const code = codeMatch[0].toUpperCase();
+    return await findProjectByCode(code);
+  }
+  
+  // Case 2: Query is a Frame.io link
+  if (query.includes('frame.io') || query.includes('f.io')) {
+    return await findProjectByLink(query, 'Frame.io');
+  }
+  
+  // Case 3: Query is a script link (Google Docs, Notion, etc.)
+  if (query.includes('docs.google.com') || 
+      query.includes('script') || 
+      query.includes('notion.site')) {
+    return await findProjectByLink(query, 'Script');
+  }
+  
+  // Case 4: Query is a YouTube link or ID
+  if (query.includes('youtube.com') || 
+      query.includes('youtu.be') || 
+      query.match(/^[a-zA-Z0-9_-]{11}$/)) {
+    return await findProjectByLink(query, 'YouTube');
+  }
+  
+  // If nothing matched, try to find by partial match
+  return await findProjectByPartialMatch(query);
+}
+
+// Find a project by its code
+async function findProjectByCode(code) {
+  try {
+    const pageId = await findPage(code);
+    if (!pageId) return null;
+    
+    // Get the page details
+    const page = await notion.pages.retrieve({ page_id: pageId });
+    return { page, code };
+  } catch (error) {
+    logToFile(`Error finding project by code ${code}: ${error.message}`);
+    return null;
+  }
+}
+
+// Find a project by a link in its properties
+async function findProjectByLink(link, propertyType) {
+  try {
+    // Query the database to find pages with matching links
+    let query = {};
+    
+    if (propertyType === 'Frame.io') {
+      query = {
+        database_id: DB,
+        filter: {
+          property: 'Frame.io',
+          url: { contains: link }
+        },
+        page_size: 5
+      };
+    } else if (propertyType === 'Script') {
+      query = {
+        database_id: DB,
+        filter: {
+          property: 'Script',
+          url: { contains: link }
+        },
+        page_size: 5
+      };
+    } else if (propertyType === 'YouTube') {
+      // YouTube links might be in the title, content, or a custom property
+      // Let's try a general search approach
+      query = {
+        database_id: DB,
+        filter: {
+          or: [
+            {
+              property: CACHED_TITLE_PROPERTY || 'Project name',
+              rich_text: { contains: link }
+            }
+          ]
+        },
+        page_size: 5
+      };
+    }
+    
+    const response = await notion.databases.query(query);
+    
+    if (response.results.length === 0) {
+      return null;
+    }
+    
+    // Get the first matching page
+    const page = response.results[0];
+    
+    // Extract code from title
+    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
+    const title = titleProp.title.map(t => t.plain_text).join('');
+    const code = projectCode(title);
+    
+    return { page, code };
+  } catch (error) {
+    logToFile(`Error finding project by ${propertyType} link: ${error.message}`);
+    return null;
+  }
+}
+
+// Find a project by partial match in various properties
+async function findProjectByPartialMatch(query) {
+  try {
+    // Query the database with a general text search
+    const response = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        or: [
+          {
+            property: CACHED_TITLE_PROPERTY || 'Project name',
+            rich_text: { contains: query }
+          }
+        ]
+      },
+      page_size: 5
+    });
+    
+    if (response.results.length === 0) {
+      return null;
+    }
+    
+    // Get the first matching page
+    const page = response.results[0];
+    
+    // Extract code from title
+    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
+    const title = titleProp.title.map(t => t.plain_text).join('');
+    const code = projectCode(title);
+    
+    return { page, code };
+  } catch (error) {
+    logToFile(`Error finding project by partial match: ${error.message}`);
+    return null;
+  }
+}
+
+// Helper function to extract relevant information from a project
+async function extractProjectInfo(page, code) {
+  if (!page) return null;
+  
+  const result = {
+    code,
+    title: null,
+    notionUrl: getNotionPageUrl(page.id),
+    discordChannel: null,
+    frameioUrl: null,
+    scriptUrl: null,
+    editors: [],
+    status: null
+  };
+  
+  try {
+    // Extract title
+    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
+    if (titleProp && titleProp.title && titleProp.title.length > 0) {
+      result.title = titleProp.title.map(t => t.plain_text).join('');
+    }
+    
+    // Extract Discord channel
+    const discordProp = page.properties['Discord Channel'];
+    if (discordProp && discordProp.url) {
+      result.discordChannel = discordProp.url;
+      
+      // Extract channel ID from the URL
+      const channelMatch = discordProp.url.match(/channels\/\d+\/(\d+)/);
+      if (channelMatch && channelMatch[1]) {
+        const channelId = channelMatch[1];
+        try {
+          const channel = await client.channels.fetch(channelId);
+          if (channel) {
+            result.discordChannelName = channel.name;
+            result.discordChannelId = channelId;
+          }
+        } catch (channelError) {
+          logToFile(`Couldn't fetch Discord channel: ${channelError.message}`);
+        }
+      }
+    }
+    
+    // Extract Frame.io URL
+    const frameIoProp = page.properties['Frame.io'];
+    if (frameIoProp && frameIoProp.url) {
+      result.frameioUrl = frameIoProp.url;
+    }
+    
+    // Extract Script URL
+    const scriptProp = page.properties['Script'];
+    if (scriptProp && scriptProp.url) {
+      result.scriptUrl = scriptProp.url;
+    }
+    
+    // Extract Editors
+    const editorProp = page.properties['Editor'];
+    if (editorProp && editorProp.multi_select) {
+      result.editors = editorProp.multi_select.map(option => option.name);
+    } else if (editorProp && editorProp.people) {
+      result.editors = editorProp.people.map(person => person.name);
+    }
+    
+    // Extract Status
+    const statusProp = page.properties['Status'];
+    if (statusProp && statusProp.status) {
+      result.status = statusProp.status.name;
+    }
+    
+    // Extract other relevant properties
+    const dateProp = page.properties['Date'];
+    if (dateProp && dateProp.date) {
+      result.dueDate = dateProp.date.start;
+    }
+    
+    return result;
+  } catch (error) {
+    logToFile(`Error extracting project info: ${error.message}`);
+    return result;  // Return what we have so far
+  }
+}
+
+// Find Discord channels for a project code
+async function findDiscordChannels(code) {
+  if (!code) return [];
+  
+  try {
+    // Find channels with this code in the name
+    const matchingChannels = client.channels.cache.filter(channel => 
+      channel.type === ChannelType.GuildText && 
+      channel.name.toLowerCase().includes(code.toLowerCase())
+    );
+    
+    return Array.from(matchingChannels.values());
+  } catch (error) {
+    logToFile(`Error finding Discord channels for ${code}: ${error.message}`);
+    return [];
   }
 }
 
