@@ -69,6 +69,10 @@ You are an assistant that **reads the last N Discord messages for a single
 video-project channel** and produces *only the final state* of each project
 property so we can patch a Notion row.
 
+IMPORTANT: Be EXTREMELY careful with property names and status options. 
+The database has specific property names and status values - if you use the 
+wrong names or values, the API will return errors!
+
 ─────────────────
 ## Output contract
 Return **ONE** of the following:
@@ -138,7 +142,7 @@ Return **ONE** of the following:
   (Allowed: Uploaded · FOIA Received · Ready for production · Writing ·
    Writing Review · VA Render · VA Review · Writing Revisions · Ready for Editing ·
    Clip Selection · Clip Selection Review · MGX · MGX Review/Cleanup · Ready to upload ·
-   Backlog · Pause)
+   Backlog · On Hold)
 
 * If the message says someone "will handle", "is in charge of", "will edit",
   "will cut", etc.:
@@ -151,7 +155,7 @@ Return **ONE** of the following:
 * Always convert stage names to the exact enum:
   - "va render"  → "VA Render"
   - "writing review" → "Writing Review" 
-  - "on pause / hold" → "Pause"
+  - "on pause / hold" → "On Hold"
 
 * If multiple owners/editors/writers are mentioned, return them as arrays,
   preserving first-mention order. Except for project_owner which should be a single name.
@@ -194,7 +198,7 @@ const FUNC_SCHEMA = {
       editor:         { type:'array', items: { type:'string' } },
       lead:           { type:'string' },
       brand_deal:     { type:'string', description: 'The ID of the related item in the brand deals database' },
-      status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog','Pause'] },
+      status:         { type:'string', enum:['Uploaded','FOIA Received','Ready for production','Writing','Writing Review','VA Render','VA Review','Writing Revisions','Ready for Editing','Clip Selection','Clip Selection Review','MGX','MGX Review/Cleanup','Ready to upload','Backlog','On Hold'] },
       threed_status:  { type:'string', enum:['Storyboarding','In Progress','Rendered','Approved'] },
       current_stage_date: { type:'string', format:'date' },
       category:       { type:'string', enum:['IB','CL','Bodycam'], description: 'The category of the project (IB, CL, or Bodycam)' },
@@ -353,10 +357,11 @@ function findClosestOption(value, options) {
   
   // Semantic match for common status pairs
   const statusPairs = [
-    ['on hold', 'pause'],
-    ['paused', 'pause'],
-    ['on pause', 'pause'],
-    ['hold', 'pause'],
+    ['on hold', 'on hold'],
+    ['pause', 'on hold'],
+    ['paused', 'on hold'],
+    ['on pause', 'on hold'],
+    ['hold', 'on hold'],
     ['ready', 'ready for production'],
     ['done', 'completed'],
     ['finished', 'completed'],
@@ -393,12 +398,24 @@ async function fetchNotionOptions() {
       database_id: DB
     });
     
+    // Log all available properties for debugging
+    logToFile(`📊 Available properties in Notion database: ${Object.keys(database.properties).join(', ')}`);
+    
     // Extract options from all select and status properties
     for (const [propName, prop] of Object.entries(database.properties)) {
       if (prop.type === 'status') {
         const options = prop.status.options.map(opt => opt.name);
         CACHED_STATUS_OPTIONS = options;
         logToFile(`✅ Cached ${options.length} status options: ${options.join(', ')}`);
+        
+        // Update the Status enum in the function schema
+        if (FUNC_SCHEMA && 
+            FUNC_SCHEMA.parameters && 
+            FUNC_SCHEMA.parameters.properties && 
+            FUNC_SCHEMA.parameters.properties.status) {
+          FUNC_SCHEMA.parameters.properties.status.enum = options;
+          logToFile(`✅ Updated Status enum in function schema with actual options from Notion`);
+        }
       }
       else if (prop.type === 'select') {
         const options = prop.select.options.map(opt => opt.name);
@@ -410,6 +427,13 @@ async function fetchNotionOptions() {
         CACHED_SELECT_OPTIONS[propName] = options;
         logToFile(`✅ Cached ${options.length} multi-select options for "${propName}": ${options.join(', ')}`);
       }
+    }
+    
+    // Map property types for better handling
+    const propertyTypes = {};
+    for (const [propName, prop] of Object.entries(database.properties)) {
+      propertyTypes[propName] = prop.type;
+      logToFile(`Property "${propName}" is of type: ${prop.type}`);
     }
     
     return true;
@@ -530,9 +554,11 @@ function toNotion(p) {
     out['3D Status'] = { select: { name: p.threed_status } };
   }
   
-  // Current Stage Date
+  // Current Stage Date - map to the actual property name "Date"
   if (p.current_stage_date) {
-    out['Current Stage Date'] = { date: { start: p.current_stage_date } };
+    // Use "Date" property instead of "Current Stage Date" which doesn't exist
+    out.Date = { date: { start: p.current_stage_date } };
+    logToFile(`Set Date property to ${p.current_stage_date} (from current_stage_date field)`);
   }
   
   // Handle "Category" with fuzzy matching
@@ -1261,6 +1287,10 @@ const commands = [
         .setRequired(false)),
     
   new SlashCommandBuilder()
+    .setName('register')
+    .setDescription('Force re-register all slash commands (admin only)'),
+    
+  new SlashCommandBuilder()
     .setName('next')
     .setDescription('Show when the next reminders will run'),
 
@@ -1311,7 +1341,7 @@ const commands = [
               { name: 'MGX Review/Cleanup', value: 'MGX Review/Cleanup' },
               { name: 'Ready to upload', value: 'Ready to upload' },
               { name: 'Backlog', value: 'Backlog' },
-              { name: 'Pause', value: 'Pause' }
+              { name: 'On Hold', value: 'On Hold' }
             ))
     )
     .addSubcommand(subcommand =>
