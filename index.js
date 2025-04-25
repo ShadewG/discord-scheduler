@@ -559,8 +559,11 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ]
-  fs.mkdirSync(logsDir, { recursive: true });
-}
+});
+
+// Setup logging
+const logsDir = path.join(__dirname, 'logs');
+fs.mkdirSync(logsDir, { recursive: true });
 const logFile = path.join(logsDir, 'bot-activity.log');
 
 // Helper function to write to log file
@@ -950,10 +953,12 @@ async function checkForMissingProperties() {
         
         logToFile(`✅ Updated Discord Channel for page "${pageTitle}" to ${channel.id}`);
         
-        // Notify in the Notion update channel if available
-        if (NOTION_CHANNEL_ID) {
-          sendNotionMessage(`🔄 Automatically linked project **${code}** to channel <#${channel.id}>`);
-        }
+        // Just log the auto-linking, don't send message to channel to avoid notification spam
+        logToFile(`🔄 Auto-linked project ${code} to channel ${channel.id}`);
+        // Uncomment if you want notifications again
+        // if (NOTION_CHANNEL_ID) {
+        //   sendNotionMessage(`🔄 Automatically linked project **${code}** to channel <#${channel.id}>`);
+        // }
       } catch (pageError) {
         logToFile(`❌ Error processing page ${page.id}: ${pageError.message}`);
       }
