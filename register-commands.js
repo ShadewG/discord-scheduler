@@ -48,6 +48,9 @@ async function registerCommands() {
     const commandsData = commands.map(command => command.toJSON());
     
     // For global commands (works across all servers, but takes up to an hour to update)
+    console.log(`Registering ${commandsData.length} commands globally for application ID: ${clientId}`);
+    console.log(`Command names being registered: ${commandsData.map(cmd => cmd.name).join(', ')}`);
+    
     await rest.put(
       Routes.applicationCommands(clientId),
       { body: commandsData },
@@ -55,8 +58,24 @@ async function registerCommands() {
 
     console.log('Successfully registered application commands. They should show up in Discord within an hour.');
     console.log('If you want to update commands for a specific server immediately, use the guildId parameter.');
+    
+    // Optional: You can also register to a specific guild for immediate testing
+    // Uncomment and replace YOUR_GUILD_ID with an actual guild ID where the bot is present
+    /*
+    const testGuildId = 'YOUR_GUILD_ID'; // Replace with your test server ID
+    console.log(`Also registering commands to test guild: ${testGuildId} for immediate availability`);
+    await rest.put(
+      Routes.applicationGuildCommands(clientId, testGuildId),
+      { body: commandsData },
+    );
+    console.log('Successfully registered application commands to test guild (immediate availability).');
+    */
   } catch (error) {
-    console.error(error);
+    console.error('Error registering commands:', error);
+    console.error('Error details:', error.message);
+    if (error.rawError) {
+      console.error('API Error details:', JSON.stringify(error.rawError, null, 2));
+    }
   }
 }
 
