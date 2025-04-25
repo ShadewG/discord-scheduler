@@ -68,8 +68,18 @@ if (!DISCORD_TOKEN || !CHANNEL_ID || !ROLE_ID) {
   process.exit(1);
 }
 
-// Initialize API clients
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// Initialize API clients - make OpenAI optional
+let openai = null;
+try {
+  if (OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    console.log('✅ OpenAI client initialized successfully');
+  } else {
+    console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
+  }
+} catch (error) {
+  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
+}
 
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
@@ -1523,6 +1533,36 @@ const commands = [
 // Register slash commands when the bot is ready
 async function registerCommands(clientId, guildId) {
   try {
+    // Ensure critical commands are at the beginning of the array
+    // First, get the indices of critical commands in the array
+    const linkIndex = commands.findIndex(cmd => cmd.name === 'link');
+    const whereIndex = commands.findIndex(cmd => cmd.name === 'where');
+    const availabilityIndex = commands.findIndex(cmd => cmd.name === 'availability');
+    
+    // Get references to the critical commands
+    const linkCommand = linkIndex >= 0 ? commands[linkIndex] : null;
+    const whereCommand = whereIndex >= 0 ? commands[whereIndex] : null;
+    const availabilityCommand = availabilityIndex >= 0 ? commands[availabilityIndex] : null;
+    
+    // If any of the critical commands exist, remove them from their current position
+    const criticalCommands = [];
+    if (linkCommand) {
+      criticalCommands.push(linkCommand);
+      commands.splice(linkIndex, 1);
+    }
+    if (whereCommand) {
+      criticalCommands.push(whereCommand);
+      commands.splice(whereIndex > linkIndex ? whereIndex - 1 : whereIndex, 1);
+    }
+    if (availabilityCommand) {
+      criticalCommands.push(availabilityCommand);
+      commands.splice(availabilityIndex > Math.max(linkIndex, whereIndex) ? availabilityIndex - 2 : 
+                     (availabilityIndex > Math.min(linkIndex, whereIndex) ? availabilityIndex - 1 : 
+                      availabilityIndex), 1);
+    }
+    
+    // Reinsert critical commands at the beginning of the array
+    commands.unshift(...criticalCommands);
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     logToFile('Started refreshing application (/) commands.');
 
@@ -3933,6 +3973,12 @@ function getNotionPageUrl(pageId) {
 
 // Add handleSyncMessage function here
 async function handleSyncMessage(msg) {
+  // Check if OpenAI is available
+  if (!openai) {
+    await msg.reply('❌ OpenAI API key not configured. Cannot process sync command.');
+    return;
+  }
+  
   // Create a reply function that suppresses notifications
   const quietReply = async (content) => {
     try {
