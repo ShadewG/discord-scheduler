@@ -29,6 +29,14 @@ const TARGET_VALUE = 'Ready For Captions';
 const RAY_ID = '348547268695162890';            // User ID to notify
 const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
 
+// Use actual bot startup time instead of arbitrary past date
+// Track when the bot started to only notify about changes after startup
+const BOT_START_TIME = new Date();
+let lastCheck = new Date();
+
+// Add path for storing processed notifications
+const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
+
 // Cache for Notion database title property to avoid repeated lookups
 let CACHED_TITLE_PROPERTY = null;
 // Cache for available status options
@@ -652,13 +660,38 @@ async function sendNotionMessage(text) {
   }
 }
 
-/* ─ Poll Notion every minute ─────────────────────────────────────── */
-// Use actual bot startup time instead of arbitrary past date
-// Track when the bot started to only notify about changes after startup
-const BOT_START_TIME = new Date();
-let lastCheck = new Date();
-const processedPageIds = new Set();     // track pages we've already processed
+// Add at the top of the file, near other file-related constants
+const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
 
+// Add this function near the other save/load functions
+function loadProcessedNotifications() {
+  try {
+    if (fs.existsSync(processedNotificationsPath)) {
+      const data = fs.readFileSync(processedNotificationsPath, 'utf8');
+      const loaded = JSON.parse(data);
+      logToFile(`Loaded ${Object.keys(loaded).length} processed notifications from file`);
+      return loaded;
+    }
+  } catch (error) {
+    logToFile(`Error loading processed notifications: ${error.message}`);
+  }
+  return {};
+}
+
+// Add this function near the other save/load functions
+function saveProcessedNotifications(notifications) {
+  try {
+    fs.writeFileSync(processedNotificationsPath, JSON.stringify(notifications, null, 2));
+    logToFile(`Saved ${Object.keys(notifications).length} processed notifications to file`);
+  } catch (error) {
+    logToFile(`Error saving processed notifications: ${error.message}`);
+  }
+}
+
+// Initialize the processed notifications tracking at global scope
+let processedNotifications = loadProcessedNotifications();
+
+// Replace the pollNotion function with this improved version
 async function pollNotion() {
   try {
     if (!process.env.NOTION_TOKEN) {
@@ -674,9 +707,7 @@ async function pollNotion() {
     logToFile(`🔍 Polling Notion database (ID: ${DB.substring(0, 6)}...${DB.substring(DB.length - 4)}) for updates...`);
     
     let notificationCount = 0;
-    
-    // Track newly processed pages to avoid duplicate notifications
-    const processedThisRun = new Set();
+    const now = new Date();
     
     // First, check the default Caption Status watcher
     try {
@@ -693,29 +724,30 @@ async function pollNotion() {
 
       for (const page of res.results) {
         const pageId = page.id;
-        
-        // Create a unique key for this page that includes timestamp to prevent hourly repeats
-        const pageLastEditTime = new Date(page.last_edited_time).getTime();
-        const uniquePageKey = `${pageId}-${pageLastEditTime}`;
-        
-        // Skip if we've already processed this page with this specific edit timestamp
-        if (processedPageIds.has(uniquePageKey)) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... with edit time ${page.last_edited_time} was already processed previously. Skipping.`);
-          continue;
-        }
-        
         const edited = new Date(page.last_edited_time);
         
         // Skip pages that were edited before the bot started
         if (edited <= BOT_START_TIME) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for default watcher.`);
-          
-          // Still add to processed pages so we don't check it again
-          processedPageIds.add(uniquePageKey);
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring.`);
           continue;
         }
         
-        // Try different title property names
+        // Check if we've already processed this page recently
+        const lastNotificationTime = processedNotifications[pageId];
+        if (lastNotificationTime) {
+          const lastNotified = new Date(lastNotificationTime);
+          const hoursSinceLastNotification = (now.getTime() - lastNotified.getTime()) / (1000 * 60 * 60);
+          
+          // Skip if notification was sent in the last 24 hours
+          if (hoursSinceLastNotification < 24) {
+            logToFile(`🔄 Skipping page ${pageId.substring(0, 8)}... - already notified ${hoursSinceLastNotification.toFixed(1)} hours ago. Will notify again after 24 hours.`);
+            continue;
+          }
+          
+          logToFile(`⏱️ Page ${pageId.substring(0, 8)}... was last notified ${hoursSinceLastNotification.toFixed(1)} hours ago. It's time to notify again.`);
+        }
+        
+        // Get the page title
         let title = null;
         let titlePropertyName = null;
         
@@ -730,12 +762,8 @@ async function pollNotion() {
           }
         }
         
-        // If no title found, list available properties and use default
+        // If no title found in common properties, look for any title property
         if (!title) {
-          const availableProps = Object.keys(page.properties).join(', ');
-          logToFile(`⚠️ Could not find title property. Available properties: ${availableProps}`);
-          
-          // Find any title property
           for (const [propName, prop] of Object.entries(page.properties)) {
             if (prop.type === 'title' && prop.title?.length > 0) {
               title = prop.title[0].plain_text;
@@ -751,19 +779,20 @@ async function pollNotion() {
           }
         }
         
-        logToFile(`🔔 Found new Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
+        logToFile(`🔔 Sending notification for page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
         logToFile(`   - Last edited: ${edited.toISOString()}`);
-        logToFile(`   - Current check time: ${new Date().toISOString()}`);
+        logToFile(`   - Current check time: ${now.toISOString()}`);
         
-        // Add to processed pages so we don't notify again
-        processedPageIds.add(uniquePageKey);
-        processedThisRun.add(pageId);
-        
-        // Send to the dedicated Notion channel instead of regular channel
+        // Send the notification
         await sendNotionMessage(
           `<@${RAY_ID}> Captions are ready for project **"${title}"**`
         );
         
+        // Record that we've sent a notification for this page
+        processedNotifications[pageId] = now.toISOString();
+        saveProcessedNotifications(processedNotifications);
+        
+        logToFile(`✅ Notification sent and recorded for page ${pageId.substring(0, 8)}...`);
         notificationCount++;
       }
     } catch (err) {
@@ -812,30 +841,28 @@ async function pollNotion() {
           
           for (const page of res.results) {
             const pageId = page.id;
-            
-            // Skip if we've already processed this page for this watcher
-            const watcherPageKey = `${watcher.id}:${pageId}`;
-            if (processedPageIds.has(watcherPageKey)) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed for watcher "${watcher.name}". Skipping.`);
-              continue;
-            }
-            
+            const watcherKey = `${watcher.id}:${pageId}`;
             const edited = new Date(page.last_edited_time);
             
             // Skip pages that were edited before the bot started
             if (edited <= BOT_START_TIME) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for watcher "${watcher.name}".`);
-              
-              // Still add to processed pages so we don't check it again
-              processedPageIds.add(watcherPageKey);
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring.`);
               continue;
             }
             
-            // Skip if we already processed this page in this run
-            if (processedThisRun.has(pageId)) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed by another watcher in this run. Skipping duplicate notification.`);
-              processedPageIds.add(watcherPageKey);
-              continue;
+            // Check if we've already processed this page for this watcher recently
+            const lastNotificationTime = processedNotifications[watcherKey];
+            if (lastNotificationTime) {
+              const lastNotified = new Date(lastNotificationTime);
+              const hoursSinceLastNotification = (now.getTime() - lastNotified.getTime()) / (1000 * 60 * 60);
+              
+              // Skip if notification was sent in the last 24 hours
+              if (hoursSinceLastNotification < 24) {
+                logToFile(`🔄 Skipping watcher notification for page ${pageId.substring(0, 8)}... - already notified ${hoursSinceLastNotification.toFixed(1)} hours ago.`);
+                continue;
+              }
+              
+              logToFile(`⏱️ Watcher "${watcher.name}" for page ${pageId.substring(0, 8)}... was last notified ${hoursSinceLastNotification.toFixed(1)} hours ago. It's time to notify again.`);
             }
             
             // Get the title
@@ -866,15 +893,16 @@ async function pollNotion() {
             logToFile(`   - Property: ${watcher.property} = ${watcher.value}`);
             logToFile(`   - User to notify: <@${watcher.userId}>`);
             
-            // Add to processed pages so we don't notify again
-            processedPageIds.add(watcherPageKey);
-            processedThisRun.add(pageId);
-            
             // Send to the dedicated Notion channel
             await sendNotionMessage(
               `<@${watcher.userId}> Project **"${title}"** is now marked as **"${watcher.value}"** (${watcher.name})`
             );
             
+            // Record that we've sent a notification for this watcher+page
+            processedNotifications[watcherKey] = now.toISOString();
+            saveProcessedNotifications(processedNotifications);
+            
+            logToFile(`✅ Watcher notification sent and recorded for page ${pageId.substring(0, 8)}...`);
             notificationCount++;
           }
         } catch (err) {
@@ -892,16 +920,24 @@ async function pollNotion() {
       logToFile(`📊 Sent ${notificationCount} Notion notifications`);
     }
     
-    // MODIFIED: Only clear cache once per day instead of every hour
-    // to prevent repeated notifications within the same day
-    const currentHour = new Date().getHours();
-    const currentMinute = new Date().getMinutes();
-    
-    // Clear only at midnight (0:00)
-    if (currentHour === 0 && currentMinute === 0) {
-      const oldSize = processedPageIds.size;
-      processedPageIds.clear();
-      logToFile(`🧹 Cleared processed pages cache at midnight (cleared ${oldSize} page IDs)`);
+    // Clean up old entries (older than 30 days) once a day to prevent the file from growing too large
+    const cleanupTime = new Date();
+    if (cleanupTime.getHours() === 0 && cleanupTime.getMinutes() === 0) {
+      const thirtyDaysAgo = new Date(cleanupTime);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      let cleanupCount = 0;
+      for (const [key, timestamp] of Object.entries(processedNotifications)) {
+        if (new Date(timestamp) < thirtyDaysAgo) {
+          delete processedNotifications[key];
+          cleanupCount++;
+        }
+      }
+      
+      if (cleanupCount > 0) {
+        logToFile(`🧹 Cleaned up ${cleanupCount} old notification entries (older than 30 days)`);
+        saveProcessedNotifications(processedNotifications);
+      }
     }
     
     // Only update lastCheck if we actually checked the database successfully
