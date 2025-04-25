@@ -1146,7 +1146,7 @@ const commands = [
         .setRequired(false)),
   
   new SlashCommandBuilder()
-    .setName('availability')
+    .setName('availability"),
   
   new SlashCommandBuilder()
     .setName('sync')
@@ -2592,6 +2592,7 @@ client.on('interactionCreate', async interaction => {
           }
         }
       }
+  }
     
     else if (commandName === 'schedule') {
       try {
@@ -3214,6 +3215,7 @@ client.on('interactionCreate', async interaction => {
     
     // Add similar error handling patterns for other commands...
     // For brevity, I'm not showing all commands, but you should apply the same pattern
+  try {
     
   } catch (error) {
     // Global error handling for any unexpected errors
