@@ -1,0 +1,2 @@
+# Ensure no changes to notion-watchers.json are skipped in CI/CD
+notion-watchers.json -diff
