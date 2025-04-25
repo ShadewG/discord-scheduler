@@ -1,0 +1,201 @@
+// Handle slash command interactions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName } = interaction;
+  
+  // Add global error handling for all command interactions
+  try {
+    // Create a timeout to track if we're at risk of hitting Discord's 3-second limit
+    let hasResponded = false;
+    const timeoutWarning = setTimeout(() => {
+      if (!hasResponded) {
+        logToFile(`⚠️ Warning: Interaction ${commandName} is taking too long to respond`);
+      }
+    }, 2500); // Set a warning at 2.5 seconds
+
+    if (commandName === 'test') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Send a test message for each job
+        let testMsg = '📢 Sending test messages for all reminders:\n\n';
+        
+        for (const job of jobs) {
+          testMsg += `▸ Testing: ${job.tag}\n`;
+        }
+        
+        await interaction.editReply(testMsg);
+        
+        // Send each message with a delay to avoid rate limits
+        for (const job of jobs) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await ping(`[TEST] ${job.text}`);
+        }
+        
+        await interaction.followUp('✅ All test messages sent!');
+        
+        // Log next executions after tests
+        logNextExecutions();
+      } catch (cmdError) {
+        logToFile(`Error in /test command: ${cmdError.message}`);
+        // Only try to reply if we haven't already
+        if (!hasResponded) {
+          await interaction.reply({ content: '❌ An error occurred while processing this command.', ephemeral: true });
+          hasResponded = true;
+        } else {
+          await interaction.followUp({ content: '❌ An error occurred while processing this command.', ephemeral: true });
+        }
+      }
+    }
+    else if (commandName === 'set') {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Extract the project code from the channel name
+        const code = projectCode(interaction.channel.name);
+        if (!code) {
+          await interaction.editReply('No project code detected in channel name. This command must be used in a project channel (e.g., cl23-project).');
+          return;
+        }
+        
+        // Find the Notion page for this project
+        let pageId = await findPage(code);
+        if (!pageId) {
+          await interaction.editReply(`No Notion page found for project code "${code}". Use !sync first to create a page.`);
+          return;
+        }
+        
+        // Get subcommand and value
+        const subcommand = interaction.options.getSubcommand();
+        let propValue = null;
+        let notionProps = {};
+        
+        // Process based on subcommand
+        switch (subcommand) {
+          case 'status':
+            propValue = interaction.options.getString('value');
+            notionProps.Status = { status: { name: propValue } };
+            break;
+          
+          case 'due_date':
+            propValue = interaction.options.getString('date');
+            // Validate date format (YYYY-MM-DD)
+            if (!propValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+              await interaction.editReply('Invalid date format. Use YYYY-MM-DD (e.g., 2025-04-15).');
+              return;
+            }
+            notionProps.Date = { date: { start: propValue } };
+            break;
+          
+          case 'priority':
+            propValue = interaction.options.getString('level');
+            notionProps.Priority = { select: { name: propValue } };
+            break;
+          
+          case 'editor':
+            propValue = interaction.options.getString('names');
+            const editorNames = propValue.split(',').map(n => n.trim()).filter(n => n);
+            if (editorNames.length === 0) {
+              await interaction.editReply('Please provide at least one editor name.');
+              return;
+            }
+            notionProps.Editor = { multi_select: editorNames.map(name => ({ name })) };
+            break;
+          
+          case 'writer':
+            propValue = interaction.options.getString('names');
+            const writerNames = propValue.split(',').map(n => n.trim()).filter(n => n);
+            if (writerNames.length === 0) {
+              await interaction.editReply('Please provide at least one writer name.');
+              return;
+            }
+            notionProps.Writer = { multi_select: writerNames.map(name => ({ name })) };
+            break;
+          
+          case 'lead':
+            propValue = interaction.options.getString('name');
+            notionProps.Lead = { select: { name: propValue } };
+            break;
+          
+          case 'caption_status':
+            propValue = interaction.options.getString('status');
+            notionProps['Caption Status'] = { select: { name: propValue } };
+            break;
+          
+          case 'script_url':
+            propValue = interaction.options.getString('url');
+            notionProps.Script = { url: propValue };
+            break;
+          
+          case 'frameio_url':
+            propValue = interaction.options.getString('url');
+            notionProps['Frame.io'] = { url: propValue };
+            break;
+        }
+        
+        try {
+          // Update the Notion property
+          await notion.pages.update({ 
+            page_id: pageId, 
+            properties: notionProps 
+          });
+          
+          // Get the Notion URL for the page
+          const notionUrl = getNotionPageUrl(pageId);
+          
+          // Success message
+          await interaction.editReply({
+            content: `✅ Updated ${subcommand.replace('_', ' ')} to "${propValue}" for project ${code}`,
+            components: notionUrl ? [
+              new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setLabel('View in Notion')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(notionUrl)
+                )
+            ] : []
+          });
+          
+          // Also send a non-ephemeral message to channel
+          await interaction.channel.send({
+            content: `✅ <@${interaction.user.id}> set ${subcommand.replace('_', ' ')} to "${propValue}" for project ${code}`,
+            flags: [1 << 2] // SUPPRESS_EMBEDS
+          });
+        } catch (updateError) {
+          logToFile(`Error updating property in /set command: ${updateError.message}`);
+          await interaction.editReply(`❌ Error updating property: ${updateError.message}`);
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /set command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          await interaction.editReply(`❌ Error: ${cmdError.message}`);
+        }
+      }
+    }
+  } catch (error) {
+    logToFile(`Error in interactionCreate: ${error.message}`);
+    if (!hasResponded) {
+      try {
+        await interaction.reply({ content: '❌ An error occurred while processing this command.', ephemeral: true });
+        hasResponded = true;
+      } catch (replyError) {
+        logToFile(`Failed to send error reply: ${replyError.message}`);
+      }
+    } else {
+      await interaction.editReply(`❌ Error: ${error.message}`);
+    }
+  }
+}); 

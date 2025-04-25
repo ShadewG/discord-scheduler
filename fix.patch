@@ -1,0 +1,24 @@
+--- index.js	2024-01-01 00:00:00
++++ index.js.fixed	2024-01-01 00:00:00
+@@ -3826,6 +3826,17 @@
+ }
+ 
++// Handle slash command interactions
++client.on('interactionCreate', async interaction => {
++  if (!interaction.isCommand()) return;
++
++  const { commandName } = interaction;
++  
++  // Add global error handling for all command interactions
++  try {
++    // Create a timeout to track if we're at risk of hitting Discord's 3-second limit
++    let hasResponded = false;
++    const timeoutWarning = setTimeout(() => {
++      if (!hasResponded) {
++        logToFile(`⚠️ Warning: Interaction ${commandName} is taking too long to respond`);
++      }
++    }, 2500); // Set a warning at 2.5 seconds
++
+ else if (commandName === 'set') {
+   try {
+     await interaction.deferReply({ ephemeral: true });
