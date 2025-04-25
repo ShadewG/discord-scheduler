@@ -2199,6 +2199,12 @@ client.on('interactionCreate', async interaction => {
         hasResponded = true;
         clearTimeout(timeoutWarning);
         
+        // Check if OpenAI is available
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API key not configured. Cannot process analyze command.');
+          return;
+        }
+        
         // Continue with the analyze command logic
         try {
           // Extract the project code from the channel name
