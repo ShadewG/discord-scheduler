@@ -16,6 +16,9 @@ const fs = require('fs');
 const { getTimeUntilNextExecution } = require('./utils');
 const { OpenAI } = require('openai');
 
+// Add this line to require the availability module
+const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, getCurrentBerlinTime, createTimeProgressBar } = require('./availability');
+
 // ⬇⬇ Notion integration -----------------------------------------------------
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
@@ -1051,6 +1054,11 @@ if (loadedJobs) {
   jobs = loadedJobs;
 }
 
+// Map that tracks all active cron jobs
+const activeJobs = new Map();
+
+}
+
 // Add this code:
 // Add custom meetings support
 const meetingsFilePath = path.join(__dirname, 'meetings.json');
@@ -1139,6 +1147,10 @@ const commands = [
       option.setName('ephemeral')
         .setDescription('Make response only visible to you')
         .setRequired(false)),
+  
+  new SlashCommandBuilder()
+    .setName('availability')
+    .setDescription('Show team availability board with current status'),
   
   new SlashCommandBuilder()
     .setName('sync')
@@ -1293,6 +1305,14 @@ const commands = [
       option.setName('query')
         .setDescription('Project code (CL27) or any link (Frame.io, Script, YouTube)')
         .setRequired(true))
+    .addBooleanOption(option =>
+      option.setName('ephemeral')
+        .setDescription('Make the response only visible to you')
+        .setRequired(false)),
+        
+  new SlashCommandBuilder()
+    .setName('availability')
+    .setDescription('Show who is currently working and how much time they have left')
     .addBooleanOption(option =>
       option.setName('ephemeral')
         .setDescription('Make the response only visible to you')
