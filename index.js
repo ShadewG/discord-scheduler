@@ -1253,6 +1253,14 @@ const commands = [
     .setDescription('Show help information about the bot commands'),
     
   new SlashCommandBuilder()
+    .setName('link')
+    .setDescription('Get the Notion link for the current project')
+    .addBooleanOption(option =>
+      option.setName('ephemeral')
+        .setDescription('Make the response only visible to you')
+        .setRequired(false)),
+    
+  new SlashCommandBuilder()
     .setName('next')
     .setDescription('Show when the next reminders will run'),
 
@@ -1528,18 +1536,27 @@ function createHelpEmbed() {
     .setTitle('Discord Scheduler - Help')
     .setDescription('Here are the available commands:')
     .addFields(
+      // Notion integration commands
+      { name: '📋 Notion Integration', value: '__________________________' },
+      { name: '/sync', value: 'Update Notion with details from your message' },
+      { name: '/analyze', value: 'Analyze channel messages and update Notion automatically' },
+      { name: '/link', value: 'Get the Notion link for the current project' },
+      { name: '/set', value: 'Set a specific property on the Notion page for this channel' },
+      { name: '/notion', value: 'Manage Notion status watchers (add/list/enable/disable/delete/properties)' },
+      { name: '/watchers', value: 'List all Notion watchers in detail' },
+      
+      // Schedule commands
+      { name: '⏰ Schedule Management', value: '__________________________' },
       { name: '/test', value: 'Send test messages for all scheduled reminders' },
       { name: '/testjob', value: 'Test a specific scheduled reminder (select from dropdown)' },
       { name: '/send', value: 'Send a custom message to the channel (with optional role mention)' },
       { name: '/next', value: 'Show when the next reminders will run' },
-      { name: '/schedule', value: 'Show the complete schedule with countdown timers in categories' },
+      { name: '/schedule', value: 'Show the complete schedule with countdown timers' },
       { name: '/list', value: 'List all scheduled reminders' },
       { name: '/status', value: 'Check the bot status and configuration' },
       { name: '/edit', value: 'Edit a scheduled reminder' },
       { name: '/add', value: 'Add a new scheduled reminder' },
-      { name: '/notion', value: 'Manage Notion status watchers (add/list/enable/disable/delete/properties)' },
-      { name: '/help', value: 'Show this help information' },
-      { name: '/watchers', value: 'List all Notion watchers in detail' }
+      { name: '/help', value: 'Show this help information' }
     )
     .setTimestamp();
 
@@ -2390,7 +2407,8 @@ client.on('interactionCreate', async interaction => {
     
     else if (commandName === 'sync') {
       try {
-        await interaction.deferReply({ ephemeral: false });
+        // Make response ephemeral (only visible to the command sender)
+        await interaction.deferReply({ ephemeral: true });
         hasResponded = true;
         clearTimeout(timeoutWarning);
         
@@ -2416,6 +2434,7 @@ client.on('interactionCreate', async interaction => {
           content: `${TRIGGER_PREFIX} ${text}${isDryRun ? ' --dry' : ''}`,
           channel: interaction.channel,
           author: interaction.user,
+          interaction: interaction, // Add reference to the original interaction
           reply: async (content) => {
             if (typeof content === 'string') {
               await interaction.editReply(content);
@@ -2551,6 +2570,82 @@ client.on('interactionCreate', async interaction => {
           } catch (editError) {
             logToFile(`Failed to edit reply: ${editError.message}`);
           }
+        }
+      }
+    }
+    
+    // Link command to get Notion URL
+    else if (commandName === 'link') {
+      try {
+        // Check if should be ephemeral (default to true)
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false;
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Extract the project code from the channel name
+        const code = projectCode(interaction.channel.name);
+        if (!code) {
+          await interaction.editReply('❌ No project code detected in this channel name. Use this command in a project channel (e.g., cl23-project).');
+          return;
+        }
+        
+        // Find the Notion page for this project
+        const pageId = await findPage(code);
+        if (!pageId) {
+          await interaction.editReply(`❌ No Notion page found for project code "${code}". Use \`/sync\` first to create a page.`);
+          return;
+        }
+        
+        // Get the Notion URL
+        const notionUrl = getNotionPageUrl(pageId);
+        if (!notionUrl) {
+          await interaction.editReply(`❌ Could not generate Notion URL for project "${code}".`);
+          return;
+        }
+        
+        // Create button for the Notion link
+        const linkButton = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setLabel('Open in Notion')
+              .setStyle(ButtonStyle.Link)
+              .setURL(notionUrl)
+          );
+        
+        // Send the reply with a link button
+        await interaction.editReply({
+          content: `🔗 **Notion Page for project ${code}**: ${notionUrl}`,
+          components: [linkButton]
+        });
+        
+        // If not ephemeral and shown in the channel, delete after 5 minutes
+        if (!ephemeral) {
+          setTimeout(async () => {
+            try {
+              // Check if the reply still exists and delete it
+              const fetchedReply = await interaction.fetchReply().catch(() => null);
+              if (fetchedReply) {
+                await interaction.deleteReply();
+                logToFile(`🗑️ Auto-deleted Notion link for ${code} after 5 minutes`);
+              }
+            } catch (deleteError) {
+              logToFile(`Error deleting Notion link reply: ${deleteError.message}`);
+            }
+          }, 5 * 60 * 1000); // 5 minutes
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /link command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error getting Notion link: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        } else {
+          await interaction.editReply(`❌ Error getting Notion link: ${cmdError.message}`);
         }
       }
     }
@@ -3820,35 +3915,89 @@ async function handleSyncMessage(msg) {
       responseDescription += `⚠️ **Errors:** There were issues with: ${errorProperties.join(', ')}.\nOther updates were still applied.`;
     }
 
-    await quietReply({
-      embeds: [{
-        title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
-        description: responseDescription,
-        color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
-      }]
-    });
+    // Make reply only visible to the command sender if possible
+    // For slash commands this would be ephemeral, for normal messages this still replies
+    try {
+      // If this is from the /sync command via a fake msg (it has interaction property)
+      if (msg.interaction) {
+        // For interactions/slash commands, use editReply to maintain ephemeral status
+        await msg.interaction.editReply({
+          embeds: [{
+            title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
+            description: responseDescription,
+            color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
+          }]
+        });
+      } else {
+        // For regular messages, still try to make it somewhat discreet
+        await quietReply({
+          embeds: [{
+            title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
+            description: responseDescription,
+            color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
+          }]
+        });
+      }
+    } catch (replyError) {
+      logToFile(`Error sending reply: ${replyError.message}`);
+      // Fallback to regular reply
+      const replyMsg = await quietReply({
+        embeds: [{
+          title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
+          description: responseDescription,
+          color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
+        }]
+      });
+      
+      // Auto-delete the message after 5 minutes if it's a regular message (not ephemeral)
+      if (replyMsg && replyMsg.deletable) {
+        setTimeout(async () => {
+          try {
+            await replyMsg.delete();
+            logToFile(`🗑️ Auto-deleted status update message for ${code} after 5 minutes`);
+          } catch (deleteError) {
+            logToFile(`Error deleting status message: ${deleteError.message}`);
+          }
+        }, 5 * 60 * 1000); // 5 minutes
+      }
+    }
 
     // After the main response embed:
     if (updatedProperties || updatedContent || isNewPage) {
       // Get the Notion URL for the page
       const notionUrl = getNotionPageUrl(pageId);
       
-      // If we have a URL, send it back to the channel
+      // If we have a URL, send it back to the sender
       if (notionUrl) {
         try {
-          // Send URL in a separate message
-          const linkMsg = await msg.channel.send({
-            content: `🔗 **Notion Page**: ${notionUrl}`,
-            flags: [1 << 2] // SUPPRESS_EMBEDS 
-          });
-          
-          // Pin the message with the link if it's a new page
-          if (isNewPage && !isDryRun) {
+          // For interaction commands, add it to the existing ephemeral reply 
+          if (msg.interaction) {
+            await msg.interaction.followUp({
+              content: `🔗 **Notion Page**: ${notionUrl}`,
+              ephemeral: true  // Only visible to command sender
+            });
+          } else {
+            // For regular messages, send via DM if possible, or channel as fallback
             try {
-              await linkMsg.pin();
-              logToFile(`📌 Pinned Notion link for project ${code}`);
-            } catch (pinError) {
-              logToFile(`Error pinning message: ${pinError.message}`);
+              await msg.author.send(`🔗 **Notion Page for ${code}**: ${notionUrl}`);
+              logToFile(`Sent Notion URL via DM to ${msg.author.tag}`);
+            } catch (dmError) {
+              // Fallback to channel if DM fails
+              logToFile(`Failed to send DM, falling back to channel: ${dmError.message}`);
+              const linkMsg = await msg.channel.send({
+                content: `🔗 **Notion Page**: ${notionUrl}`,
+                flags: [1 << 2] // SUPPRESS_EMBEDS 
+              });
+              
+              // Auto-delete the message after 5 minutes
+              setTimeout(async () => {
+                try {
+                  await linkMsg.delete();
+                  logToFile(`🗑️ Auto-deleted Notion link message for ${code} after 5 minutes`);
+                } catch (deleteError) {
+                  logToFile(`Error deleting Notion link message: ${deleteError.message}`);
+                }
+              }, 5 * 60 * 1000); // 5 minutes
             }
           }
         } catch (urlError) {
