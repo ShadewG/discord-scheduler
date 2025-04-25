@@ -3397,6 +3397,31 @@ client.once('ready', async () => {
   
   // Log the next execution times for all jobs
   logNextExecutions();
+
+  // Auto-register commands if running on Railway
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID) {
+    try {
+      logToFile('🔄 Detected Railway environment, automatically registering slash commands...');
+      await registerCommands(client.user.id);
+      logToFile('✅ Successfully registered slash commands globally - they should appear in Discord within an hour');
+      
+      // Try to register commands for the first few guilds for faster updates
+      let registerCount = 0;
+      for (const guild of client.guilds.cache.values()) {
+        if (registerCount < 5) { // Limit to 5 guilds to avoid rate limits
+          try {
+            await registerCommands(client.user.id, guild.id);
+            logToFile(`✅ Registered commands for guild: ${guild.name} (${guild.id})`);
+            registerCount++;
+          } catch (guildError) {
+            logToFile(`⚠️ Could not register commands for guild ${guild.name}: ${guildError.message}`);
+          }
+        }
+      }
+    } catch (error) {
+      logToFile(`❌ Error registering commands on startup: ${error.message}`);
+    }
+  }
 });
 
 // Register commands when joining a new server

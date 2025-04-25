@@ -18,6 +18,15 @@ node register-commands.js
 
 If you have administrator permissions on the server, you can use the `/register` command to re-register all slash commands for the current server.
 
+### Automatic Registration on Railway
+
+When running on Railway, the bot will now automatically register all slash commands on startup:
+
+1. Global registration: Commands will be registered globally (visible in all servers within 1 hour)
+2. Guild registration: Commands will also be registered on up to 5 individual servers (visible immediately)
+
+This ensures that new commands are always available after deploying to Railway without any manual steps.
+
 ## Persisting Data Between Deployments
 
 The bot stores various data locally, including Notion watchers, which can be lost between deployments when using services like Railway.
