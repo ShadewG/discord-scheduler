@@ -670,8 +670,8 @@ async function sendNotionMessage(text) {
   }
 }
 
-// Add at the top of the file, near other file-related constants
-const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
+// Duplicate declaration - already defined above
+// const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
 
 // Add this function near the other save/load functions
 function loadProcessedNotifications() {
@@ -1644,7 +1644,7 @@ function createNextRemindersEmbed() {
   nextExecutions.slice(0, 5).forEach((item, index) => {
     embed.addFields({ 
       name: `${index + 1}. ${item.job.tag}`, 
-      value: `⏰ Runs in: **${item.next.formattedTimeLeft}**\n🕒 At: ${item.next.formatted}\n📝 Message: ${item.job.text}`
+      value: `⏱️ In: **${item.next.formattedTimeLeft}**\n🕒 At: ${item.next.formatted}\n📝 Message: ${item.job.text}`
     });
   });
 
@@ -2181,8 +2181,6 @@ client.on('interactionCreate', async interaction => {
           } catch (replyError) {
             logToFile(`Failed to send error reply: ${replyError.message}`);
           }
-        } else {
-          await interaction.editReply(`❌ Error scheduling meeting: ${cmdError.message}`);
         }
       }
     }
@@ -3719,7 +3717,7 @@ async function checkMeetings() {
     // If time couldn't be parsed, skip
     if (!meetingTime) continue;
     
-    // Calculate the reminder time (5 minutes before meeting)
+    // Calculate the reminder time (5 minutes before)
     const reminderTime = new Date(meetingTime.getTime() - 5 * 60 * 1000);
     
     // Check if it's time for the reminder
@@ -4078,7 +4076,7 @@ async function handleSyncMessage(msg) {
         { role: 'user', content: '!sync Suki owns it now. Due 12 Apr.' },
         { role: 'assistant', function_call: { 
           name: 'update_properties',
-          arguments: JSON.stringify({ project_owner: 'Suki', due_date: '2025-04-12' })
+          arguments: JSON.stringify({ project_owner: ['Suki'], due_date: '2025-04-12' })
         }},
         // New example showing latest link wins
         { role: 'user', content: '!sync Here is our Frame.io: https://f.io/abc123. [Later] Actually use this updated Frame.io link: https://f.io/xyz789.' },
@@ -4370,4 +4368,3 @@ async function handleSyncMessage(msg) {
 }
 
 // Function to create a new Notion page if one doesn't exist
-
