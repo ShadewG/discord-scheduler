@@ -19,6 +19,9 @@ const { OpenAI } = require('openai');
 // Add this line to require the availability module
 const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, getCurrentBerlinTime, createTimeProgressBar } = require('./availability');
 
+// Import the auto-register-commands module
+const { registerCommandsOnStartup } = require('./auto-register-commands');
+
 // ⬇⬇ Notion integration -----------------------------------------------------
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
@@ -1867,7 +1870,7 @@ function createWatchersEmbed() {
     customWatchers.forEach(watcher => {
       const status = watcher.disabled ? '❌ Disabled' : '✅ Enabled';
       embed.addFields({
-        name: `${watcher.name} (ID: ${watcher.id})`,
+        name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
         value: `Property: **${watcher.property}**\nValue: **${watcher.value}**\nNotifies: <@${watcher.userId}>\nStatus: ${status}`,
       });
     });
@@ -3323,7 +3326,7 @@ client.on('interactionCreate', async interaction => {
           // Add field for default watcher
           embed.addFields({
             name: '🔍 Default Watcher',
-            value: `**Property:** ${TARGET_PROP}\n**Value:** ${TARGET_VALUE}\n**Notifies:** <@${RAY_ID}>`
+            value: `Property: **${TARGET_PROP}**\nValue: **${TARGET_VALUE}**\nNotifies: <@${RAY_ID}>`
           });
           
           // Add fields for custom watchers
@@ -3332,7 +3335,7 @@ client.on('interactionCreate', async interaction => {
               const status = watcher.disabled ? '🔴 Disabled' : '🟢 Active';
               embed.addFields({
                 name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
-                value: `**Property:** ${watcher.property}\n**Value:** ${watcher.value}\n**Notifies:** <@${watcher.userId}>\n**Created:** ${new Date(watcher.createdAt).toLocaleDateString()}`
+                value: `Property: **${watcher.property}**\nValue: **${watcher.value}**\nNotifies: <@${watcher.userId}>\nStatus: ${status}`
               });
             });
           } else {
@@ -3542,8 +3545,19 @@ client.once('ready', async () => {
   cron.schedule('* * * * *', pollNotion, { timezone: TZ });
   logToFile('🔍 Notion poller scheduled every 1 min');
   
-  // Register slash commands
-  await registerCommands(client.user.id);
+  // Use the new auto-register-commands module to register commands
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID) {
+    try {
+      logToFile('🔄 Detected Railway environment, automatically registering slash commands...');
+      await registerCommandsOnStartup(client, DISCORD_TOKEN);
+    } catch (error) {
+      logToFile(`❌ Error in auto-registration: ${error.message}`);
+      logToFile(error.stack);
+    }
+  } else {
+    // Register slash commands (old method - keep for local development)
+    await registerCommands(client.user.id);
+  }
   
   // Fetch available Notion options for better matching
   await fetchNotionOptions();
@@ -3556,31 +3570,6 @@ client.once('ready', async () => {
   
   // Log the next execution times for all jobs
   logNextExecutions();
-
-  // Auto-register commands if running on Railway
-  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID) {
-    try {
-      logToFile('🔄 Detected Railway environment, automatically registering slash commands...');
-      await registerCommands(client.user.id);
-      logToFile('✅ Successfully registered slash commands globally - they should appear in Discord within an hour');
-      
-      // Try to register commands for the first few guilds for faster updates
-      let registerCount = 0;
-      for (const guild of client.guilds.cache.values()) {
-        if (registerCount < 5) { // Limit to 5 guilds to avoid rate limits
-          try {
-            await registerCommands(client.user.id, guild.id);
-            logToFile(`✅ Registered commands for guild: ${guild.name} (${guild.id})`);
-            registerCount++;
-          } catch (guildError) {
-            logToFile(`⚠️ Could not register commands for guild ${guild.name}: ${guildError.message}`);
-          }
-        }
-      }
-    } catch (error) {
-      logToFile(`❌ Error registering commands on startup: ${error.message}`);
-    }
-  }
 });
 
 // Register commands when joining a new server
