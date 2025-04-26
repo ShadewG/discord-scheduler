@@ -63,16 +63,18 @@ async function registerCommands() {
     console.log('If you want to update commands for a specific server immediately, use the guildId parameter.');
     
     // Optional: You can also register to a specific guild for immediate testing
-    // Uncomment and replace YOUR_GUILD_ID with an actual guild ID where the bot is present
-    /*
-    const testGuildId = 'YOUR_GUILD_ID'; // Replace with your test server ID
+    // To get your server ID: 
+    // 1. Enable Developer Mode in Discord (Settings > Advanced > Developer Mode)
+    // 2. Right-click on your server icon and select "Copy ID"
+    
+    const testGuildId = ''; // Replace with your Discord server ID
     console.log(`Also registering commands to test guild: ${testGuildId} for immediate availability`);
     await rest.put(
       Routes.applicationGuildCommands(clientId, testGuildId),
       { body: commandsData },
     );
     console.log('Successfully registered application commands to test guild (immediate availability).');
-    */
+    
   } catch (error) {
     console.error('Error registering commands:', error);
     console.error('Error details:', error.message);
