@@ -1,0 +1,126 @@
+// commands.js - Central module for all Discord slash commands
+// This module serves as the single source of truth for all commands
+
+const { SlashCommandBuilder } = require('discord.js');
+
+// Define all commands grouped by category
+const commands = {
+  // Basic bot commands
+  basic: [
+    new SlashCommandBuilder().setName('add').setDescription('Add a new scheduled reminder')
+      .addStringOption(option => option.setName('time').setDescription('Time for the reminder (e.g., "every day at 9am")').setRequired(true))
+      .addStringOption(option => option.setName('message').setDescription('Message to send').setRequired(true)),
+    
+    new SlashCommandBuilder().setName('list').setDescription('List all scheduled reminders'),
+    
+    new SlashCommandBuilder().setName('edit').setDescription('Edit a scheduled reminder')
+      .addStringOption(option => option.setName('id').setDescription('ID of the reminder to edit').setRequired(true))
+      .addStringOption(option => option.setName('time').setDescription('New time for the reminder'))
+      .addStringOption(option => option.setName('message').setDescription('New message to send')),
+    
+    new SlashCommandBuilder().setName('status').setDescription('Check the bot status and configuration'),
+    
+    new SlashCommandBuilder().setName('help').setDescription('Show help information about the bot commands'),
+    
+    new SlashCommandBuilder().setName('test').setDescription('Send test messages for all scheduled reminders'),
+  ],
+  
+  // Notion integration commands
+  notion: [
+    new SlashCommandBuilder().setName('link').setDescription('Get the Notion link for the current project')
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
+    new SlashCommandBuilder().setName('availability').setDescription('Show a live time board of who is currently working')
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
+    new SlashCommandBuilder().setName('sync').setDescription('Update Notion with properties from your message')
+      .addStringOption(option => option.setName('text').setDescription('The properties to update').setRequired(true))
+      .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion')),
+    
+    new SlashCommandBuilder().setName('analyze').setDescription('Analyze channel messages and update Notion')
+      .addIntegerOption(option => option.setName('messages').setDescription('Number of messages to analyze (default: 100)'))
+      .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion'))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make response only visible to you')),
+    
+    new SlashCommandBuilder().setName('set').setDescription('Set a property on the Notion page for this channel')
+      .addSubcommand(subcommand => subcommand.setName('status').setDescription('Set the Status property')
+        .addStringOption(option => option.setName('value').setDescription('Status value').setRequired(true)
+          .addChoices({ name: 'Writing', value: 'Writing' }, { name: 'Writing Review', value: 'Writing Review' },
+                      { name: 'VA Render', value: 'VA Render' }, { name: 'Ready for Editing', value: 'Ready for Editing' },
+                      { name: 'Clip Selection', value: 'Clip Selection' }, { name: 'MGX', value: 'MGX' },
+                      { name: 'Pause', value: 'Pause' }))),
+    
+    new SlashCommandBuilder().setName('notion').setDescription('Manage Notion status watchers')
+      .addSubcommand(subcommand => subcommand.setName('add').setDescription('Add a new Notion watcher')
+        .addStringOption(option => option.setName('property').setDescription('Property to watch').setRequired(true))
+        .addStringOption(option => option.setName('value').setDescription('Value to watch for').setRequired(true))),
+    
+    new SlashCommandBuilder().setName('watch').setDescription('Create a Notion watcher to notify when properties change')
+      .addStringOption(option => option.setName('property').setDescription('Property to watch').setRequired(true))
+      .addStringOption(option => option.setName('value').setDescription('Value to watch for').setRequired(true)),
+    
+    new SlashCommandBuilder().setName('watchers').setDescription('List all Notion watchers in detail'),
+    
+    new SlashCommandBuilder().setName('where').setDescription('Find all projects matching a query')
+      .addStringOption(option => option.setName('query').setDescription('Search query').setRequired(true))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+  ],
+  
+  // Meeting and schedule commands
+  meetings: [
+    new SlashCommandBuilder().setName('schedule').setDescription('Show the weekly schedule of reminders'),
+    
+    new SlashCommandBuilder().setName('meeting').setDescription('Schedule a meeting with reminders')
+      .addStringOption(option => option.setName('title').setDescription('Meeting title').setRequired(true))
+      .addStringOption(option => option.setName('time').setDescription('Meeting time (e.g., "tomorrow at 3pm")').setRequired(true))
+      .addStringOption(option => option.setName('description').setDescription('Meeting description'))
+      .addBooleanOption(option => option.setName('remind').setDescription('Send reminder 5 minutes before')),
+  ],
+  
+  // New utility commands
+  utility: [
+    new SlashCommandBuilder().setName('dashboard').setDescription('Show a project dashboard with key metrics and status')
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
+    new SlashCommandBuilder().setName('timeline').setDescription('Generate a visual timeline of project milestones')
+      .addStringOption(option => option.setName('timeframe').setDescription('Timeframe to display (e.g., "week", "month")')
+        .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }, { name: 'Quarter', value: 'quarter' }))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
+    new SlashCommandBuilder().setName('export').setDescription('Export project data to a file')
+      .addStringOption(option => option.setName('format').setDescription('Export format').setRequired(true)
+        .addChoices({ name: 'CSV', value: 'csv' }, { name: 'JSON', value: 'json' }, { name: 'Text', value: 'txt' }))
+      .addBooleanOption(option => option.setName('include_history').setDescription('Include historical data')),
+    
+    new SlashCommandBuilder().setName('summary').setDescription('Generate an AI summary of recent project activity')
+      .addIntegerOption(option => option.setName('days').setDescription('Number of days to summarize (default: 7)'))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+  ],
+};
+
+// Helper function to get all commands as a flat array
+function getAllCommands() {
+  return [
+    ...commands.basic,
+    ...commands.notion,
+    ...commands.meetings,
+    ...commands.utility
+  ];
+}
+
+// Helper function to get commands by category
+function getCommandsByCategory(category) {
+  return commands[category] || [];
+}
+
+// Helper function to convert commands to JSON format for Discord API
+function commandsToJSON(commandsList) {
+  return commandsList.map(command => command.toJSON());
+}
+
+module.exports = {
+  commands,
+  getAllCommands,
+  getCommandsByCategory,
+  commandsToJSON
+};

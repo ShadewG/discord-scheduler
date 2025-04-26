@@ -1,121 +1,190 @@
-// Utils.js - Helper functions for Discord Scheduler Bot
+// Utils module - Common utility functions for the Discord bot
+const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 
 /**
- * Calculate the time until the next execution of a cron job
- * @param {string} cronExpression - The cron expression in format 'minute hour day-of-month month day-of-week'
- * @param {string} timezone - The IANA timezone to use (e.g., 'Europe/Berlin')
- * @returns {Object|null} An object with information about the next execution time or null if error
+ * Calculate the time until the next execution of a cron expression
+ * @param {string} cronExpression - Cron expression to calculate next execution for
+ * @param {string} timezone - Optional timezone
+ * @returns {Object} Object containing hours, minutes, seconds until next execution
  */
 function getTimeUntilNextExecution(cronExpression, timezone) {
   try {
-    // Use provided timezone or default to Europe/Berlin
-    const TZ = timezone || process.env.TZ || 'Europe/Berlin';
-    
-    // For debugging - log the timezone being used
-    console.log(`Using timezone for calculation: ${TZ}`);
-    
-    // Parse the cron expression
-    const parts = cronExpression.split(' ');
-    if (parts.length !== 5) {
-      throw new Error('Invalid cron expression format');
-    }
-    
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-    
-    // Get current date in the specified timezone
+    // Get the current date/time
     const now = new Date();
-    const tzOptions = { timeZone: TZ };
-    const tzNow = new Date(new Date().toLocaleString('en-US', tzOptions));
     
-    // Function to find the next valid date based on cron parts
-    function findNextValidDate(startDate) {
-      // Deep copy the date to avoid modifying the original
-      let date = new Date(startDate.getTime());
-      
-      // Handle day of week restriction (1-7 where 1 is Monday)
-      if (dayOfWeek !== '*') {
-        const daysToCheck = dayOfWeek.split(',').flatMap(part => {
-          if (part.includes('-')) {
-            const [start, end] = part.split('-').map(Number);
-            const range = [];
-            for (let i = start; i <= end; i++) {
-              range.push(i);
-            }
-            return range;
-          } else {
-            return [Number(part)];
-          }
-        });
-        
-        // Convert JS day (0=Sunday) to cron day (1=Monday)
-        let currentDay = date.getDay() === 0 ? 7 : date.getDay();
-        
-        // If current day is not in allowed days, find next allowed day
-        if (!daysToCheck.includes(currentDay)) {
-          let daysToAdd = 1;
-          while (daysToAdd < 8) {
-            currentDay = currentDay === 7 ? 1 : currentDay + 1;
-            if (daysToCheck.includes(currentDay)) {
-              break;
-            }
-            daysToAdd++;
-          }
-          
-          // Add the days and reset time to the beginning of the day
-          date.setDate(date.getDate() + daysToAdd);
-          date.setHours(0, 0, 0, 0);
-        }
-      }
-      
-      // Handle hour and minute
-      const targetHour = hour === '*' ? date.getHours() : parseInt(hour, 10);
-      const targetMinute = minute === '*' ? date.getMinutes() : parseInt(minute, 10);
-      
-      // If time has already passed today, move to next occurrence
-      if (
-        date.getHours() > targetHour || 
-        (date.getHours() === targetHour && date.getMinutes() >= targetMinute)
-      ) {
-        // If we're checking weekdays, we need to move to next valid day
-        if (dayOfWeek !== '*') {
-          date.setDate(date.getDate() + 1);
-          date.setHours(0, 0, 0, 0);
-          return findNextValidDate(date); // Recursive call to find next valid date
-        } else {
-          // For daily jobs, just move to next day
-          date.setDate(date.getDate() + 1);
-        }
-      }
-      
-      // Set the target hour and minute
-      date.setHours(targetHour, targetMinute, 0, 0);
-      
-      return date;
-    }
+    // Get the next execution date/time
+    const nextDate = cron.schedule(cronExpression, () => {}, { timezone }).nextDate().toDate();
     
-    // Find the next execution date
-    const nextDate = findNextValidDate(tzNow);
+    // Calculate the difference in milliseconds
+    const diffMs = nextDate - now;
     
-    // Calculate time difference
-    const diff = nextDate.getTime() - now.getTime();
+    // Convert to hours, minutes, seconds
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
     
-    // Convert milliseconds to hours, minutes, seconds
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-    
-    return {
-      date: nextDate,
-      formatted: nextDate.toLocaleString('en-US', { timeZone: TZ }),
-      timeLeft: { hours, minutes, seconds },
-      formattedTimeLeft: `${hours}h ${minutes}m ${seconds}s`
-    };
+    return { hours, minutes, seconds, totalMs: diffMs };
   } catch (error) {
     console.error(`Error calculating next execution time: ${error.message}`);
-    return null;
+    return { hours: 0, minutes: 0, seconds: 0, totalMs: 0 };
   }
 }
 
+/**
+ * Format a duration in a human-readable format
+ * @param {Object} duration - Duration object with hours, minutes, seconds
+ * @returns {string} Formatted duration string
+ */
+function formatDuration(duration) {
+  const parts = [];
+  
+  if (duration.hours > 0) {
+    parts.push(`${duration.hours}h`);
+  }
+  
+  if (duration.minutes > 0 || duration.hours > 0) {
+    parts.push(`${duration.minutes}m`);
+  }
+  
+  parts.push(`${duration.seconds}s`);
+  
+  return parts.join(' ');
+}
+
+/**
+ * Log a message to a file with timestamp
+ * @param {string} message - Message to log
+ * @param {string} logFile - Path to log file (optional)
+ */
+function logToFile(message, logFile = 'bot.log') {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  
+  // Ensure logs directory exists
+  const logsDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  
+  // Append to log file
+  fs.appendFileSync(path.join(logsDir, logFile), logMessage);
+  
+  // Also log to console
+  console.log(message);
+}
+
+/**
+ * Create an embed with standardized formatting
+ * @param {Object} options - Embed options
+ * @returns {Object} Discord embed object
+ */
+function createEmbed(options = {}) {
+  const {
+    title = '',
+    description = '',
+    color = 0x0099ff,
+    fields = [],
+    footer = null,
+    thumbnail = null,
+    timestamp = true
+  } = options;
+  
+  const embed = {
+    title,
+    description,
+    color,
+    fields: fields.map(field => ({
+      name: field.name,
+      value: field.value,
+      inline: field.inline || false
+    }))
+  };
+  
+  if (footer) {
+    embed.footer = { text: footer };
+  }
+  
+  if (thumbnail) {
+    embed.thumbnail = { url: thumbnail };
+  }
+  
+  if (timestamp) {
+    embed.timestamp = new Date();
+  }
+  
+  return embed;
+}
+
+/**
+ * Safely read a JSON file with error handling
+ * @param {string} filePath - Path to JSON file
+ * @param {Object} defaultValue - Default value if file doesn't exist or is invalid
+ * @returns {Object} Parsed JSON or default value
+ */
+function readJsonFile(filePath, defaultValue = {}) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return defaultValue;
+    }
+    
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(fileContent);
+  } catch (error) {
+    logToFile(`Error reading JSON file ${filePath}: ${error.message}`);
+    return defaultValue;
+  }
+}
+
+/**
+ * Safely write a JSON file with error handling
+ * @param {string} filePath - Path to JSON file
+ * @param {Object} data - Data to write
+ * @param {boolean} pretty - Whether to pretty-print the JSON
+ * @returns {boolean} Success status
+ */
+function writeJsonFile(filePath, data, pretty = true) {
+  try {
+    const jsonData = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+    
+    // Ensure directory exists
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    fs.writeFileSync(filePath, jsonData, 'utf8');
+    return true;
+  } catch (error) {
+    logToFile(`Error writing JSON file ${filePath}: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Create a progress bar visualization
+ * @param {number} current - Current value
+ * @param {number} total - Total value
+ * @param {number} size - Size of progress bar (default: 10)
+ * @param {string} filledChar - Character for filled portion (default: '█')
+ * @param {string} emptyChar - Character for empty portion (default: '░')
+ * @returns {string} Progress bar string
+ */
+function createProgressBar(current, total, size = 10, filledChar = '█', emptyChar = '░') {
+  const percentage = Math.min(Math.max(current / total, 0), 1);
+  const filledCount = Math.round(size * percentage);
+  const emptyCount = size - filledCount;
+  
+  return filledChar.repeat(filledCount) + emptyChar.repeat(emptyCount);
+}
+
 module.exports = {
-  getTimeUntilNextExecution
-}; 
+  getTimeUntilNextExecution,
+  formatDuration,
+  logToFile,
+  createEmbed,
+  readJsonFile,
+  writeJsonFile,
+  createProgressBar
+};
