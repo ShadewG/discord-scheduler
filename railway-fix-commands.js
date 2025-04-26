@@ -1,4 +1,5 @@
-// Force register Discord commands
+// railway-fix-commands.js - A script to force re-register Discord commands on Railway
+// This script is designed to be deployed to Railway to fix command registration issues
 
 // Load environment variables
 const path = require('path');
@@ -8,15 +9,7 @@ const dotenv = require('dotenv');
 // Try to load from .env file
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
-const { DISCORD_TOKEN } = process.env;
-const clientId = process.env.CLIENT_ID || ''; // Add your client ID to .env or provide it here
-
-if (!DISCORD_TOKEN || !clientId) {
-  console.error('Missing DISCORD_TOKEN or CLIENT_ID in environment variables');
-  process.exit(1);
-}
-
-// Define commands to register
+// Define commands to register - make sure this matches what's in your main bot
 const commands = [
   new SlashCommandBuilder().setName('link').setDescription('Get the Notion link for the current project')
     .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
@@ -36,43 +29,45 @@ const commands = [
                     { name: 'VA Render', value: 'VA Render' }, { name: 'Ready for Editing', value: 'Ready for Editing' },
                     { name: 'Clip Selection', value: 'Clip Selection' }, { name: 'MGX', value: 'MGX' },
                     { name: 'Pause', value: 'Pause' }))),
-  // New test command to verify command registration
-  new SlashCommandBuilder().setName('test-link').setDescription('Test command to verify registration is working')
-    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
-  // Add other commands here...
+  // Add other commands here if needed
 ];
 
+// Get environment variables
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+
+// Validate environment variables
+if (!DISCORD_TOKEN || !CLIENT_ID) {
+  console.error('Missing DISCORD_TOKEN or CLIENT_ID in environment variables');
+  process.exit(1);
+}
+
+// Initialize REST API client
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
+// Main function to register commands
 async function registerCommands() {
   try {
     console.log('Started refreshing application (/) commands.');
-
-    const commandsData = commands.map(command => command.toJSON());
+    console.log(`Using client ID: ${CLIENT_ID}`);
     
-    // For global commands (works across all servers, but takes up to an hour to update)
-    console.log(`Registering ${commandsData.length} commands globally for application ID: ${clientId}`);
+    const commandsData = commands.map(command => command.toJSON());
+    console.log(`Registering ${commandsData.length} commands globally`);
     console.log(`Command names being registered: ${commandsData.map(cmd => cmd.name).join(', ')}`);
     
-    await rest.put(
-      Routes.applicationCommands(clientId),
+    // Register commands globally
+    const globalResponse = await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
       { body: commandsData },
     );
-
-    console.log('Successfully registered application commands. They should show up in Discord within an hour.');
-    console.log('If you want to update commands for a specific server immediately, use the guildId parameter.');
     
-    // Optional: You can also register to a specific guild for immediate testing
-    // Uncomment and replace YOUR_GUILD_ID with an actual guild ID where the bot is present
-    /*
-    const testGuildId = 'YOUR_GUILD_ID'; // Replace with your test server ID
-    console.log(`Also registering commands to test guild: ${testGuildId} for immediate availability`);
-    await rest.put(
-      Routes.applicationGuildCommands(clientId, testGuildId),
-      { body: commandsData },
-    );
-    console.log('Successfully registered application commands to test guild (immediate availability).');
-    */
+    console.log(`Successfully registered ${globalResponse.length} global commands.`);
+    console.log('Global commands will take up to an hour to propagate to all Discord servers.');
+    
+    console.log('Command registration complete!');
+    console.log('Check the Discord Developer Portal to verify commands are registered:');
+    console.log(`https://discord.com/developers/applications/${CLIENT_ID}/information`);
+    
   } catch (error) {
     console.error('Error registering commands:', error);
     console.error('Error details:', error.message);
@@ -82,4 +77,12 @@ async function registerCommands() {
   }
 }
 
-registerCommands();
+// Run the registration function
+registerCommands().then(() => {
+  console.log('Command registration process completed.');
+  // Exit after a delay to ensure logs are captured
+  setTimeout(() => process.exit(0), 1000);
+}).catch(error => {
+  console.error('Uncaught error:', error);
+  process.exit(1);
+});

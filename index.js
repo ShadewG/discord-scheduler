@@ -2278,9 +2278,8 @@ client.on('interactionCreate', async interaction => {
           ).join('\n');
           
           // Get current date
-          const today = new Date().toISOString().split('T')[0];
-          
-          // Send to OpenAI for analysis
+          const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
           const gpt = await openai.chat.completions.create({
             model: 'gpt-4o',
             temperature: 0,
@@ -2792,6 +2791,67 @@ client.on('interactionCreate', async interaction => {
           }
         } else {
           await interaction.editReply(`❌ Error getting Notion link: ${cmdError.message}`);
+        }
+      }
+    }
+    
+    // Test-link command handler
+    else if (commandName === 'test-link') {
+      try {
+        // Check if should be ephemeral (default to true)
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false;
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Create a simple embed for the test
+        const testEmbed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('Command Registration Test')
+          .setDescription('✅ This test command is working correctly!')
+          .addFields(
+            { name: 'Command Name', value: 'test-link' },
+            { name: 'Registration Status', value: 'Successfully registered and working' },
+            { name: 'Server', value: interaction.guild ? interaction.guild.name : 'Direct Message' },
+            { name: 'Channel', value: interaction.channel ? interaction.channel.name : 'Unknown' },
+            { name: 'User', value: interaction.user.tag }
+          )
+          .setTimestamp()
+          .setFooter({ text: 'Command Registration Test' });
+        
+        // Send the reply with the embed
+        await interaction.editReply({
+          content: '✅ **Test command is working!** If you can see this, command registration is successful.',
+          embeds: [testEmbed]
+        });
+        
+        // Log the successful test
+        logToFile(`🧪 Test-link command executed by ${interaction.user.tag} in ${interaction.guild ? interaction.guild.name : 'DM'}`);
+        
+        // If not ephemeral, delete after 1 minute
+        if (!ephemeral) {
+          setTimeout(async () => {
+            try {
+              const fetchedReply = await interaction.fetchReply().catch(() => null);
+              if (fetchedReply) {
+                await interaction.deleteReply();
+                logToFile(`🗑️ Auto-deleted test-link response after 1 minute`);
+              }
+            } catch (deleteError) {
+              logToFile(`Error deleting test-link reply: ${deleteError.message}`);
+            }
+          }, 1 * 60 * 1000); // 1 minute
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /test-link command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error in test command: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
         }
       }
     }
@@ -4366,5 +4426,3 @@ async function handleSyncMessage(msg) {
     quietReply('❌ Error updating Notion; check logs.');
   }
 }
-
-// Function to create a new Notion page if one doesn't exist
