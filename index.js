@@ -80,9 +80,13 @@ try {
   } else {
     console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
   }
-} catch (error) {
-  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
-}
+});
+
+// Global error handler
+client.on('error', (error) => {
+  console.error('Error:', error);
+  // Handle the error here
+});
 
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
@@ -329,24 +333,28 @@ async function findPage(code) {
     }
   } catch (error) {
     logToFile(`❌ Error finding page with code "${code}": ${error.message}`);
-    
-    // Clear the cache if there was an error with the property
-    if (error.code === 'validation_error') {
-      CACHED_TITLE_PROPERTY = null;
-      logToFile(`🔄 Title property cache cleared due to validation error`);
-    }
-    
-    // More detailed troubleshooting
-    if (error.code === 'validation_error') {
-      logToFile(`🔍 TROUBLESHOOTING: Database property issue`);
-      logToFile(`1. Make sure your Notion integration has access to the database`);
-      logToFile(`2. Database ID being used: ${DB}`);
-      logToFile(`3. Check if the database structure has changed`);
-    }
-    
     return null;
   }
 }
+
+// Global error handler
+client.on('error', (error) => {
+  logToFile(`❌ Error finding page with code: ${error.message}`);
+  
+  // Clear the cache if there was an error with the property
+  if (error.code === 'validation_error') {
+    CACHED_TITLE_PROPERTY = null;
+    logToFile(`🔄 Title property cache cleared due to validation error`);
+  }
+  
+  // More detailed troubleshooting
+  if (error.code === 'validation_error') {
+    logToFile(`🔍 TROUBLESHOOTING: Database property issue`);
+    logToFile(`1. Make sure your Notion integration has access to the database`);
+    logToFile(`2. Database ID being used: ${DB}`);
+    logToFile(`3. Check if the database structure has changed`);
+  }
+});
 
 // Function to find the closest matching option
 function findClosestOption(value, options) {
@@ -466,6 +474,13 @@ async function fetchNotionOptions() {
     return false;
   }
 }
+
+// Global error handler
+client.on('error', async (error) => {
+  // Error handler
+  logToFile(`❌ Error fetching Notion options: ${error.message}`);
+  return false;
+});
 
 function toNotion(p) {
   const out = {};
@@ -3347,7 +3362,10 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
-  } catch (error) {
+  });
+
+// Global error handler
+client.on('error', async (error) => {r) {
     // Global error handling
     logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
     logToFile(error.stack);
