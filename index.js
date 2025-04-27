@@ -88,7 +88,7 @@ try {
 client.on('error', (error) => {
   console.error('Error:', error);
   // Handle the error here
-});
+  }
 
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
@@ -3364,7 +3364,7 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
-  });
+  }
 
 // Global error handler
 client.on('error', async (error) => {
