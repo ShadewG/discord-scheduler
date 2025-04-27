@@ -80,7 +80,9 @@ try {
   } else {
     console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
   }
-});
+} catch (error) {
+  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
+}
 
 // Global error handler
 client.on('error', (error) => {
@@ -3365,27 +3367,26 @@ client.on('interactionCreate', async interaction => {
   });
 
 // Global error handler
-client.on('error', async (error) => {r) {
-    // Global error handling
-    logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
-    logToFile(error.stack);
-    
-    try {
-      // Try to notify the user if possible
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
-      } else {
-        await interaction.followUp({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
-      }
-    } catch (replyError) {
-      logToFile(`Failed to send error message: ${replyError.message}`);
+client.on('error', async (error) => {
+  // Global error handling
+  logToFile(`Uncaught error: ${error.message}`);
+  logToFile(error.stack);
+  
+  try {
+    // Try to notify the user if possible
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ 
+        content: '❌ An unexpected error occurred. Please try again later.',
+        ephemeral: true 
+      });
+    } else {
+      await interaction.followUp({ 
+        content: '❌ An unexpected error occurred. Please try again later.',
+        ephemeral: true 
+      });
     }
+  } catch (replyError) {
+    logToFile(`Failed to send error message: ${replyError.message}`);
   }
 });
 
