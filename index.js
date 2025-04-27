@@ -4415,3 +4415,137 @@ async function handleSyncMessage(msg) {
     quietReply('❌ Error updating Notion; check logs.');
   }
 }
+
+// Function to find Discord channels that match a project code
+async function findDiscordChannels(code) {
+  if (!code) return [];
+  
+  try {
+    // Get all text channels from all guilds
+    const channels = [];
+    
+    client.guilds.cache.forEach(guild => {
+      guild.channels.cache.forEach(channel => {
+        if (channel.type === ChannelType.GuildText && 
+            (channel.name.includes(code.toLowerCase()) || 
+             channel.topic?.includes(code))) {
+          channels.push({
+            id: channel.id,
+            name: channel.name,
+            guild: guild.name,
+            url: `https://discord.com/channels/${guild.id}/${channel.id}`
+          });
+        }
+      });
+    });
+    
+    return channels;
+  } catch (error) {
+    logToFile(`Error finding Discord channels: ${error.message}`);
+    return [];
+  }
+}
+
+// Function to find a project by query (code, name, or link)
+async function findProjectByQuery(query) {
+  if (!query) return null;
+  query = query.trim();
+  
+  try {
+    // Case 1: Query is a project code (CL27, IB23, etc.)
+    const codeMatch = query.match(/^(CL|IB|BC)\d{2}$/i);
+    if (codeMatch) {
+      const code = codeMatch[0].toUpperCase();
+      const pageId = await findPage(code);
+      if (pageId) {
+        // Get the page details
+        const page = await notion.pages.retrieve({ page_id: pageId });
+        return { page, code };
+      }
+    }
+    
+    // Case 2: Search by name or partial match
+    const response = await notion.databases.query({
+      database_id: NOTION_DB_ID,
+      filter: {
+        or: [
+          {
+            property: 'Name',
+            rich_text: {
+              contains: query
+            }
+          },
+          {
+            property: 'Description',
+            rich_text: {
+              contains: query
+            }
+          }
+        ]
+      },
+      page_size: 1
+    });
+    
+    if (response.results.length > 0) {
+      const page = response.results[0];
+      // Extract code from title
+      const title = page.properties.Name?.title?.[0]?.plain_text || '';
+      const codeMatch = title.match(/(CL|IB|BC)\d{2}/i);
+      const code = codeMatch ? codeMatch[0].toUpperCase() : '';
+      
+      return { page, code };
+    }
+    
+    return null;
+  } catch (error) {
+    logToFile(`Error in findProjectByQuery: ${error.message}`);
+    throw new Error(`Failed to search for project: ${error.message}`);
+  }
+}
+
+// Function to extract project information from a Notion page
+async function extractProjectInfo(page, code) {
+  if (!page) return null;
+  
+  try {
+    const properties = page.properties;
+    
+    // Get the title from the Name property
+    const title = properties.Name?.title?.[0]?.plain_text || '';
+    
+    // Get the Notion URL
+    const notionUrl = getNotionPageUrl(page.id);
+    
+    // Get other properties
+    const status = properties.Status?.select?.name || '';
+    const dueDate = properties['Due Date']?.date?.start || '';
+    
+    // Get URLs
+    const frameioUrl = properties['Frame.io']?.url || '';
+    const scriptUrl = properties.Script?.url || '';
+    
+    // Get editors/people
+    let editors = [];
+    if (properties.Editor?.people) {
+      editors = properties.Editor.people.map(person => person.name);
+    }
+    
+    // Get Discord channel ID if available
+    const discordChannelId = properties['Discord Channel']?.rich_text?.[0]?.plain_text || '';
+    
+    return {
+      code,
+      title,
+      status,
+      dueDate,
+      notionUrl,
+      frameioUrl,
+      scriptUrl,
+      editors,
+      discordChannelId
+    };
+  } catch (error) {
+    logToFile(`Error extracting project info: ${error.message}`);
+    return null;
+  }
+}
