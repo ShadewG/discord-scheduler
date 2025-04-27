@@ -2884,188 +2884,108 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
-        // Extract project information
-        const projectInfo = await extractProjectInfo(result.page, result.code);
+        // Get the page details directly
+        const page = result.page;
+        const code = result.code;
         
-        if (!projectInfo) {
-          await interaction.editReply({
-            content: `❌ Error extracting project info for "${query}".`,
-            ephemeral: true
-          });
-          return;
-        }
+        // Extract information directly from the page
+        const properties = page.properties;
         
-        // Find Discord channels if not already found
-        let discordChannels = [];
-        if (!projectInfo.discordChannelId) {
-          discordChannels = await findDiscordChannels(projectInfo.code);
-        }
+        // Get basic info
+        const title = properties.Name?.title?.[0]?.plain_text || code;
+        const status = properties.Status?.select?.name || 'Not Set';
+        const dueDate = properties['Due Date']?.date?.start || '';
+        const formattedDueDate = dueDate ? new Date(dueDate).toLocaleDateString('en-US', { 
+          month: 'short', day: 'numeric' 
+        }) : '';
         
-        // Create an embed to display project info
+        // Get URLs
+        const notionUrl = getNotionPageUrl(page.id);
+        const frameioUrl = properties['Frame.io']?.url || '';
+        const scriptUrl = properties.Script?.url || '';
+        
+        // Get people
+        const editors = properties.Editor?.people?.map(p => p.name) || [];
+        const leads = properties.Lead?.people?.map(p => p.name) || [];
+        
+        // Create embed
         const embed = new EmbedBuilder()
           .setColor(0x0099FF)
-          .setTitle(`Project: ${projectInfo.title || projectInfo.code}`)
-          .setDescription(`Here's everything you need for project **${projectInfo.code}**:`)
+          .setTitle(`Project: ${title}`)
+          .setDescription(`Information for project **${code}**`)
           .setTimestamp();
         
-        // Add fields for each piece of information
-        // Notion Link
-        if (projectInfo.notionUrl) {
-          embed.addFields({
-            name: '📋 Notion Card',
-            value: projectInfo.notionUrl
-          });
+        // Add Notion link
+        if (notionUrl) {
+          embed.addFields({ name: '📋 Notion Card', value: notionUrl });
         }
         
-        // Discord Channel
-        let discordValue = 'No Discord channel found';
-        if (projectInfo.discordChannelId) {
-          discordValue = `<#${projectInfo.discordChannelId}>`;
-        } else if (discordChannels.length > 0) {
-          discordValue = discordChannels.map(channel => `<#${channel.id}>`).join('\n');
+        // Add status with due date
+        let statusText = status;
+        if (formattedDueDate) {
+          statusText += ` (Due: ${formattedDueDate})`;
         }
-        embed.addFields({
-          name: '💬 Discord Channel',
-          value: discordValue
-        });
+        embed.addFields({ name: '📊 Status', value: statusText });
         
-        // Frame.io
-        if (projectInfo.frameioUrl) {
-          embed.addFields({
-            name: '🎬 Frame.io',
-            value: projectInfo.frameioUrl
-          });
+        // Add people fields
+        if (leads.length > 0) {
+          embed.addFields({ name: '🎬 Lead', value: leads.join(', '), inline: true });
         }
         
-        // Script
-        if (projectInfo.scriptUrl) {
-          embed.addFields({
-            name: '📝 Script',
-            value: projectInfo.scriptUrl
-          });
+        if (editors.length > 0) {
+          embed.addFields({ name: '✂️ Editor', value: editors.join(', '), inline: true });
         }
         
-        // Editors
-        if (projectInfo.editors && projectInfo.editors.length > 0) {
-          embed.addFields({
-            name: '✂️ Editors',
-            value: projectInfo.editors.join(', ')
-          });
+        // Add Discord channels
+        const discordChannels = await findDiscordChannels(code);
+        if (discordChannels.length > 0) {
+          const channelLinks = discordChannels.map(ch => `<#${ch.id}>`).join('\n');
+          embed.addFields({ name: '💬 Discord Channel', value: channelLinks });
         }
         
-        // Status & Due Date
-        let statusText = projectInfo.status || 'N/A';
-        if (projectInfo.dueDate) {
-          statusText += ` (Due: ${projectInfo.dueDate})`;
-        }
-        embed.addFields({
-          name: '📊 Status',
-          value: statusText
-        });
-        
-        // People fields
-        const peopleFields = [];
-        
-        if (projectInfo.projectOwner && projectInfo.projectOwner.length > 0) {
-          peopleFields.push({
-            name: '👑 Project Owner',
-            value: projectInfo.projectOwner.join(', '),
-            inline: true
-          });
+        // Add links
+        if (scriptUrl) {
+          embed.addFields({ name: '📝 Script', value: scriptUrl });
         }
         
-        if (projectInfo.leads && projectInfo.leads.length > 0) {
-          peopleFields.push({
-            name: '🎬 Lead',
-            value: projectInfo.leads.join(', '),
-            inline: true
-          });
+        if (frameioUrl) {
+          embed.addFields({ name: '🎬 Frame.io', value: frameioUrl });
         }
         
-        if (projectInfo.editors && projectInfo.editors.length > 0) {
-          peopleFields.push({
-            name: '✂️ Editor',
-            value: projectInfo.editors.join(', '),
-            inline: true
-          });
-        }
-        
-        if (projectInfo.writers && projectInfo.writers.length > 0) {
-          peopleFields.push({
-            name: '✍️ Writer',
-            value: projectInfo.writers.join(', '),
-            inline: true
-          });
-        }
-        
-        // Add people fields if we have any
-        if (peopleFields.length > 0) {
-          embed.addFields(peopleFields);
-        }
-        
-        // YouTube
-        if (projectInfo.youtubeUrl) {
-          embed.addFields({
-            name: '📺 YouTube',
-            value: projectInfo.youtubeUrl
-          });
-        }
-        
-        // Priority
-        if (projectInfo.priority) {
-          embed.addFields({
-            name: '📈 Priority',
-            value: projectInfo.priority
-          });
-        }
-        
-        // Create buttons for easy access
+        // Create buttons
         const buttons = [];
         
-        // Notion button
-        if (projectInfo.notionUrl) {
+        if (notionUrl) {
           buttons.push(
             new ButtonBuilder()
               .setLabel('Open in Notion')
               .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.notionUrl)
+              .setURL(notionUrl)
           );
         }
         
-        // Frame.io button
-        if (projectInfo.frameioUrl) {
-          buttons.push(
-            new ButtonBuilder()
-              .setLabel('Open Frame.io')
-              .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.frameioUrl)
-          );
-        }
-        
-        // Script button
-        if (projectInfo.scriptUrl) {
+        if (scriptUrl) {
           buttons.push(
             new ButtonBuilder()
               .setLabel('Open Script')
               .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.scriptUrl)
+              .setURL(scriptUrl)
           );
         }
         
-        // YouTube button
-        if (projectInfo.youtubeUrl) {
+        if (frameioUrl) {
           buttons.push(
             new ButtonBuilder()
-              .setLabel('Open YouTube')
+              .setLabel('Open Frame.io')
               .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.youtubeUrl)
+              .setURL(frameioUrl)
           );
         }
         
         // Add buttons if we have any
         const components = [];
         if (buttons.length > 0) {
-          const row = new ActionRowBuilder().addComponents(...buttons.slice(0, 5)); // Discord allows max 5 buttons per row
+          const row = new ActionRowBuilder().addComponents(...buttons);
           components.push(row);
         }
         
@@ -3083,7 +3003,7 @@ client.on('interactionCreate', async interaction => {
               const fetchedReply = await interaction.fetchReply().catch(() => null);
               if (fetchedReply) {
                 await interaction.deleteReply();
-                logToFile(`🗑️ Auto-deleted where command results for ${projectInfo.code} after 5 minutes`);
+                logToFile(`🗑️ Auto-deleted where command results for ${code} after 5 minutes`);
               }
             } catch (deleteError) {
               logToFile(`Error deleting where command reply: ${deleteError.message}`);
@@ -3106,7 +3026,6 @@ client.on('interactionCreate', async interaction => {
           await interaction.editReply(`❌ Error finding project: ${cmdError.message}`);
         }
       }
-    }
     
     // Handle simpler commands with standardized error handling
     else if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
