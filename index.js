@@ -2963,6 +2963,62 @@ client.on('interactionCreate', async interaction => {
           value: statusText
         });
         
+        // People fields
+        const peopleFields = [];
+        
+        if (projectInfo.projectOwner && projectInfo.projectOwner.length > 0) {
+          peopleFields.push({
+            name: '👑 Project Owner',
+            value: projectInfo.projectOwner.join(', '),
+            inline: true
+          });
+        }
+        
+        if (projectInfo.leads && projectInfo.leads.length > 0) {
+          peopleFields.push({
+            name: '🎬 Lead',
+            value: projectInfo.leads.join(', '),
+            inline: true
+          });
+        }
+        
+        if (projectInfo.editors && projectInfo.editors.length > 0) {
+          peopleFields.push({
+            name: '✂️ Editor',
+            value: projectInfo.editors.join(', '),
+            inline: true
+          });
+        }
+        
+        if (projectInfo.writers && projectInfo.writers.length > 0) {
+          peopleFields.push({
+            name: '✍️ Writer',
+            value: projectInfo.writers.join(', '),
+            inline: true
+          });
+        }
+        
+        // Add people fields if we have any
+        if (peopleFields.length > 0) {
+          embed.addFields(peopleFields);
+        }
+        
+        // YouTube
+        if (projectInfo.youtubeUrl) {
+          embed.addFields({
+            name: '📺 YouTube',
+            value: projectInfo.youtubeUrl
+          });
+        }
+        
+        // Priority
+        if (projectInfo.priority) {
+          embed.addFields({
+            name: '📈 Priority',
+            value: projectInfo.priority
+          });
+        }
+        
         // Create buttons for easy access
         const buttons = [];
         
@@ -2996,10 +3052,20 @@ client.on('interactionCreate', async interaction => {
           );
         }
         
+        // YouTube button
+        if (projectInfo.youtubeUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open YouTube')
+              .setStyle(ButtonStyle.Link)
+              .setURL(projectInfo.youtubeUrl)
+          );
+        }
+        
         // Add buttons if we have any
         const components = [];
         if (buttons.length > 0) {
-          const row = new ActionRowBuilder().addComponents(...buttons);
+          const row = new ActionRowBuilder().addComponents(...buttons.slice(0, 5)); // Discord allows max 5 buttons per row
           components.push(row);
         }
         
@@ -3471,7 +3537,7 @@ client.on('interactionCreate', async interaction => {
     const nextExecution = getNextExecution(cronValue);
     let executionInfo = '';
     if (nextExecution) {
-      executionInfo = `\nNext run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
+      executionInfo = `\nNext execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
     }
     
     await interaction.reply(`✅ Updated reminder "${jobTag}" with new schedule: \`${cronValue}\`${executionInfo}`);
@@ -4519,16 +4585,41 @@ async function extractProjectInfo(page, code) {
     // Get other properties
     const status = properties.Status?.select?.name || '';
     const dueDate = properties['Due Date']?.date?.start || '';
+    const formattedDueDate = dueDate ? new Date(dueDate).toLocaleDateString('en-US', { 
+      weekday: 'short', 
+      month: 'short', 
+      day: 'numeric' 
+    }) : '';
     
     // Get URLs
     const frameioUrl = properties['Frame.io']?.url || '';
     const scriptUrl = properties.Script?.url || '';
+    const youtubeUrl = properties.YouTube?.url || '';
     
-    // Get editors/people
+    // Get people fields
     let editors = [];
     if (properties.Editor?.people) {
       editors = properties.Editor.people.map(person => person.name);
     }
+    
+    let leads = [];
+    if (properties.Lead?.people) {
+      leads = properties.Lead.people.map(person => person.name);
+    }
+    
+    let writers = [];
+    if (properties.Writer?.people) {
+      writers = properties.Writer.people.map(person => person.name);
+    }
+    
+    // Get project owner
+    let projectOwner = [];
+    if (properties['Project Owner']?.people) {
+      projectOwner = properties['Project Owner'].people.map(person => person.name);
+    }
+    
+    // Get priority
+    const priority = properties.Priority?.select?.name || '';
     
     // Get Discord channel ID if available
     const discordChannelId = properties['Discord Channel']?.rich_text?.[0]?.plain_text || '';
@@ -4537,11 +4628,16 @@ async function extractProjectInfo(page, code) {
       code,
       title,
       status,
-      dueDate,
+      dueDate: formattedDueDate,
       notionUrl,
       frameioUrl,
       scriptUrl,
+      youtubeUrl,
       editors,
+      leads,
+      writers,
+      projectOwner,
+      priority,
       discordChannelId
     };
   } catch (error) {
