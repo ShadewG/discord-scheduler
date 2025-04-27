@@ -3028,7 +3028,7 @@ client.on('interactionCreate', async interaction => {
       }
     
     // Handle simpler commands with standardized error handling
-    else if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
+    if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
       try {
         let response;
         let components = [];
