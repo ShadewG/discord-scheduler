@@ -574,6 +574,45 @@ async function fetchDatabaseSchema() {
 // Call this function once at startup to cache the schema
 let notionSchema = null;
 
+// After the findProjectByQuery function, add:
+
+// Helper function to find the best matching property name
+function findBestPropertyMatch(propertyPage, targetName) {
+  if (!propertyPage || !targetName) return null;
+  
+  // Try exact match first
+  if (propertyPage[targetName]) {
+    return targetName;
+  }
+  
+  // Try case-insensitive match (exact spelling but different case)
+  const caseInsensitiveMatch = Object.keys(propertyPage).find(
+    propName => propName.toLowerCase() === targetName.toLowerCase()
+  );
+  
+  if (caseInsensitiveMatch) {
+    logToFile(`Found case-insensitive match for "${targetName}": "${caseInsensitiveMatch}"`);
+    return caseInsensitiveMatch;
+  }
+  
+  // Try fuzzy match (contains the target name)
+  const fuzzyMatches = Object.keys(propertyPage).filter(
+    propName => propName.toLowerCase().includes(targetName.toLowerCase())
+  );
+  
+  if (fuzzyMatches.length === 1) {
+    logToFile(`Found fuzzy match for "${targetName}": "${fuzzyMatches[0]}"`);
+    return fuzzyMatches[0];
+  } else if (fuzzyMatches.length > 1) {
+    logToFile(`Found multiple fuzzy matches for "${targetName}": ${fuzzyMatches.join(', ')}`);
+    // Return the closest match
+    return fuzzyMatches[0]; // Take the first one for now
+  }
+  
+  // No match found
+  return null;
+}
+
 // When the client is ready, run this code
 client.once('ready', () => {
   console.log('Bot is ready!');
@@ -1630,6 +1669,77 @@ Example Output: {
         // Prepare Notion properties object
         const notionProperties = {};
         
+        // For any property update, try to find the best property name match
+        if (subcommand === 'status' || subcommand === 'caption_status' || subcommand === 'category') {
+          // Get the page properties
+          const pageProperties = project.page.properties;
+          
+          // Normalize expected property name based on subcommand
+          let propertyNameToFind = '';
+          if (subcommand === 'status') {
+            propertyNameToFind = 'Status';
+          } else if (subcommand === 'caption_status') {
+            propertyNameToFind = 'Caption Status';
+          } else if (subcommand === 'category') {
+            propertyNameToFind = 'Category';
+          }
+          
+          // Find the best property match
+          const bestMatch = findBestPropertyMatch(pageProperties, propertyNameToFind);
+          
+          if (bestMatch) {
+            logToFile(`Using best match property name: "${bestMatch}" for "${propertyNameToFind}"`);
+            notionProperties[bestMatch] = { select: { name: value } };
+            
+            // Log extra debugging info about the property
+            logToFile(`Property details: ${JSON.stringify(pageProperties[bestMatch])}`);
+            
+            // Skip the switch statement since we've already set the property
+            try {
+              // Update the Notion page
+              await notion.pages.update({
+                page_id: project.page.id,
+                properties: notionProperties
+              });
+              
+              // Get the Notion URL for the page
+              const notionUrl = getNotionPageUrl(project.page.id);
+              
+              // Create components with button if there's a Notion URL
+              const components = [];
+              if (notionUrl) {
+                const row = new ActionRowBuilder()
+                  .addComponents(
+                    new ButtonBuilder()
+                      .setLabel('View in Notion')
+                      .setStyle(ButtonStyle.Link)
+                      .setURL(notionUrl)
+                  );
+                components.push(row);
+              }
+              
+              // Success message
+              await interaction.editReply({
+                content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
+                components: components.length > 0 ? components : undefined
+              });
+              
+              // Also send a non-ephemeral message to channel for visibility
+              await interaction.channel.send(
+                `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+              );
+              
+              // Skip the rest of the function since we've handled it
+              return;
+            } catch (updateError) {
+              logToFile(`Error updating property using best match: ${updateError.message}`);
+              // Continue to switch statement as fallback
+            }
+          } else {
+            logToFile(`No matching property found for "${propertyNameToFind}"`);
+          }
+        }
+        
         // Set the appropriate property based on the subcommand
         switch (subcommand) {
           case 'status':
@@ -2144,122 +2254,3 @@ function checkAllNextExecutionTimes() {
   
   logToFile('=== Next Execution Times Check Complete ===');
 }
-
-// After fetchDatabaseSchema, add:
-
-// Helper function to find the best matching property name
-function findBestPropertyMatch(propertyPage, targetName) {
-  if (!propertyPage || !targetName) return null;
-  
-  // Try exact match first
-  if (propertyPage[targetName]) {
-    return targetName;
-  }
-  
-  // Try case-insensitive match (exact spelling but different case)
-  const caseInsensitiveMatch = Object.keys(propertyPage).find(
-    propName => propName.toLowerCase() === targetName.toLowerCase()
-  );
-  
-  if (caseInsensitiveMatch) {
-    logToFile(`Found case-insensitive match for "${targetName}": "${caseInsensitiveMatch}"`);
-    return caseInsensitiveMatch;
-  }
-  
-  // Try fuzzy match (contains the target name)
-  const fuzzyMatches = Object.keys(propertyPage).filter(
-    propName => propName.toLowerCase().includes(targetName.toLowerCase())
-  );
-  
-  if (fuzzyMatches.length === 1) {
-    logToFile(`Found fuzzy match for "${targetName}": "${fuzzyMatches[0]}"`);
-    return fuzzyMatches[0];
-  } else if (fuzzyMatches.length > 1) {
-    logToFile(`Found multiple fuzzy matches for "${targetName}": ${fuzzyMatches.join(', ')}`);
-    // Return the closest match
-    return fuzzyMatches[0]; // Take the first one for now
-  }
-  
-  // No match found
-  return null;
-}
-
-// Now in the /set command handler, add a generic property finder:
-
-        // Before the switch statement, add:
-        
-        // For any property update, try to find the best property name match
-        if (subcommand === 'status' || subcommand === 'caption_status' || subcommand === 'category') {
-          // Get the page properties
-          const pageProperties = project.page.properties;
-          
-          // Normalize expected property name based on subcommand
-          let propertyNameToFind = '';
-          if (subcommand === 'status') {
-            propertyNameToFind = 'Status';
-          } else if (subcommand === 'caption_status') {
-            propertyNameToFind = 'Caption Status';
-          } else if (subcommand === 'category') {
-            propertyNameToFind = 'Category';
-          }
-          
-          // Find the best property match
-          const bestMatch = findBestPropertyMatch(pageProperties, propertyNameToFind);
-          
-          if (bestMatch) {
-            logToFile(`Using best match property name: "${bestMatch}" for "${propertyNameToFind}"`);
-            notionProperties[bestMatch] = { select: { name: value } };
-            
-            // Log extra debugging info about the property
-            logToFile(`Property details: ${JSON.stringify(pageProperties[bestMatch])}`);
-            
-            // Skip the switch statement since we've already set the property
-            try {
-              // Update the Notion page
-              await notion.pages.update({
-                page_id: project.page.id,
-                properties: notionProperties
-              });
-              
-              // Get the Notion URL for the page
-              const notionUrl = getNotionPageUrl(project.page.id);
-              
-              // Create components with button if there's a Notion URL
-              const components = [];
-              if (notionUrl) {
-                const row = new ActionRowBuilder()
-                  .addComponents(
-                    new ButtonBuilder()
-                      .setLabel('View in Notion')
-                      .setStyle(ButtonStyle.Link)
-                      .setURL(notionUrl)
-                  );
-                components.push(row);
-              }
-              
-              // Success message
-              await interaction.editReply({
-                content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
-                components: components.length > 0 ? components : undefined
-              });
-              
-              // Also send a non-ephemeral message to channel for visibility
-              await interaction.channel.send(
-                `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
-              );
-              
-              // Skip the rest of the function since we've handled it
-              return;
-            } catch (updateError) {
-              logToFile(`Error updating property using best match: ${updateError.message}`);
-              // Continue to switch statement as fallback
-            }
-          } else {
-            logToFile(`No matching property found for "${propertyNameToFind}"`);
-          }
-        }
-        
-        // Proceed with the switch statement as fallback
-        
-        // Set the appropriate property based on the subcommand
-// ... existing code ...
