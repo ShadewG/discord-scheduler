@@ -6,6 +6,10 @@ const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const moment = require('moment-timezone');
+
+// Import availability module
+const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
 
 // Load environment variables
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -394,6 +398,300 @@ client.on('interactionCreate', async interaction => {
           await interaction.editReply(`❌ Error finding project: ${error.message}`);
         } else {
           await interaction.reply({ content: `❌ Error finding project: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /availability command
+    else if (commandName === 'availability') {
+      try {
+        // Check if ephemeral flag is set
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        
+        // Current Berlin time
+        const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
+        
+        // Create the embed
+        const embed = new EmbedBuilder()
+          .setTitle('Team Availability')
+          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted below:`)
+          .setColor(0x00AAFF)
+          .setTimestamp();
+        
+        // Group staff by availability status
+        const activeStaff = [];
+        const inactiveStaff = [];
+        
+        // Process each staff member
+        STAFF_AVAILABILITY.forEach(staff => {
+          const isActive = isStaffActive(staff);
+          const timeLeft = getTimeLeftInShift(staff);
+          const workingHours = formatWorkingHours(staff);
+          
+          const staffInfo = {
+            name: staff.name,
+            isActive,
+            timeLeft,
+            workingHours
+          };
+          
+          if (isActive) {
+            activeStaff.push(staffInfo);
+          } else {
+            inactiveStaff.push(staffInfo);
+          }
+        });
+        
+        // Add active staff field with inline status
+        if (activeStaff.length > 0) {
+          const activeStaffText = activeStaff.map(staff => 
+            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText });
+        } else {
+          embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
+        }
+        
+        // Add inactive staff field
+        if (inactiveStaff.length > 0) {
+          const inactiveStaffText = inactiveStaff.map(staff => 
+            `${staff.name} - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText });
+        }
+        
+        embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
+        
+        // Send the embed
+        await interaction.editReply({ embeds: [embed] });
+        
+      } catch (error) {
+        logToFile(`Error in /availability command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error displaying availability: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error displaying availability: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /analyze command
+    else if (commandName === 'analyze') {
+      try {
+        // Get command options with defaults
+        const messageCount = interaction.options.getInteger('messages') || 100;
+        const dryRun = interaction.options.getBoolean('dry_run') || false;
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        
+        // Check if channel is linked to a Notion page
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Log the command
+        logToFile(`/analyze command used in #${channel.name} for ${messageCount} messages by ${interaction.user.tag}`);
+        
+        // Check if Notion is configured
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code (IB##, CL##, BC##)
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Get the page
+        const page = project.page;
+        
+        // Fetch messages
+        let messages;
+        try {
+          messages = await channel.messages.fetch({ limit: Math.min(messageCount, 100) });
+          logToFile(`Fetched ${messages.size} messages from #${channel.name}`);
+        } catch (fetchError) {
+          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}`);
+          return;
+        }
+        
+        // If OpenAI is not configured, we can't analyze messages
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          return;
+        }
+        
+        // Prepare messages for analysis
+        const messageTexts = [...messages.values()]
+          .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // Sort chronologically
+          .map(msg => `${msg.author.tag}: ${msg.content}`)
+          .join('\n');
+        
+        // Add context about what we're looking for
+        const systemPrompt = `
+          You are analyzing Discord messages from a video production project. 
+          Extract the following properties from the conversation:
+          
+          1. Project status (e.g., Writing, Writing Review, VA Render, Ready for Editing, Clip Selection, MGX)
+          2. Script link (Google Docs URL)
+          3. Frame.io link
+          4. Key dates mentioned (filming dates, delivery dates)
+          5. Editor assignment
+          6. Lead assignment
+          7. Progress updates
+          
+          Format your response as a JSON object with these properties.
+          Only include properties that are clearly mentioned in the messages.
+        `;
+        
+        // Complete the prompt with extracted context
+        let gptResponse;
+        try {
+          gptResponse = await openai.chat.completions.create({
+            model: 'gpt-3.5-turbo',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: messageTexts }
+            ],
+            max_tokens: 1000
+          });
+          
+          logToFile(`OpenAI analysis completed for ${projectCode}`);
+        } catch (aiError) {
+          logToFile(`OpenAI error: ${aiError.message}`);
+          await interaction.editReply(`❌ Error analyzing messages: ${aiError.message}`);
+          return;
+        }
+        
+        // Extract completion
+        const completion = gptResponse.choices[0]?.message?.content;
+        if (!completion) {
+          await interaction.editReply('❌ Error: No completion received from OpenAI.');
+          return;
+        }
+        
+        // Try to parse the JSON response
+        let extractedData;
+        try {
+          // Extract JSON from the response (it might be wrapped in markdown code blocks)
+          const jsonMatch = completion.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || 
+                            completion.match(/(\{[\s\S]*\})/);
+                            
+          const jsonString = jsonMatch ? jsonMatch[1] : completion;
+          extractedData = JSON.parse(jsonString);
+          
+          logToFile(`Successfully parsed JSON for ${projectCode}`);
+        } catch (parseError) {
+          logToFile(`JSON parse error: ${parseError.message}, raw: ${completion}`);
+          await interaction.editReply(`❌ Error parsing extracted data: ${parseError.message}`);
+          return;
+        }
+        
+        // Format the extracted data for display
+        const embed = new EmbedBuilder()
+          .setTitle(`Analysis Results: ${projectCode}`)
+          .setDescription(`Analyzed ${messages.size} messages in <#${channel.id}>`)
+          .setColor(dryRun ? 0xFFAA00 : 0x00AAFF)
+          .setTimestamp();
+        
+        // Add fields for each piece of data
+        Object.entries(extractedData).forEach(([key, value]) => {
+          if (value && value !== '') {
+            embed.addFields({ name: key, value: String(value).substring(0, 1024) });
+          }
+        });
+        
+        // Add footer based on dry run status
+        if (dryRun) {
+          embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
+        } else {
+          // Convert extracted data to Notion properties
+          const propertiesToUpdate = {};
+          
+          // Map extracted data to Notion properties
+          if (extractedData.status) {
+            propertiesToUpdate['Status'] = {
+              select: { name: extractedData.status }
+            };
+          }
+          
+          if (extractedData.script_link) {
+            propertiesToUpdate['Script'] = {
+              url: extractedData.script_link
+            };
+          }
+          
+          if (extractedData.frame_io_link) {
+            propertiesToUpdate['Frame.io'] = {
+              url: extractedData.frame_io_link
+            };
+          }
+          
+          if (extractedData.editor) {
+            propertiesToUpdate['Editor'] = {
+              multi_select: extractedData.editor.split(',').map(name => ({ name: name.trim() }))
+            };
+          }
+          
+          if (extractedData.lead) {
+            propertiesToUpdate['Lead'] = {
+              people: extractedData.lead.split(',').map(name => ({ name: name.trim() }))
+            };
+          }
+          
+          if (extractedData.due_date) {
+            propertiesToUpdate['Date'] = {
+              date: { start: extractedData.due_date }
+            };
+          }
+          
+          // Update Notion if not a dry run
+          try {
+            await notion.pages.update({
+              page_id: page.id,
+              properties: propertiesToUpdate
+            });
+            
+            embed.setFooter({ text: '✅ Notion updated successfully' });
+            logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(propertiesToUpdate).join(', ')}`);
+          } catch (notionError) {
+            logToFile(`Notion update error: ${notionError.message}`);
+            embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
+          }
+        }
+        
+        // Send the response
+        await interaction.editReply({ embeds: [embed] });
+        
+      } catch (error) {
+        logToFile(`Error in /analyze command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error analyzing messages: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error analyzing messages: ${error.message}`, ephemeral: true });
         }
       }
     }
