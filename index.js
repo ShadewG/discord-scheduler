@@ -436,6 +436,10 @@ async function ping(message) {
       } else if (!permissions.has('SendMessages')) {
         logToFile(`ERROR: Bot doesn't have 'Send Messages' permission in #${channel.name}`);
         return null;
+      } else if (!permissions.has('MentionEveryone')) {
+        logToFile(`⚠️ WARNING: Bot doesn't have 'Mention Everyone' permission in #${channel.name}`);
+        logToFile(`This may prevent the bot from mentioning roles!`);
+        // Continue anyway since we can still send messages
       }
       
       // Fix: Use await to properly wait for the message to be sent
@@ -786,11 +790,25 @@ client.once('ready', () => {
         console.log('✅ Bot has all required permissions for the schedule channel');
         logToFile('✅ Bot has all required permissions for the schedule channel');
         
-        // Try sending a test message
-        scheduleChannel.send('🤖 Bot started successfully and has access to this channel.')
-          .then(() => logToFile('✅ Test message sent successfully to schedule channel'))
+        // Check specifically for mention permissions
+        if (!permissions.has('MentionEveryone')) {
+          console.warn('⚠️ Bot does not have permission to mention @everyone, @here, or roles');
+          logToFile('⚠️ Bot does not have permission to mention @everyone, @here, or roles');
+          logToFile('This may prevent role mentions from working properly in scheduled messages');
+          logToFile('To fix this, give the bot the "Mention @everyone, @here, and All Roles" permission');
+        } else {
+          console.log('✅ Bot has permission to mention roles');
+          logToFile('✅ Bot has permission to mention roles');
+        }
+        
+        // Try sending a test message with a role mention
+        const testMessage = `🤖 Bot startup test: This is a test message with role mention <@&${TEAM_ROLE_ID}>`;
+        logToFile(`Sending test message with role mention: ${testMessage}`);
+        
+        scheduleChannel.send(testMessage)
+          .then(() => logToFile('✅ Test message with role mention sent successfully'))
           .catch(error => {
-            logToFile(`❌ Failed to send test message to schedule channel: ${error.message}`);
+            logToFile(`❌ Failed to send test message with role mention: ${error.message}`);
             console.error('Failed to send test message:', error);
           });
       }
