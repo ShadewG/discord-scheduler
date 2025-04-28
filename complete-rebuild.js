@@ -1,4 +1,13 @@
-// Discord Bot for Insanity
+// Script to completely rebuild the index.js file with proper syntax
+const fs = require('fs');
+const path = require('path');
+
+// Read the index.js file
+const indexPath = path.join(__dirname, 'index.js');
+let content = fs.readFileSync(indexPath, 'utf8');
+
+// Create a new file with just the essential parts and proper structure
+const newContent = `// Discord Bot for Insanity
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
@@ -33,7 +42,7 @@ const notion = new NotionClient({
 // Utility function for logging
 function logToFile(message) {
   const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${message}\n`;
+  const logMessage = \`[\${timestamp}] \${message}\\n\`;
   fs.appendFileSync(path.join(__dirname, 'bot.log'), logMessage);
 }
 
@@ -53,14 +62,14 @@ try {
 // Error handler
 client.on('error', (error) => {
   console.error('Error:', error);
-  logToFile(`Error: ${error.message}`);
+  logToFile(\`Error: \${error.message}\`);
 });
 
 // Get Notion page URL
 function getNotionPageUrl(pageId) {
   if (!pageId) return null;
   // Format is: https://www.notion.so/{workspace}/{page-id}
-  return `https://www.notion.so/${pageId.replace(/-/g, '')}`;
+  return \`https://www.notion.so/\${pageId.replace(/-/g, '')}\`;
 }
 
 // Function to find a project by query
@@ -105,7 +114,7 @@ async function findProjectByQuery(query) {
     
     return null;
   } catch (error) {
-    logToFile(`Error finding project: ${error.message}`);
+    logToFile(\`Error finding project: \${error.message}\`);
     return null;
   }
 }
@@ -122,7 +131,7 @@ client.once('ready', () => {
     console.log('Commands registered successfully');
   } catch (error) {
     console.error('Error registering commands:', error);
-    logToFile(`Error registering commands: ${error.message}`);
+    logToFile(\`Error registering commands: \${error.message}\`);
   }
 });
 
@@ -151,7 +160,7 @@ client.on('interactionCreate', async interaction => {
         
         const project = await findProjectByQuery(query);
         if (!project) {
-          await interaction.editReply(`❌ Could not find a project matching "${query}"`);
+          await interaction.editReply(\`❌ Could not find a project matching "\${query}"\`);
           return;
         }
         
@@ -166,7 +175,7 @@ client.on('interactionCreate', async interaction => {
         
         // Create embed
         const embed = new EmbedBuilder()
-          .setTitle(`Project: ${name} (${code})`)
+          .setTitle(\`Project: \${name} (\${code})\`)
           .setColor(0x0099FF)
           .addFields(
             { name: 'Status', value: status, inline: true },
@@ -179,11 +188,11 @@ client.on('interactionCreate', async interaction => {
         
         await interaction.editReply({ embeds: [embed] });
       } catch (error) {
-        logToFile(`Error in /where command: ${error.message}`);
+        logToFile(\`Error in /where command: \${error.message}\`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error finding project: ${error.message}`);
+          await interaction.editReply(\`❌ Error finding project: \${error.message}\`);
         } else {
-          await interaction.reply({ content: `❌ Error finding project: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: \`❌ Error finding project: \${error.message}\`, ephemeral: true });
         }
       }
     }
@@ -193,7 +202,7 @@ client.on('interactionCreate', async interaction => {
     
   } catch (error) {
     // Global error handling
-    logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
+    logToFile(\`Uncaught error in command \${commandName}: \${error.message}\`);
     logToFile(error.stack);
     
     try {
@@ -210,7 +219,7 @@ client.on('interactionCreate', async interaction => {
         });
       }
     } catch (notifyError) {
-      logToFile(`Failed to notify user about error: ${notifyError.message}`);
+      logToFile(\`Failed to notify user about error: \${notifyError.message}\`);
     }
   }
 });
@@ -218,9 +227,18 @@ client.on('interactionCreate', async interaction => {
 // Log in to Discord
 client.login(TOKEN).catch(error => {
   console.error('Failed to log in to Discord:', error);
-  logToFile(`Login error: ${error.message}`);
+  logToFile(\`Login error: \${error.message}\`);
   process.exit(1);
 });
 
 // Export the client for testing
 module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
+`;
+
+// Write the new content to the file
+fs.writeFileSync(indexPath, newContent);
+console.log('Successfully rebuilt index.js with proper syntax');
+
+// Create a backup of the original file
+fs.writeFileSync(path.join(__dirname, 'index.js.backup'), content);
+console.log('Created backup of original index.js as index.js.backup');
