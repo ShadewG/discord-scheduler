@@ -77,6 +77,9 @@ jobs = [...jobs, ...notificationJobs];
 // Helper function to get the next execution time for a cron expression
 function getNextExecution(cronExpression) {
   try {
+    // Log the cron expression for debugging
+    logToFile(`Calculating next execution for cron: ${cronExpression}`);
+    
     // Get current time
     const now = new Date();
     
@@ -111,6 +114,9 @@ function getNextExecution(cronExpression) {
     // Format the time left
     const formattedTimeLeft = `${hours}h ${minutes}m ${seconds}s`;
     
+    // Log successful calculation
+    logToFile(`Next execution for ${cronExpression}: ${formatted} (in ${formattedTimeLeft})`);
+    
     return { 
       date: nextDate, 
       formatted, 
@@ -119,6 +125,7 @@ function getNextExecution(cronExpression) {
     };
   } catch (error) {
     console.error(`Error calculating next execution: ${error.message}`);
+    logToFile(`Error calculating next execution for cron "${cronExpression}": ${error.message}\n${error.stack}`);
     return null;
   }
 }
@@ -138,9 +145,20 @@ function createScheduleEmbed() {
   // Only process non-notification jobs for display in the regular schedule
   const displayJobs = jobs.filter(job => !job.isNotification);
   
+  // Log the number of jobs being processed
+  logToFile(`Creating schedule embed. Total jobs: ${jobs.length}, Display jobs (non-notification): ${displayJobs.length}`);
+  
+  // Log each job for debugging
+  displayJobs.forEach((job, index) => {
+    logToFile(`Job ${index + 1}: ${job.tag} (${job.cron})`);
+  });
+  
   displayJobs.forEach(job => {
     const nextExecution = getNextExecution(job.cron);
-    if (!nextExecution) return;
+    if (!nextExecution) {
+      logToFile(`Failed to get next execution for job: ${job.tag} (${job.cron})`);
+      return;
+    }
     
     // Create formatted job info
     const jobInfo = {
@@ -155,10 +173,15 @@ function createScheduleEmbed() {
     // Add to upcoming if it's within the next 12 hours
     if (nextExecution.timeLeft.hours < 12) {
       upcomingJobs.push(jobInfo);
+      logToFile(`Added to upcoming jobs: ${job.tag} (${job.cron}) - in ${nextExecution.formattedTimeLeft}`);
     } else {
       regularJobs.push(jobInfo);
+      logToFile(`Added to regular jobs: ${job.tag} (${job.cron}) - in ${nextExecution.formattedTimeLeft}`);
     }
   });
+  
+  // Log summary of processed jobs
+  logToFile(`Processed jobs summary: Upcoming=${upcomingJobs.length}, Regular=${regularJobs.length}`);
   
   // Sort upcoming jobs by execution time
   upcomingJobs.sort((a, b) => a.next.date.getTime() - b.next.date.getTime());

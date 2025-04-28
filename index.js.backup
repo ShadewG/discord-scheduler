@@ -19,6 +19,9 @@ const { OpenAI } = require('openai');
 // Add this line to require the availability module
 const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, getCurrentBerlinTime, createTimeProgressBar } = require('./availability');
 
+// Import the auto-register-commands module
+const { registerCommandsOnStartup } = require('./auto-register-commands');
+
 // ⬇⬇ Notion integration -----------------------------------------------------
 // Normalize the database ID by removing any hyphens
 const rawDB = process.env.NOTION_DB_ID || '';
@@ -28,6 +31,14 @@ const TARGET_PROP = 'Caption Status';
 const TARGET_VALUE = 'Ready For Captions';
 const RAY_ID = '348547268695162890';            // User ID to notify
 const NOTION_CHANNEL_ID = '1364886978851508224';       // Channel for Notion notifications
+
+// Use actual bot startup time instead of arbitrary past date
+// Track when the bot started to only notify about changes after startup
+const BOT_START_TIME = new Date();
+let lastCheck = new Date();
+
+// Add path for storing processed notifications
+const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
 
 // Cache for Notion database title property to avoid repeated lookups
 let CACHED_TITLE_PROPERTY = null;
@@ -60,8 +71,24 @@ if (!DISCORD_TOKEN || !CHANNEL_ID || !ROLE_ID) {
   process.exit(1);
 }
 
-// Initialize API clients
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// Initialize API clients - make OpenAI optional
+let openai = null;
+try {
+  if (OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    console.log('✅ OpenAI client initialized successfully');
+  } else {
+    console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
+  }
+} catch (error) {
+  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
+}
+
+// Global error handler
+client.on('error', (error) => {
+  console.error('Error:', error);
+  // Handle the error here
+});
 
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
@@ -308,24 +335,28 @@ async function findPage(code) {
     }
   } catch (error) {
     logToFile(`❌ Error finding page with code "${code}": ${error.message}`);
-    
-    // Clear the cache if there was an error with the property
-    if (error.code === 'validation_error') {
-      CACHED_TITLE_PROPERTY = null;
-      logToFile(`🔄 Title property cache cleared due to validation error`);
-    }
-    
-    // More detailed troubleshooting
-    if (error.code === 'validation_error') {
-      logToFile(`🔍 TROUBLESHOOTING: Database property issue`);
-      logToFile(`1. Make sure your Notion integration has access to the database`);
-      logToFile(`2. Database ID being used: ${DB}`);
-      logToFile(`3. Check if the database structure has changed`);
-    }
-    
     return null;
   }
 }
+
+// Global error handler
+client.on('error', (error) => {
+  logToFile(`❌ Error finding page with code: ${error.message}`);
+  
+  // Clear the cache if there was an error with the property
+  if (error.code === 'validation_error') {
+    CACHED_TITLE_PROPERTY = null;
+    logToFile(`🔄 Title property cache cleared due to validation error`);
+  }
+  
+  // More detailed troubleshooting
+  if (error.code === 'validation_error') {
+    logToFile(`🔍 TROUBLESHOOTING: Database property issue`);
+    logToFile(`1. Make sure your Notion integration has access to the database`);
+    logToFile(`2. Database ID being used: ${DB}`);
+    logToFile(`3. Check if the database structure has changed`);
+  }
+});
 
 // Function to find the closest matching option
 function findClosestOption(value, options) {
@@ -445,6 +476,13 @@ async function fetchNotionOptions() {
     return false;
   }
 }
+
+// Global error handler
+client.on('error', async (error) => {
+  // Error handler
+  logToFile(`❌ Error fetching Notion options: ${error.message}`);
+  return false;
+});
 
 function toNotion(p) {
   const out = {};
@@ -652,13 +690,38 @@ async function sendNotionMessage(text) {
   }
 }
 
-/* ─ Poll Notion every minute ─────────────────────────────────────── */
-// Use actual bot startup time instead of arbitrary past date
-// Track when the bot started to only notify about changes after startup
-const BOT_START_TIME = new Date();
-let lastCheck = new Date();
-const processedPageIds = new Set();     // track pages we've already processed
+// Duplicate declaration - already defined above
+// const processedNotificationsPath = path.join(__dirname, 'processed-notifications.json');
 
+// Add this function near the other save/load functions
+function loadProcessedNotifications() {
+  try {
+    if (fs.existsSync(processedNotificationsPath)) {
+      const data = fs.readFileSync(processedNotificationsPath, 'utf8');
+      const loaded = JSON.parse(data);
+      logToFile(`Loaded ${Object.keys(loaded).length} processed notifications from file`);
+      return loaded;
+    }
+  } catch (error) {
+    logToFile(`Error loading processed notifications: ${error.message}`);
+  }
+  return {};
+}
+
+// Add this function near the other save/load functions
+function saveProcessedNotifications(notifications) {
+  try {
+    fs.writeFileSync(processedNotificationsPath, JSON.stringify(notifications, null, 2));
+    logToFile(`Saved ${Object.keys(notifications).length} processed notifications to file`);
+  } catch (error) {
+    logToFile(`Error saving processed notifications: ${error.message}`);
+  }
+}
+
+// Initialize the processed notifications tracking at global scope
+let processedNotifications = loadProcessedNotifications();
+
+// Replace the pollNotion function with this improved version
 async function pollNotion() {
   try {
     if (!process.env.NOTION_TOKEN) {
@@ -674,9 +737,7 @@ async function pollNotion() {
     logToFile(`🔍 Polling Notion database (ID: ${DB.substring(0, 6)}...${DB.substring(DB.length - 4)}) for updates...`);
     
     let notificationCount = 0;
-    
-    // Track newly processed pages to avoid duplicate notifications
-    const processedThisRun = new Set();
+    const now = new Date();
     
     // First, check the default Caption Status watcher
     try {
@@ -693,25 +754,30 @@ async function pollNotion() {
 
       for (const page of res.results) {
         const pageId = page.id;
-        
-        // Skip if we've already processed this page
-        if (processedPageIds.has(pageId)) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed previously. Skipping.`);
-          continue;
-        }
-        
         const edited = new Date(page.last_edited_time);
         
         // Skip pages that were edited before the bot started
         if (edited <= BOT_START_TIME) {
-          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for default watcher.`);
-          
-          // Still add to processed pages so we don't check it again
-          processedPageIds.add(pageId);
+          logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring.`);
           continue;
         }
         
-        // Try different title property names
+        // Check if we've already processed this page recently
+        const lastNotificationTime = processedNotifications[pageId];
+        if (lastNotificationTime) {
+          const lastNotified = new Date(lastNotificationTime);
+          const hoursSinceLastNotification = (now.getTime() - lastNotified.getTime()) / (1000 * 60 * 60);
+          
+          // Skip if notification was sent in the last 24 hours
+          if (hoursSinceLastNotification < 24) {
+            logToFile(`🔄 Skipping page ${pageId.substring(0, 8)}... - already notified ${hoursSinceLastNotification.toFixed(1)} hours ago. Will notify again after 24 hours.`);
+            continue;
+          }
+          
+          logToFile(`⏱️ Page ${pageId.substring(0, 8)}... was last notified ${hoursSinceLastNotification.toFixed(1)} hours ago. It's time to notify again.`);
+        }
+        
+        // Get the page title
         let title = null;
         let titlePropertyName = null;
         
@@ -726,12 +792,8 @@ async function pollNotion() {
           }
         }
         
-        // If no title found, list available properties and use default
+        // If no title found in common properties, look for any title property
         if (!title) {
-          const availableProps = Object.keys(page.properties).join(', ');
-          logToFile(`⚠️ Could not find title property. Available properties: ${availableProps}`);
-          
-          // Find any title property
           for (const [propName, prop] of Object.entries(page.properties)) {
             if (prop.type === 'title' && prop.title?.length > 0) {
               title = prop.title[0].plain_text;
@@ -747,19 +809,20 @@ async function pollNotion() {
           }
         }
         
-        logToFile(`🔔 Found new Notion page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
+        logToFile(`🔔 Sending notification for page with caption ready: "${title}" (using property: ${titlePropertyName || 'none'})`);
         logToFile(`   - Last edited: ${edited.toISOString()}`);
-        logToFile(`   - Current check time: ${new Date().toISOString()}`);
+        logToFile(`   - Current check time: ${now.toISOString()}`);
         
-        // Add to processed pages so we don't notify again
-        processedPageIds.add(pageId);
-        processedThisRun.add(pageId);
-        
-        // Send to the dedicated Notion channel instead of regular channel
+        // Send the notification
         await sendNotionMessage(
           `<@${RAY_ID}> Captions are ready for project **"${title}"**`
         );
         
+        // Record that we've sent a notification for this page
+        processedNotifications[pageId] = now.toISOString();
+        saveProcessedNotifications(processedNotifications);
+        
+        logToFile(`✅ Notification sent and recorded for page ${pageId.substring(0, 8)}...`);
         notificationCount++;
       }
     } catch (err) {
@@ -808,30 +871,28 @@ async function pollNotion() {
           
           for (const page of res.results) {
             const pageId = page.id;
-            
-            // Skip if we've already processed this page for this watcher
-            const watcherPageKey = `${watcher.id}:${pageId}`;
-            if (processedPageIds.has(watcherPageKey)) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed for watcher "${watcher.name}". Skipping.`);
-              continue;
-            }
-            
+            const watcherKey = `${watcher.id}:${pageId}`;
             const edited = new Date(page.last_edited_time);
             
             // Skip pages that were edited before the bot started
             if (edited <= BOT_START_TIME) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring for watcher "${watcher.name}".`);
-              
-              // Still add to processed pages so we don't check it again
-              processedPageIds.add(watcherPageKey);
+              logToFile(`👀 Page ${pageId.substring(0, 8)}... was last edited at ${edited.toISOString()}, which is before bot startup at ${BOT_START_TIME.toISOString()}. Ignoring.`);
               continue;
             }
             
-            // Skip if we already processed this page in this run
-            if (processedThisRun.has(pageId)) {
-              logToFile(`👀 Page ${pageId.substring(0, 8)}... was already processed by another watcher in this run. Skipping duplicate notification.`);
-              processedPageIds.add(watcherPageKey);
-              continue;
+            // Check if we've already processed this page for this watcher recently
+            const lastNotificationTime = processedNotifications[watcherKey];
+            if (lastNotificationTime) {
+              const lastNotified = new Date(lastNotificationTime);
+              const hoursSinceLastNotification = (now.getTime() - lastNotified.getTime()) / (1000 * 60 * 60);
+              
+              // Skip if notification was sent in the last 24 hours
+              if (hoursSinceLastNotification < 24) {
+                logToFile(`🔄 Skipping watcher notification for page ${pageId.substring(0, 8)}... - already notified ${hoursSinceLastNotification.toFixed(1)} hours ago.`);
+                continue;
+              }
+              
+              logToFile(`⏱️ Watcher "${watcher.name}" for page ${pageId.substring(0, 8)}... was last notified ${hoursSinceLastNotification.toFixed(1)} hours ago. It's time to notify again.`);
             }
             
             // Get the title
@@ -862,15 +923,16 @@ async function pollNotion() {
             logToFile(`   - Property: ${watcher.property} = ${watcher.value}`);
             logToFile(`   - User to notify: <@${watcher.userId}>`);
             
-            // Add to processed pages so we don't notify again
-            processedPageIds.add(watcherPageKey);
-            processedThisRun.add(pageId);
-            
             // Send to the dedicated Notion channel
             await sendNotionMessage(
               `<@${watcher.userId}> Project **"${title}"** is now marked as **"${watcher.value}"** (${watcher.name})`
             );
             
+            // Record that we've sent a notification for this watcher+page
+            processedNotifications[watcherKey] = now.toISOString();
+            saveProcessedNotifications(processedNotifications);
+            
+            logToFile(`✅ Watcher notification sent and recorded for page ${pageId.substring(0, 8)}...`);
             notificationCount++;
           }
         } catch (err) {
@@ -888,13 +950,24 @@ async function pollNotion() {
       logToFile(`📊 Sent ${notificationCount} Notion notifications`);
     }
     
-    // Periodically clear the processedPageIds cache to prevent it from growing too large
-    // We'll clear it every hour based on the current minute
-    const currentMinute = new Date().getMinutes();
-    if (currentMinute === 0) { // At the top of each hour
-      const oldSize = processedPageIds.size;
-      processedPageIds.clear();
-      logToFile(`🧹 Cleared processed pages cache (cleared ${oldSize} page IDs)`);
+    // Clean up old entries (older than 30 days) once a day to prevent the file from growing too large
+    const cleanupTime = new Date();
+    if (cleanupTime.getHours() === 0 && cleanupTime.getMinutes() === 0) {
+      const thirtyDaysAgo = new Date(cleanupTime);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      let cleanupCount = 0;
+      for (const [key, timestamp] of Object.entries(processedNotifications)) {
+        if (new Date(timestamp) < thirtyDaysAgo) {
+          delete processedNotifications[key];
+          cleanupCount++;
+        }
+      }
+      
+      if (cleanupCount > 0) {
+        logToFile(`🧹 Cleaned up ${cleanupCount} old notification entries (older than 30 days)`);
+        saveProcessedNotifications(processedNotifications);
+      }
     }
     
     // Only update lastCheck if we actually checked the database successfully
@@ -1058,7 +1131,6 @@ if (loadedJobs) {
 // Add custom meetings support
 const meetingsFilePath = path.join(__dirname, 'meetings.json');
 const customMeetings = [];
-
 // Define a Map to track active scheduled jobs
 const activeJobs = new Map();
 
@@ -1147,8 +1219,7 @@ const commands = [
         .setRequired(false)),
   
   new SlashCommandBuilder()
-    .setName('availability')
-    .setDescription('Show team availability board with current status'),
+    .setName("availability"),
   
   new SlashCommandBuilder()
     .setName('sync')
@@ -1482,6 +1553,36 @@ const commands = [
 // Register slash commands when the bot is ready
 async function registerCommands(clientId, guildId) {
   try {
+    // Ensure critical commands are at the beginning of the array
+    // First, get the indices of critical commands in the array
+    const linkIndex = commands.findIndex(cmd => cmd.name === 'link');
+    const whereIndex = commands.findIndex(cmd => cmd.name === 'where');
+    const availabilityIndex = commands.findIndex(cmd => cmd.name === 'availability');
+    
+    // Get references to the critical commands
+    const linkCommand = linkIndex >= 0 ? commands[linkIndex] : null;
+    const whereCommand = whereIndex >= 0 ? commands[whereIndex] : null;
+    const availabilityCommand = availabilityIndex >= 0 ? commands[availabilityIndex] : null;
+    
+    // If any of the critical commands exist, remove them from their current position
+    const criticalCommands = [];
+    if (linkCommand) {
+      criticalCommands.push(linkCommand);
+      commands.splice(linkIndex, 1);
+    }
+    if (whereCommand) {
+      criticalCommands.push(whereCommand);
+      commands.splice(whereIndex > linkIndex ? whereIndex - 1 : whereIndex, 1);
+    }
+    if (availabilityCommand) {
+      criticalCommands.push(availabilityCommand);
+      commands.splice(availabilityIndex > Math.max(linkIndex, whereIndex) ? availabilityIndex - 2 : 
+                     (availabilityIndex > Math.min(linkIndex, whereIndex) ? availabilityIndex - 1 : 
+                      availabilityIndex), 1);
+    }
+    
+    // Reinsert critical commands at the beginning of the array
+    commands.unshift(...criticalCommands);
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     logToFile('Started refreshing application (/) commands.');
 
@@ -1563,7 +1664,7 @@ function createNextRemindersEmbed() {
   nextExecutions.slice(0, 5).forEach((item, index) => {
     embed.addFields({ 
       name: `${index + 1}. ${item.job.tag}`, 
-      value: `⏰ Runs in: **${item.next.formattedTimeLeft}**\n🕒 At: ${item.next.formatted}\n📝 Message: ${item.job.text}`
+      value: `⏱️ In: **${item.next.formattedTimeLeft}**\n🕒 At: ${item.next.formatted}\n📝 Message: ${item.job.text}`
     });
   });
 
@@ -1786,7 +1887,7 @@ function createWatchersEmbed() {
     customWatchers.forEach(watcher => {
       const status = watcher.disabled ? '❌ Disabled' : '✅ Enabled';
       embed.addFields({
-        name: `${watcher.name} (ID: ${watcher.id})`,
+        name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
         value: `Property: **${watcher.property}**\nValue: **${watcher.value}**\nNotifies: <@${watcher.userId}>\nStatus: ${status}`,
       });
     });
@@ -2100,8 +2201,6 @@ client.on('interactionCreate', async interaction => {
           } catch (replyError) {
             logToFile(`Failed to send error reply: ${replyError.message}`);
           }
-        } else {
-          await interaction.editReply(`❌ Error scheduling meeting: ${cmdError.message}`);
         }
       }
     }
@@ -2117,6 +2216,12 @@ client.on('interactionCreate', async interaction => {
         });
         hasResponded = true;
         clearTimeout(timeoutWarning);
+        
+        // Check if OpenAI is available
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API key not configured. Cannot process analyze command.');
+          return;
+        }
         
         // Continue with the analyze command logic
         try {
@@ -2193,9 +2298,8 @@ client.on('interactionCreate', async interaction => {
           ).join('\n');
           
           // Get current date
-          const today = new Date().toISOString().split('T')[0];
-          
-          // Send to OpenAI for analysis
+          const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+
           const gpt = await openai.chat.completions.create({
             model: 'gpt-4o',
             temperature: 0,
@@ -2594,7 +2698,7 @@ client.on('interactionCreate', async interaction => {
           }
         }
       }
-    }
+  }
     
     else if (commandName === 'schedule') {
       try {
@@ -2711,6 +2815,67 @@ client.on('interactionCreate', async interaction => {
       }
     }
     
+    // Test-link command handler
+    else if (commandName === 'test-link') {
+      try {
+        // Check if should be ephemeral (default to true)
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false;
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        clearTimeout(timeoutWarning);
+        
+        // Create a simple embed for the test
+        const testEmbed = new EmbedBuilder()
+          .setColor('#00FF00')
+          .setTitle('Command Registration Test')
+          .setDescription('✅ This test command is working correctly!')
+          .addFields(
+            { name: 'Command Name', value: 'test-link' },
+            { name: 'Registration Status', value: 'Successfully registered and working' },
+            { name: 'Server', value: interaction.guild ? interaction.guild.name : 'Direct Message' },
+            { name: 'Channel', value: interaction.channel ? interaction.channel.name : 'Unknown' },
+            { name: 'User', value: interaction.user.tag }
+          )
+          .setTimestamp()
+          .setFooter({ text: 'Command Registration Test' });
+        
+        // Send the reply with the embed
+        await interaction.editReply({
+          content: '✅ **Test command is working!** If you can see this, command registration is successful.',
+          embeds: [testEmbed]
+        });
+        
+        // Log the successful test
+        logToFile(`🧪 Test-link command executed by ${interaction.user.tag} in ${interaction.guild ? interaction.guild.name : 'DM'}`);
+        
+        // If not ephemeral, delete after 1 minute
+        if (!ephemeral) {
+          setTimeout(async () => {
+            try {
+              const fetchedReply = await interaction.fetchReply().catch(() => null);
+              if (fetchedReply) {
+                await interaction.deleteReply();
+                logToFile(`🗑️ Auto-deleted test-link response after 1 minute`);
+              }
+            } catch (deleteError) {
+              logToFile(`Error deleting test-link reply: ${deleteError.message}`);
+            }
+          }, 1 * 60 * 1000); // 1 minute
+        }
+      } catch (cmdError) {
+        logToFile(`Error in /test-link command: ${cmdError.message}`);
+        if (!hasResponded) {
+          try {
+            await interaction.reply({ content: `❌ Error in test command: ${cmdError.message}`, ephemeral: true });
+            hasResponded = true;
+          } catch (replyError) {
+            logToFile(`Failed to send error reply: ${replyError.message}`);
+          }
+        }
+      }
+    }
+    
     // Where command to find all project info
     else if (commandName === 'where') {
       try {
@@ -2736,115 +2901,101 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
-        // Extract project information
-        const projectInfo = await extractProjectInfo(result.page, result.code);
+        // Get the page details directly
+        const page = result.page;
+        const code = result.code;
         
-        if (!projectInfo) {
-          await interaction.editReply({
-            content: `❌ Error extracting project info for "${query}".`,
-            ephemeral: true
-          });
-          return;
-        }
+        // Extract information directly from the page
+        const properties = page.properties;
         
-        // Find Discord channels if not already found
-        let discordChannels = [];
-        if (!projectInfo.discordChannelId) {
-          discordChannels = await findDiscordChannels(projectInfo.code);
-        }
+        // Get basic info
+        const title = properties.Name?.title?.[0]?.plain_text || code;
+        const status = properties.Status?.select?.name || 'Not Set';
+        const dueDate = properties['Due Date']?.date?.start || '';
+        const formattedDueDate = dueDate ? new Date(dueDate).toLocaleDateString('en-US', { 
+          month: 'short', day: 'numeric' 
+        }) : '';
         
-        // Create an embed to display project info
+        // Get URLs
+        const notionUrl = getNotionPageUrl(page.id);
+        const frameioUrl = properties['Frame.io']?.url || '';
+        const scriptUrl = properties.Script?.url || '';
+        
+        // Get people
+        const editors = properties.Editor?.people?.map(p => p.name) || [];
+        const leads = properties.Lead?.people?.map(p => p.name) || [];
+        
+        // Create embed
         const embed = new EmbedBuilder()
           .setColor(0x0099FF)
-          .setTitle(`Project: ${projectInfo.title || projectInfo.code}`)
-          .setDescription(`Here's everything you need for project **${projectInfo.code}**:`)
+          .setTitle(`Project: ${title}`)
+          .setDescription(`Information for project **${code}**`)
           .setTimestamp();
         
-        // Add fields for each piece of information
-        // Notion Link
-        if (projectInfo.notionUrl) {
-          embed.addFields({
-            name: '📋 Notion Card',
-            value: projectInfo.notionUrl
-          });
+        // Add Notion link
+        if (notionUrl) {
+          embed.addFields({ name: '📋 Notion Card', value: notionUrl });
         }
         
-        // Discord Channel
-        let discordValue = 'No Discord channel found';
-        if (projectInfo.discordChannelId) {
-          discordValue = `<#${projectInfo.discordChannelId}>`;
-        } else if (discordChannels.length > 0) {
-          discordValue = discordChannels.map(channel => `<#${channel.id}>`).join('\n');
+        // Add status with due date
+        let statusText = status;
+        if (formattedDueDate) {
+          statusText += ` (Due: ${formattedDueDate})`;
         }
-        embed.addFields({
-          name: '💬 Discord Channel',
-          value: discordValue
-        });
+        embed.addFields({ name: '📊 Status', value: statusText });
         
-        // Frame.io
-        if (projectInfo.frameioUrl) {
-          embed.addFields({
-            name: '🎬 Frame.io',
-            value: projectInfo.frameioUrl
-          });
+        // Add people fields
+        if (leads.length > 0) {
+          embed.addFields({ name: '🎬 Lead', value: leads.join(', '), inline: true });
         }
         
-        // Script
-        if (projectInfo.scriptUrl) {
-          embed.addFields({
-            name: '📝 Script',
-            value: projectInfo.scriptUrl
-          });
+        if (editors.length > 0) {
+          embed.addFields({ name: '✂️ Editor', value: editors.join(', '), inline: true });
         }
         
-        // Editors
-        if (projectInfo.editors && projectInfo.editors.length > 0) {
-          embed.addFields({
-            name: '✂️ Editors',
-            value: projectInfo.editors.join(', ')
-          });
+        // Add Discord channels
+        const discordChannels = await findDiscordChannels(code);
+        if (discordChannels.length > 0) {
+          const channelLinks = discordChannels.map(ch => `<#${ch.id}>`).join('\n');
+          embed.addFields({ name: '💬 Discord Channel', value: channelLinks });
         }
         
-        // Status & Due Date
-        let statusText = projectInfo.status || 'N/A';
-        if (projectInfo.dueDate) {
-          statusText += ` (Due: ${projectInfo.dueDate})`;
+        // Add links
+        if (scriptUrl) {
+          embed.addFields({ name: '📝 Script', value: scriptUrl });
         }
-        embed.addFields({
-          name: '📊 Status',
-          value: statusText
-        });
         
-        // Create buttons for easy access
+        if (frameioUrl) {
+          embed.addFields({ name: '🎬 Frame.io', value: frameioUrl });
+        }
+        
+        // Create buttons
         const buttons = [];
         
-        // Notion button
-        if (projectInfo.notionUrl) {
+        if (notionUrl) {
           buttons.push(
             new ButtonBuilder()
               .setLabel('Open in Notion')
               .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.notionUrl)
+              .setURL(notionUrl)
           );
         }
         
-        // Frame.io button
-        if (projectInfo.frameioUrl) {
-          buttons.push(
-            new ButtonBuilder()
-              .setLabel('Open Frame.io')
-              .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.frameioUrl)
-          );
-        }
-        
-        // Script button
-        if (projectInfo.scriptUrl) {
+        if (scriptUrl) {
           buttons.push(
             new ButtonBuilder()
               .setLabel('Open Script')
               .setStyle(ButtonStyle.Link)
-              .setURL(projectInfo.scriptUrl)
+              .setURL(scriptUrl)
+          );
+        }
+        
+        if (frameioUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open Frame.io')
+              .setStyle(ButtonStyle.Link)
+              .setURL(frameioUrl)
           );
         }
         
@@ -2869,7 +3020,7 @@ client.on('interactionCreate', async interaction => {
               const fetchedReply = await interaction.fetchReply().catch(() => null);
               if (fetchedReply) {
                 await interaction.deleteReply();
-                logToFile(`🗑️ Auto-deleted where command results for ${projectInfo.code} after 5 minutes`);
+                logToFile(`🗑️ Auto-deleted where command results for ${code} after 5 minutes`);
               }
             } catch (deleteError) {
               logToFile(`Error deleting where command reply: ${deleteError.message}`);
@@ -2892,10 +3043,9 @@ client.on('interactionCreate', async interaction => {
           await interaction.editReply(`❌ Error finding project: ${cmdError.message}`);
         }
       }
-    }
     
     // Handle simpler commands with standardized error handling
-    else if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
+    if (['next', 'list', 'status', 'help', 'edit'].includes(commandName)) {
       try {
         let response;
         let components = [];
@@ -3178,7 +3328,7 @@ client.on('interactionCreate', async interaction => {
           // Add field for default watcher
           embed.addFields({
             name: '🔍 Default Watcher',
-            value: `**Property:** ${TARGET_PROP}\n**Value:** ${TARGET_VALUE}\n**Notifies:** <@${RAY_ID}>`
+            value: `Property: **${TARGET_PROP}**\nValue: **${TARGET_VALUE}**\nNotifies: <@${RAY_ID}>`
           });
           
           // Add fields for custom watchers
@@ -3187,7 +3337,7 @@ client.on('interactionCreate', async interaction => {
               const status = watcher.disabled ? '🔴 Disabled' : '🟢 Active';
               embed.addFields({
                 name: `${status} | ${watcher.name} (ID: ${watcher.id})`,
-                value: `**Property:** ${watcher.property}\n**Value:** ${watcher.value}\n**Notifies:** <@${watcher.userId}>\n**Created:** ${new Date(watcher.createdAt).toLocaleDateString()}`
+                value: `Property: **${watcher.property}**\nValue: **${watcher.value}**\nNotifies: <@${watcher.userId}>\nStatus: ${status}`
               });
             });
           } else {
@@ -3214,31 +3364,29 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
-    
-    // Add similar error handling patterns for other commands...
-    // For brevity, I'm not showing all commands, but you should apply the same pattern
-    
-  } catch (error) {
-    // Global error handling for any unexpected errors
-    logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
-    logToFile(error.stack);
-    
-    try {
-      // Try to notify the user if possible
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
-      } else {
-        await interaction.followUp({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
-      }
-    } catch (replyError) {
-      logToFile(`Failed to send error message: ${replyError.message}`);
+  }
+
+// Global error handler
+client.on('error', async (error) => {
+  // Global error handling
+  logToFile(`Uncaught error: ${error.message}`);
+  logToFile(error.stack);
+  
+  try {
+    // Try to notify the user if possible
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ 
+        content: '❌ An unexpected error occurred. Please try again later.',
+        ephemeral: true 
+      });
+    } else {
+      await interaction.followUp({ 
+        content: '❌ An unexpected error occurred. Please try again later.',
+        ephemeral: true 
+      });
     }
+  } catch (replyError) {
+    logToFile(`Failed to send error message: ${replyError.message}`);
   }
 });
 
@@ -3327,7 +3475,7 @@ client.on('interactionCreate', async interaction => {
     const nextExecution = getNextExecution(cronValue);
     let executionInfo = '';
     if (nextExecution) {
-      executionInfo = `\nNext run: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
+      executionInfo = `\nNext execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`;
     }
     
     await interaction.reply(`✅ Updated reminder "${jobTag}" with new schedule: \`${cronValue}\`${executionInfo}`);
@@ -3401,8 +3549,19 @@ client.once('ready', async () => {
   cron.schedule('* * * * *', pollNotion, { timezone: TZ });
   logToFile('🔍 Notion poller scheduled every 1 min');
   
-  // Register slash commands
-  await registerCommands(client.user.id);
+  // Use the new auto-register-commands module to register commands
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID) {
+    try {
+      logToFile('🔄 Detected Railway environment, automatically registering slash commands...');
+      await registerCommandsOnStartup(client, DISCORD_TOKEN);
+    } catch (error) {
+      logToFile(`❌ Error in auto-registration: ${error.message}`);
+      logToFile(error.stack);
+    }
+  } else {
+    // Register slash commands (old method - keep for local development)
+    await registerCommands(client.user.id);
+  }
   
   // Fetch available Notion options for better matching
   await fetchNotionOptions();
@@ -3415,31 +3574,6 @@ client.once('ready', async () => {
   
   // Log the next execution times for all jobs
   logNextExecutions();
-
-  // Auto-register commands if running on Railway
-  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID) {
-    try {
-      logToFile('🔄 Detected Railway environment, automatically registering slash commands...');
-      await registerCommands(client.user.id);
-      logToFile('✅ Successfully registered slash commands globally - they should appear in Discord within an hour');
-      
-      // Try to register commands for the first few guilds for faster updates
-      let registerCount = 0;
-      for (const guild of client.guilds.cache.values()) {
-        if (registerCount < 5) { // Limit to 5 guilds to avoid rate limits
-          try {
-            await registerCommands(client.user.id, guild.id);
-            logToFile(`✅ Registered commands for guild: ${guild.name} (${guild.id})`);
-            registerCount++;
-          } catch (guildError) {
-            logToFile(`⚠️ Could not register commands for guild ${guild.name}: ${guildError.message}`);
-          }
-        }
-      }
-    } catch (error) {
-      logToFile(`❌ Error registering commands on startup: ${error.message}`);
-    }
-  }
 });
 
 // Register commands when joining a new server
@@ -3636,7 +3770,7 @@ async function checkMeetings() {
     // If time couldn't be parsed, skip
     if (!meetingTime) continue;
     
-    // Calculate the reminder time (5 minutes before meeting)
+    // Calculate the reminder time (5 minutes before)
     const reminderTime = new Date(meetingTime.getTime() - 5 * 60 * 1000);
     
     // Check if it's time for the reminder
@@ -3894,640 +4028,17 @@ function getNotionPageUrl(pageId) {
   return `https://www.notion.so/${pageId.replace(/-/g, '')}`;
 }
 
-// Add handleSyncMessage function here
-async function handleSyncMessage(msg) {
-  // Create a reply function that suppresses notifications
-  const quietReply = async (content) => {
-    try {
-      let replyOptions = typeof content === 'string' 
-        ? { content, flags: [1 << 2] } // 1 << 2 is SUPPRESS_EMBEDS flag
-        : { ...content, flags: [1 << 2] };
-      
-      return await msg.reply(replyOptions);
-    } catch (err) {
-      // Fallback to regular reply if something goes wrong
-      logToFile(`Error sending quiet reply: ${err.message}`);
-      return await msg.reply(content);
-    }
-  };
-  
-  const code = projectCode(msg.channel.name);
-  if (!code) {
-    await quietReply('No project code detected in channel name.');
-    return;
-  }
+// Ensure all client handlers are properly closed
+client.on('error', (error) => {
+  console.error('Uncaught error:', error);
+  logToFile('Uncaught error: ' + error.message);
+});
 
-  // Get the first 50 messages to look for images
-  const messages = await msg.channel.messages.fetch({ limit: 50 });
-  const firstImageUrl = findFirstImageUrl(Array.from(messages.values()));
+// Log when the bot is ready
+client.once('ready', () => {
+  console.log('Bot is ready and connected!');
+  logToFile('Bot started successfully at ' + new Date().toISOString());
+});
 
-  // Check for dry run flag
-  const isDryRun = msg.content.includes('--dry');
-  const dryRunPrefix = isDryRun ? '[DRY RUN] ' : '';
-  
-  // Remove dry run flag from the text
-  const userText = msg.content.slice(TRIGGER_PREFIX.length).trim().replace('--dry', '').trim();
-  
-  let isNewPage = false;
-  
-  // Check for URLs directly in the user message
-  let directFrameioLink = null;
-  let directScriptLink = null;
-
-  try {
-    directFrameioLink = extractFrameioLink(userText);
-    if (directFrameioLink) {
-      logToFile(`🔗 Found Frame.io link directly in user message: ${directFrameioLink}`);
-    }
-    
-    directScriptLink = extractScriptLink(userText);
-    if (directScriptLink) {
-      logToFile(`🔗 Found script link directly in user message: ${directScriptLink}`);
-    }
-  } catch (error) {
-    logToFile(`⚠️ Error checking for direct links: ${error.message}`);
-  }
-
-  // Find the Notion page for this project
-  let pageId = await findPage(code);
-  isNewPage = false;
-  
-  // If no page exists, create one
-  if (!pageId) {
-    await quietReply(`${dryRunPrefix}Creating new Notion page for project code "${code}"...`);
-    
-    // Create a new page with the channel name as the title
-    if (!isDryRun) {
-      pageId = await createNotionPage(code, msg.channel.name, {}, firstImageUrl);
-      
-      if (!pageId) {
-        await quietReply('❌ Failed to create Notion page. Check logs for details.');
-        return;
-      }
-    } else {
-      logToFile(`💧 DRY RUN: Would create new Notion page for project "${code}"`);
-    }
-    
-    isNewPage = true;
-  }
-
-  try {
-    // Get current date in ISO format
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-
-    const gpt = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      temperature: 0,
-      messages: [
-        { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
-        // Few-shot examples
-        { role: 'user', content: '!sync Project is in VA render. Ray will do final cut.' },
-        { role: 'assistant', function_call: { 
-          name: 'update_properties',
-          arguments: JSON.stringify({ status: 'VA Render', editor: ['Ray'] })
-        }},
-        { role: 'user', content: '!sync Suki owns it now. Due 12 Apr.' },
-        { role: 'assistant', function_call: { 
-          name: 'update_properties',
-          arguments: JSON.stringify({ project_owner: 'Suki', due_date: '2025-04-12' })
-        }},
-        // New example showing latest link wins
-        { role: 'user', content: '!sync Here is our Frame.io: https://f.io/abc123. [Later] Actually use this updated Frame.io link: https://f.io/xyz789.' },
-        { role: 'assistant', function_call: { 
-          name: 'update_properties',
-          arguments: JSON.stringify({ frameio_url: 'https://f.io/xyz789' })
-        }},
-        // Add example for stage date
-        { role: 'user', content: 'Aiming to have the script revised and new VA render by tomorrow.' },
-        { role: 'assistant', function_call: { 
-          name: 'update_properties',
-          arguments: JSON.stringify({ 
-            status: 'VA Render', 
-            current_stage_date: new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().split('T')[0]
-          })
-        }},
-        // Actual message
-        { role: 'user', content: userText || `This is a new project with code ${code} in channel ${msg.channel.name}. Add appropriate initial properties.` }
-      ],
-      functions: [FUNC_SCHEMA],
-      function_call: 'auto'
-    });
-
-    const call = gpt.choices[0].message.function_call;
-    if (!call) {
-      await quietReply('No relevant properties found.');
-      return;
-    }
-
-    let props;
-    try {
-      props = JSON.parse(call.arguments);
-    } catch (e) {
-      console.error('JSON parse error', e, call.arguments);
-      await quietReply('❌ Error parsing GPT response.');
-      return;
-    }
-
-    // Add direct links found in user message if GPT didn't capture them
-    if (directFrameioLink && !props.frameio_url) {
-      props.frameio_url = directFrameioLink;
-      logToFile(`📎 Adding Frame.io link from direct extraction: ${directFrameioLink}`);
-    }
-
-    if (directScriptLink && !props.script_url) {
-      props.script_url = directScriptLink;
-      logToFile(`📎 Adding script link from direct extraction: ${directScriptLink}`);
-    }
-
-    // Create the Notion properties object with error handling
-    let notionProps = {};
-    let hasPropertiesToUpdate = false;
-    let hasPageContent = false;
-    let errorProperties = [];
-    
-    // Process each property individually with error handling
-    try {
-      notionProps = toNotion(props);
-      hasPropertiesToUpdate = Object.keys(notionProps).length > 0;
-    } catch (propsError) {
-      logToFile(`Error converting properties in !sync: ${propsError.message}`);
-      errorProperties.push("Base properties");
-      // Continue with empty properties rather than failing completely
-      notionProps = {};
-    }
-    
-    try {
-      hasPageContent = props.page_content && props.page_content.trim().length > 0;
-    } catch (contentError) {
-      logToFile(`Error checking page content in !sync: ${contentError.message}`);
-      hasPageContent = false;
-    }
-    
-    // Try to extract script link if needed
-    if (hasPageContent && !props.script_url && !notionProps.Script) {
-      try {
-        const scriptLink = extractScriptLink(props.page_content);
-        if (scriptLink) {
-          logToFile(`📝 Found potential script link in content: ${scriptLink}`);
-          // Add the script URL to properties
-          try {
-            notionProps.Script = { url: scriptLink };
-            hasPropertiesToUpdate = true;
-          } catch (scriptError) {
-            logToFile(`Error adding script URL to properties in !sync: ${scriptError.message}`);
-            errorProperties.push("Script URL");
-          }
-        }
-      } catch (extractError) {
-        logToFile(`Error extracting script link in !sync: ${extractError.message}`);
-        errorProperties.push("Script extraction");
-      }
-    }
-    
-    // Try to extract Frame.io link if needed
-    if (hasPageContent && !props.frameio_url && !notionProps['Frame.io']) {
-      try {
-        const frameioLink = extractFrameioLink(props.page_content);
-        if (frameioLink) {
-          logToFile(`📝 Found potential Frame.io link in content: ${frameioLink}`);
-          // Add the Frame.io URL to properties
-          try {
-            notionProps['Frame.io'] = { url: frameioLink };
-            hasPropertiesToUpdate = true;
-          } catch (frameioError) {
-            logToFile(`Error adding Frame.io URL to properties in !sync: ${frameioError.message}`);
-            errorProperties.push("Frame.io URL");
-          }
-        }
-      } catch (extractError) {
-        logToFile(`Error extracting Frame.io link in !sync: ${extractError.message}`);
-        errorProperties.push("Frame.io extraction");
-      }
-    }
-    
-    if (!hasPropertiesToUpdate && !hasPageContent && !isNewPage) {
-      await quietReply('Nothing to update.');
-      return;
-    }
-
-    // Track what was updated successfully
-    let updatedProperties = false;
-    let updatedContent = false;
-    
-    // Update page properties if needed
-    if (hasPropertiesToUpdate && Object.keys(notionProps).length > 0) {
-      try {
-        if (!isDryRun) {
-          await notion.pages.update({ 
-            page_id: pageId, 
-            properties: notionProps 
-          });
-          updatedProperties = true;
-        } else {
-          logToFile(`💧 DRY RUN: Would update these properties: ${JSON.stringify(notionProps)}`);
-          updatedProperties = true; // Mark as "updated" for the summary even though we didn't actually update
-        }
-      } catch (updateError) {
-        logToFile(`Error updating properties in !sync: ${updateError.message}`);
-        errorProperties.push("Notion properties update");
-      }
-    }
-    
-    // Add page content if provided
-    if (hasPageContent) {
-      try {
-        // Format the content with a timestamp
-        const timestamp = new Date().toLocaleString();
-        const formattedContent = `**Update from Discord (${timestamp}):**\n${props.page_content.trim()}`;
-        
-        // Format the content into proper Notion blocks
-        const contentBlocks = formatNotionContent(formattedContent);
-        
-        // Append the formatted blocks to the page
-        if (!isDryRun) {
-          await notion.blocks.children.append({
-            block_id: pageId,
-            children: contentBlocks
-          });
-          updatedContent = true;
-        } else {
-          logToFile(`💧 DRY RUN: Would add content: ${props.page_content.trim().substring(0, 100)}...`);
-          updatedContent = true; // Mark as "updated" for the summary
-        }
-      } catch (contentError) {
-        logToFile(`Error adding page content in !sync: ${contentError.message}`);
-        errorProperties.push("Page content");
-      }
-    }
-
-    // Create response message
-    let responseDescription = '';
-    if (isNewPage) {
-      responseDescription += `✨ ${isDryRun ? 'Would create' : 'Created'} new Notion page for project **${code}**\n\n`;
-      if (firstImageUrl) {
-        responseDescription += `${isDryRun ? 'Would add' : 'Added'} first image from channel as thumbnail\n\n`;
-      }
-    }
-    
-    if (updatedProperties) {
-      responseDescription += `${isDryRun ? 'Would update' : 'Updated'} properties:\n` + Object.keys(notionProps).map(k => `• **${k}**`).join('\n');
-    }
-    
-    if (updatedContent) {
-      if (responseDescription) responseDescription += '\n\n';
-      responseDescription += `${isDryRun ? 'Would add' : 'Added'} notes to page content`;
-    }
-    
-    // Add error information if any
-    if (errorProperties.length > 0) {
-      if (responseDescription) responseDescription += '\n\n';
-      responseDescription += `⚠️ **Errors:** There were issues with: ${errorProperties.join(', ')}.\nOther updates were still applied.`;
-    }
-
-    // Make reply only visible to the command sender if possible
-    // For slash commands this would be ephemeral, for normal messages this still replies
-    try {
-      // If this is from the /sync command via a fake msg (it has interaction property)
-      if (msg.interaction) {
-        // For interactions/slash commands, use editReply to maintain ephemeral status
-        await msg.interaction.editReply({
-          embeds: [{
-            title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
-            description: responseDescription,
-            color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
-          }]
-        });
-      } else {
-        // For regular messages, still try to make it somewhat discreet
-        await quietReply({
-          embeds: [{
-            title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
-            description: responseDescription,
-            color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
-          }]
-        });
-      }
-    } catch (replyError) {
-      logToFile(`Error sending reply: ${replyError.message}`);
-      // Fallback to regular reply
-      const replyMsg = await quietReply({
-        embeds: [{
-          title: `${dryRunPrefix}✅ ${code} ${isNewPage ? 'created' : 'updated'}${errorProperties.length > 0 ? ' (with some errors)' : ''}`,
-          description: responseDescription,
-          color: isDryRun ? 0x00FFFF : (errorProperties.length > 0 ? 0xFFA500 : 0x57F287)
-        }]
-      });
-      
-      // Auto-delete the message after 5 minutes if it's a regular message (not ephemeral)
-      if (replyMsg && replyMsg.deletable) {
-        setTimeout(async () => {
-          try {
-            await replyMsg.delete();
-            logToFile(`🗑️ Auto-deleted status update message for ${code} after 5 minutes`);
-          } catch (deleteError) {
-            logToFile(`Error deleting status message: ${deleteError.message}`);
-          }
-        }, 5 * 60 * 1000); // 5 minutes
-      }
-    }
-
-    // After the main response embed:
-    if (updatedProperties || updatedContent || isNewPage) {
-      // Get the Notion URL for the page
-      const notionUrl = getNotionPageUrl(pageId);
-      
-      // If we have a URL, send it back to the sender
-      if (notionUrl) {
-        try {
-          // For interaction commands, add it to the existing ephemeral reply 
-          if (msg.interaction) {
-            await msg.interaction.followUp({
-              content: `🔗 **Notion Page**: ${notionUrl}`,
-              ephemeral: true  // Only visible to command sender
-            });
-          } else {
-            // For regular messages, send via DM if possible, or channel as fallback
-            try {
-              await msg.author.send(`🔗 **Notion Page for ${code}**: ${notionUrl}`);
-              logToFile(`Sent Notion URL via DM to ${msg.author.tag}`);
-            } catch (dmError) {
-              // Fallback to channel if DM fails
-              logToFile(`Failed to send DM, falling back to channel: ${dmError.message}`);
-              const linkMsg = await msg.channel.send({
-                content: `🔗 **Notion Page**: ${notionUrl}`,
-                flags: [1 << 2] // SUPPRESS_EMBEDS 
-              });
-              
-              // Auto-delete the message after 5 minutes
-              setTimeout(async () => {
-                try {
-                  await linkMsg.delete();
-                  logToFile(`🗑️ Auto-deleted Notion link message for ${code} after 5 minutes`);
-                } catch (deleteError) {
-                  logToFile(`Error deleting Notion link message: ${deleteError.message}`);
-                }
-              }, 5 * 60 * 1000); // 5 minutes
-            }
-          }
-        } catch (urlError) {
-          logToFile(`Error sending Notion URL: ${urlError.message}`);
-        }
-      }
-    }
-  } catch (err) {
-    console.error(err);
-    quietReply('❌ Error updating Notion; check logs.');
-  }
-}
-
-// Function to create a new Notion page if one doesn't exist// Add these new functions before the existing function:
-// Function to find a project by code or link
-async function findProjectByQuery(query) {
-  if (!query) return null;
-  query = query.trim();
-  
-  // Case 1: Query is a project code (CL27, IB23, etc.)
-  const codeMatch = query.match(/^(CL|IB|BC)\d{2}$/i);
-  if (codeMatch) {
-    const code = codeMatch[0].toUpperCase();
-    return await findProjectByCode(code);
-  }
-  
-  // Case 2: Query is a Frame.io link
-  if (query.includes('frame.io') || query.includes('f.io')) {
-    return await findProjectByLink(query, 'Frame.io');
-  }
-  
-  // Case 3: Query is a script link (Google Docs, Notion, etc.)
-  if (query.includes('docs.google.com') || 
-      query.includes('script') || 
-      query.includes('notion.site')) {
-    return await findProjectByLink(query, 'Script');
-  }
-  
-  // Case 4: Query is a YouTube link or ID
-  if (query.includes('youtube.com') || 
-      query.includes('youtu.be') || 
-      query.match(/^[a-zA-Z0-9_-]{11}$/)) {
-    return await findProjectByLink(query, 'YouTube');
-  }
-  
-  // If nothing matched, try to find by partial match
-  return await findProjectByPartialMatch(query);
-}
-
-// Find a project by its code
-async function findProjectByCode(code) {
-  try {
-    const pageId = await findPage(code);
-    if (!pageId) return null;
-    
-    // Get the page details
-    const page = await notion.pages.retrieve({ page_id: pageId });
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by code ${code}: ${error.message}`);
-    return null;
-  }
-}
-
-// Find a project by a link in its properties
-async function findProjectByLink(link, propertyType) {
-  try {
-    // Query the database to find pages with matching links
-    let query = {};
-    
-    if (propertyType === 'Frame.io') {
-      query = {
-        database_id: DB,
-        filter: {
-          property: 'Frame.io',
-          url: { contains: link }
-        },
-        page_size: 5
-      };
-    } else if (propertyType === 'Script') {
-      query = {
-        database_id: DB,
-        filter: {
-          property: 'Script',
-          url: { contains: link }
-        },
-        page_size: 5
-      };
-    } else if (propertyType === 'YouTube') {
-      // YouTube links might be in the title, content, or a custom property
-      // Let's try a general search approach
-      query = {
-        database_id: DB,
-        filter: {
-          or: [
-            {
-              property: CACHED_TITLE_PROPERTY || 'Project name',
-              rich_text: { contains: link }
-            }
-          ]
-        },
-        page_size: 5
-      };
-    }
-    
-    const response = await notion.databases.query(query);
-    
-    if (response.results.length === 0) {
-      return null;
-    }
-    
-    // Get the first matching page
-    const page = response.results[0];
-    
-    // Extract code from title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    const title = titleProp.title.map(t => t.plain_text).join('');
-    const code = projectCode(title);
-    
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by ${propertyType} link: ${error.message}`);
-    return null;
-  }
-}
-
-// Find a project by partial match in various properties
-async function findProjectByPartialMatch(query) {
-  try {
-    // Query the database with a general text search
-    const response = await notion.databases.query({
-      database_id: DB,
-      filter: {
-        or: [
-          {
-            property: CACHED_TITLE_PROPERTY || 'Project name',
-            rich_text: { contains: query }
-          }
-        ]
-      },
-      page_size: 5
-    });
-    
-    if (response.results.length === 0) {
-      return null;
-    }
-    
-    // Get the first matching page
-    const page = response.results[0];
-    
-    // Extract code from title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    const title = titleProp.title.map(t => t.plain_text).join('');
-    const code = projectCode(title);
-    
-    return { page, code };
-  } catch (error) {
-    logToFile(`Error finding project by partial match: ${error.message}`);
-    return null;
-  }
-}
-
-// Helper function to extract relevant information from a project
-async function extractProjectInfo(page, code) {
-  if (!page) return null;
-  
-  const result = {
-    code,
-    title: null,
-    notionUrl: getNotionPageUrl(page.id),
-    discordChannel: null,
-    frameioUrl: null,
-    scriptUrl: null,
-    editors: [],
-    status: null
-  };
-  
-  try {
-    // Extract title
-    const titleProp = page.properties[CACHED_TITLE_PROPERTY || 'Project name'];
-    if (titleProp && titleProp.title && titleProp.title.length > 0) {
-      result.title = titleProp.title.map(t => t.plain_text).join('');
-    }
-    
-    // Extract Discord channel
-    const discordProp = page.properties['Discord Channel'];
-    if (discordProp && discordProp.url) {
-      result.discordChannel = discordProp.url;
-      
-      // Extract channel ID from the URL
-      const channelMatch = discordProp.url.match(/channels\/\d+\/(\d+)/);
-      if (channelMatch && channelMatch[1]) {
-        const channelId = channelMatch[1];
-        try {
-          const channel = await client.channels.fetch(channelId);
-          if (channel) {
-            result.discordChannelName = channel.name;
-            result.discordChannelId = channelId;
-          }
-        } catch (channelError) {
-          logToFile(`Couldn't fetch Discord channel: ${channelError.message}`);
-        }
-      }
-    }
-    
-    // Extract Frame.io URL
-    const frameIoProp = page.properties['Frame.io'];
-    if (frameIoProp && frameIoProp.url) {
-      result.frameioUrl = frameIoProp.url;
-    }
-    
-    // Extract Script URL
-    const scriptProp = page.properties['Script'];
-    if (scriptProp && scriptProp.url) {
-      result.scriptUrl = scriptProp.url;
-    }
-    
-    // Extract Editors
-    const editorProp = page.properties['Editor'];
-    if (editorProp && editorProp.multi_select) {
-      result.editors = editorProp.multi_select.map(option => option.name);
-    } else if (editorProp && editorProp.people) {
-      result.editors = editorProp.people.map(person => person.name);
-    }
-    
-    // Extract Status
-    const statusProp = page.properties['Status'];
-    if (statusProp && statusProp.status) {
-      result.status = statusProp.status.name;
-    }
-    
-    // Extract other relevant properties
-    const dateProp = page.properties['Date'];
-    if (dateProp && dateProp.date) {
-      result.dueDate = dateProp.date.start;
-    }
-    
-    return result;
-  } catch (error) {
-    logToFile(`Error extracting project info: ${error.message}`);
-    return result;  // Return what we have so far
-  }
-}
-
-// Find Discord channels for a project code
-async function findDiscordChannels(code) {
-  if (!code) return [];
-  
-  try {
-    // Find channels with this code in the name
-    const matchingChannels = client.channels.cache.filter(channel => 
-      channel.type === ChannelType.GuildText && 
-      channel.name.toLowerCase().includes(code.toLowerCase())
-    );
-    
-    return Array.from(matchingChannels.values());
-  } catch (error) {
-    logToFile(`Error finding Discord channels for ${code}: ${error.message}`);
-    return [];
-  }
-}
-
-// Function to create a new Notion page if one doesn't exist
-
+// Export the client for testing
+module.exports = { client };
