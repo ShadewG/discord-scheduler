@@ -209,7 +209,7 @@ client.on('interactionCreate', async interaction => {
         const guild = interaction.guild;
         const discordChannels = guild.channels.cache
           .filter(channel => channel.type === 0 && channel.name.includes(codePattern))
-          .map(channel => `<#${channel.id}>`);
+          .map(channel => ({ id: channel.id, channel }));
         
         // Create embed
         const embed = new EmbedBuilder()
@@ -225,7 +225,10 @@ client.on('interactionCreate', async interaction => {
         
         // Add Discord Channels if found
         if (discordChannels.length > 0) {
-          embed.addFields({ name: '💬 Discord Channel', value: discordChannels.join('\n') });
+          embed.addFields({ 
+            name: '💬 Discord Channel', 
+            value: discordChannels.map(ch => `<#${ch.id}>`).join('\n') 
+          });
         }
         
         // Add Frame.io link
@@ -244,9 +247,54 @@ client.on('interactionCreate', async interaction => {
           embed.addFields({ name: '📅 Due Date', value: formattedDate, inline: true });
         }
         
-        // Add Script URL if present
+        // If script URL not found in Notion, check Discord channel for Google Doc links
+        let foundScriptInDiscord = false;
+        if (!scriptUrl && discordChannels.length > 0) {
+          try {
+            // Look at the first matching Discord channel
+            const channel = discordChannels[0].channel;
+            logToFile(`Looking for Google Doc links in channel #${channel.name}`);
+            
+            // Fetch last 100 messages
+            const messages = await channel.messages.fetch({ limit: 100 });
+            
+            // Find messages with Google Doc links
+            const docMessages = messages.filter(msg => {
+              const content = msg.content.toLowerCase();
+              return content.includes('docs.google.com') || 
+                     content.includes('drive.google.com/document');
+            });
+            
+            if (docMessages.size > 0) {
+              // Sort by timestamp to get the most recent one
+              const sortedMessages = [...docMessages.values()]
+                .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+              
+              // Get the most recent message with a Google Doc link
+              const recentDocMessage = sortedMessages[0];
+              
+              // Extract the URL from the message
+              const msgContent = recentDocMessage.content;
+              const urlMatch = msgContent.match(/(https?:\/\/docs\.google\.com\S+|https?:\/\/drive\.google\.com\/document\S+)/i);
+              
+              if (urlMatch && urlMatch[0]) {
+                scriptUrl = urlMatch[0];
+                foundScriptInDiscord = true;
+                logToFile(`Found script URL in Discord: ${scriptUrl}`);
+              }
+            }
+          } catch (discordError) {
+            logToFile(`Error searching Discord for script links: ${discordError.message}`);
+            // Continue with the rest of the function, don't throw
+          }
+        }
+        
+        // Add Script URL if present (from Notion or Discord)
         if (scriptUrl) {
-          embed.addFields({ name: '📝 Script', value: scriptUrl });
+          const fieldName = foundScriptInDiscord ? 
+            '📝 Script (from Discord)' : 
+            '📝 Script';
+          embed.addFields({ name: fieldName, value: scriptUrl });
         }
         
         // Add People info
@@ -280,9 +328,10 @@ client.on('interactionCreate', async interaction => {
         }
         
         if (scriptUrl) {
+          const buttonLabel = foundScriptInDiscord ? 'Open Script (Discord)' : 'Open Script';
           buttons.push(
             new ButtonBuilder()
-              .setLabel('Open Script')
+              .setLabel(buttonLabel)
               .setStyle(ButtonStyle.Link)
               .setURL(scriptUrl)
           );
