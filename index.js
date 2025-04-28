@@ -1262,7 +1262,7 @@ client.on('interactionCreate', async interaction => {
           
           // Map extracted data to Notion properties
           if (extractedData.status) {
-            propertiesToUpdate['status'] = {
+            propertiesToUpdate['Status'] = {
               status: { name: extractedData.status }
             };
           }
@@ -1571,6 +1571,10 @@ Example Output: {
           // Handle different property types
           switch (key) {
             case 'Status':
+              // Status is a status type property, not a select
+              notionProperties[propertyKey] = { status: { name: value } };
+              break;
+              
             case 'Caption Status':
             case 'Category':
             case '3D Status':
@@ -1863,20 +1867,25 @@ Example Output: {
               // Find the right property name from schema
               const statusProperty = Object.keys(notionSchema).find(propName =>
                 propName.toLowerCase() === 'status' && 
-                notionSchema[propName].type === 'select'
+                (notionSchema[propName].type === 'status' || notionSchema[propName].type === 'select')
               );
               
               if (statusProperty) {
-                logToFile(`Using exact property name from schema: "${statusProperty}"`);
-                notionProperties[statusProperty] = { select: { name: value } };
+                logToFile(`Using exact property name from schema: "${statusProperty}" (type: ${notionSchema[statusProperty].type})`);
+                // Check if it's a status type or select type
+                if (notionSchema[statusProperty].type === 'status') {
+                  notionProperties[statusProperty] = { status: { name: value } };
+                } else {
+                  notionProperties[statusProperty] = { select: { name: value } };
+                }
               } else {
-                // Use "status" with lowercase
-                logToFile('Status property not found in schema, using "status" with lowercase');
-                notionProperties['status'] = { select: { name: value } };
+                // Default to "Status" with status type
+                logToFile('Status property not found in schema, using "Status" with status type');
+                notionProperties['Status'] = { status: { name: value } };
               }
             } else {
-              // Default to "status" with lowercase
-              notionProperties['status'] = { select: { name: value } };
+              // Default to "Status" with status type
+              notionProperties['Status'] = { status: { name: value } };
             }
             break;
             
