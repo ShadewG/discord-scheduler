@@ -117,9 +117,13 @@ client.once('ready', () => {
   
   // Register commands on startup
   try {
-    const { registerCommands } = require('./auto-register-commands');
-    registerCommands();
-    console.log('Commands registered successfully');
+    const { registerCommandsOnStartup } = require('./auto-register-commands');
+    registerCommandsOnStartup(client, TOKEN)
+      .then(() => console.log('Commands registered successfully'))
+      .catch(error => {
+        console.error('Error registering commands:', error);
+        logToFile(`Error registering commands: ${error.message}`);
+      });
   } catch (error) {
     console.error('Error registering commands:', error);
     logToFile(`Error registering commands: ${error.message}`);
@@ -143,7 +147,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply();
         hasResponded = true;
         
-        const query = interaction.options.getString('project');
+        const query = interaction.options.getString('query');
         if (!query) {
           await interaction.editReply('Please provide a project name or code.');
           return;
