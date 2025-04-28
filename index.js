@@ -107,7 +107,7 @@ async function findProjectByQuery(query) {
       filter: {
         or: [
           {
-            property: "Name",
+            property: "Project name",
             title: {
               contains: query
             }
@@ -126,7 +126,7 @@ async function findProjectByQuery(query) {
       // Return both the page and the code for reference
       const page = response.results[0];
       const code = page.properties.Code?.rich_text?.[0]?.plain_text || 
-                  page.properties.Name?.title?.[0]?.plain_text || 
+                  page.properties["Project name"]?.title?.[0]?.plain_text || 
                   query;
       return { page, code };
     }
@@ -198,11 +198,11 @@ client.on('interactionCreate', async interaction => {
         
         // Get project properties
         const properties = project.properties;
-        const name = properties.Name?.title?.[0]?.plain_text || 'Unnamed Project';
+        const name = properties["Project name"]?.title?.[0]?.plain_text || 'Unnamed Project';
         const code = properties.Code?.rich_text?.[0]?.plain_text || result.code || 'No Code';
         const status = properties.Status?.select?.name || 'No Status';
-        const dueDate = properties['Due Date']?.date?.start || 'No Due Date';
-        const lead = properties.Lead?.select?.name || 'No Lead';
+        const dueDate = properties.Date?.date?.start || 'No Due Date';
+        const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
         const editors = properties.Editor?.multi_select?.map(e => e.name).join(', ') || 'None';
         
         // Create embed
