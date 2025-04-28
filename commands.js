@@ -123,6 +123,10 @@ const commands = {
     new SlashCommandBuilder().setName('where').setDescription('Find all projects matching a query')
       .addStringOption(option => option.setName('query').setDescription('Search query').setRequired(true))
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
+    new SlashCommandBuilder().setName('changelog').setDescription('Show status changelog for the current project')
+      .addStringOption(option => option.setName('project').setDescription('Project code (defaults to current channel)'))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
   ],
   
   // Meeting and schedule commands
