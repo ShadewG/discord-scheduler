@@ -194,12 +194,41 @@ client.on('interactionCreate', async interaction => {
         const projectName = properties["Project name"]?.title?.[0]?.plain_text || 'Unnamed Project';
         // Get code from the result or extract from project name
         const code = result.code || projectName.match(/^([A-Z]{2}\d{2})/)?.['0'] || 'Unknown';
-        const status = properties.Status?.select?.name || 'No Status';
+        
+        // Status could be under different property names, try them all
+        let status = 'No Status';
+        if (properties.Status?.select?.name) {
+          status = properties.Status.select.name;
+        } else if (properties['Status']?.select?.name) {
+          status = properties['Status'].select.name;
+        } else if (properties.status?.select?.name) {
+          status = properties.status.select.name;
+        } else {
+          // Log all property names for debugging
+          logToFile(`Available properties for ${code}: ${Object.keys(properties).join(', ')}`);
+        }
+        
         const dueDate = properties.Date?.date?.start || 'No Due Date';
         const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
         const editors = properties.Editor?.multi_select?.map(e => e.name).join(', ') || 'None';
-        const frameioUrl = properties["Frame.io"]?.url || '';
-        const scriptUrl = properties.Script?.url || '';
+        
+        // Check for script URL in multiple possible property names
+        let scriptUrl = '';
+        if (properties.Script?.url) {
+          scriptUrl = properties.Script.url;
+        } else if (properties['Script']?.url) {
+          scriptUrl = properties['Script'].url;
+        } else if (properties.script?.url) {
+          scriptUrl = properties.script.url;
+        }
+        
+        // Check for Frame.io URL
+        let frameioUrl = '';
+        if (properties["Frame.io"]?.url) {
+          frameioUrl = properties["Frame.io"].url;
+        } else if (properties['Frame.io']?.url) {
+          frameioUrl = properties['Frame.io'].url;
+        }
         
         // Get Notion URL
         const notionUrl = getNotionPageUrl(project.id);
@@ -237,7 +266,7 @@ client.on('interactionCreate', async interaction => {
         }
         
         // Add Status
-        embed.addFields({ name: '📊 Status', value: status });
+        embed.addFields({ name: '📊 Status', value: status || 'Not Set' });
         
         // Add Due Date if present
         if (dueDate && dueDate !== 'No Due Date') {
@@ -258,12 +287,18 @@ client.on('interactionCreate', async interaction => {
             // Fetch last 100 messages
             const messages = await channel.messages.fetch({ limit: 100 });
             
+            // Log how many messages we found for debugging
+            logToFile(`Found ${messages.size} messages in channel #${channel.name}`);
+            
             // Find messages with Google Doc links
             const docMessages = messages.filter(msg => {
               const content = msg.content.toLowerCase();
               return content.includes('docs.google.com') || 
                      content.includes('drive.google.com/document');
             });
+            
+            // Log how many doc messages we found
+            logToFile(`Found ${docMessages.size} messages with Google Doc links`);
             
             if (docMessages.size > 0) {
               // Sort by timestamp to get the most recent one
@@ -275,12 +310,17 @@ client.on('interactionCreate', async interaction => {
               
               // Extract the URL from the message
               const msgContent = recentDocMessage.content;
-              const urlMatch = msgContent.match(/(https?:\/\/docs\.google\.com\S+|https?:\/\/drive\.google\.com\/document\S+)/i);
+              logToFile(`Found message with content: ${msgContent}`);
+              
+              // More comprehensive regex to catch all sorts of Google links
+              const urlMatch = msgContent.match(/(https?:\/\/docs\.google\.com\S+|https?:\/\/drive\.google\.com\S+)/i);
               
               if (urlMatch && urlMatch[0]) {
                 scriptUrl = urlMatch[0];
                 foundScriptInDiscord = true;
                 logToFile(`Found script URL in Discord: ${scriptUrl}`);
+              } else {
+                logToFile(`Regex did not match any Google Doc links in: ${msgContent}`);
               }
             }
           } catch (discordError) {
