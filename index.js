@@ -4584,5 +4584,8 @@ async function extractProjectInfo(page, code) {
   }
 }
 }
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  return null;
 }
 )
