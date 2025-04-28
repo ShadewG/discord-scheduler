@@ -14,6 +14,12 @@ const DB = process.env.NOTION_DATABASE_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
 
+// Validate required environment variables
+if (!TOKEN) {
+  console.error('❌ ERROR: DISCORD_TOKEN is required but not provided in .env file');
+  process.exit(1);
+}
+
 // Initialize Discord client
 const client = new Client({
   intents: [
@@ -26,9 +32,19 @@ const client = new Client({
 });
 
 // Initialize Notion client
-const notion = new NotionClient({
-  auth: NOTION_KEY
-});
+let notion = null;
+try {
+  if (NOTION_KEY && DB) {
+    notion = new NotionClient({
+      auth: NOTION_KEY
+    });
+    console.log('✅ Notion client initialized successfully');
+  } else {
+    console.warn('⚠️ NOTION_KEY or NOTION_DATABASE_ID not provided. Notion features will be disabled.');
+  }
+} catch (error) {
+  console.warn('⚠️ Failed to initialize Notion client: ' + error.message + '. Notion features will be disabled.');
+}
 
 // Utility function for logging
 function logToFile(message) {
@@ -67,6 +83,12 @@ function getNotionPageUrl(pageId) {
 async function findProjectByQuery(query) {
   if (!query) return null;
   
+  // Check if Notion client is initialized
+  if (!notion) {
+    logToFile('❌ Cannot search for projects: Notion client is not initialized');
+    throw new Error('Notion client is not initialized. Please check your environment variables.');
+  }
+  
   try {
     // Case 1: Direct ID lookup
     if (query.match(/^[a-zA-Z0-9-]+$/)) {
@@ -75,6 +97,7 @@ async function findProjectByQuery(query) {
         return page;
       } catch (error) {
         // Not a valid ID, continue to search
+        logToFile(`Not a valid page ID: ${query}. Continuing to search by name.`);
       }
     }
     
@@ -106,7 +129,7 @@ async function findProjectByQuery(query) {
     return null;
   } catch (error) {
     logToFile(`Error finding project: ${error.message}`);
-    return null;
+    throw error;
   }
 }
 
@@ -146,6 +169,12 @@ client.on('interactionCreate', async interaction => {
       try {
         await interaction.deferReply();
         hasResponded = true;
+        
+        // Check if Notion is configured
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
         
         const query = interaction.options.getString('query');
         if (!query) {
