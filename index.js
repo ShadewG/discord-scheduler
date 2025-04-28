@@ -989,6 +989,12 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply();
         hasResponded = true;
         
+        // Check if OpenAI is configured
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          return;
+        }
+        
         // Check if channel is linked to a project
         const channel = interaction.channel;
         if (!channel) {
@@ -1014,81 +1020,182 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
-        // Parse the properties from text (simple key-value format)
-        const properties = {};
-        const propertyRegex = /(\w+)\s*[:=]\s*([^,]+)(?:,|$)/g;
-        let match;
+        // Define system prompt with Notion property structure
+        const systemPrompt = `
+You are a helpful assistant that converts natural language descriptions into structured Notion properties.
+Given text about a video project, extract relevant information and format it as a JSON object with 
+properties that match the Notion database structure below.
+
+NOTION DATABASE STRUCTURE:
+1. Date Properties
+   • Date (Date): Primary due date
+   • Date for current stage (Date): Date for the current workflow stage
+
+2. Category (Select)
+   Options: CL, Bodycam, IB
+
+3. Links (URL)
+   • Script: URL to script document
+   • Frame.io: URL to Frame.io project
+
+4. People (Person)
+   • Lead: Project lead person
+   • Project Owner: Owner of the project
+   • Editor: Editor assigned to the project
+   • Writer: Writer assigned to the project
+
+5. Pipeline Stage / Status (Select)
+   Options: Backlog, FOIA Received, Ready for production, Writing, Writing Review, VA Render, 
+   VA Review, Writing Revisions, Ready for Editing, Clip Selection, Clip Selection Review, 
+   MGX, MGX Review/Cleanup, Ready to upload, Paused, TRIAL
+
+6. 3D
+   • 3D Status (Select): Current status of 3D elements
+   • 3D Scenes (Text/URL): Details about 3D scenes
+
+7. Captions
+   • Caption Status (Select)
+   Options: Ready For Captions, Captions In Progress, Captions Done
+
+8. Language Versions (Each is a Select property)
+   • Portuguese, Spanish, Russian, Indonesian
+   Options for all: Done, Fixing Notes, In Progress, QC, Approved for dub, Uploaded
+
+INSTRUCTIONS:
+1. Extract only relevant information from the user's message.
+2. Return a JSON object with Notion property keys and values.
+3. Only include properties mentioned in the message.
+4. Format dates in ISO format (YYYY-MM-DD).
+5. For select fields, use exact option names from the list provided.
+6. If unsure about a property, don't include it rather than guessing.
+
+Example Input: "Change status to Clip Selection and set the editor to Sarah and due date to next Friday"
+Example Output: {
+  "Status": "Clip Selection",
+  "Editor": "Sarah",
+  "Date": "2023-06-02"
+}
+`;
         
-        while ((match = propertyRegex.exec(text)) !== null) {
-          const key = match[1].trim();
-          const value = match[2].trim();
-          properties[key] = value;
-        }
+        logToFile(`Processing sync for ${projectCode}: "${text}"`);
         
-        if (Object.keys(properties).length === 0) {
-          await interaction.editReply('❌ No valid properties found in the text. Use format "Property: Value, Another: Value"');
+        // Send to GPT-4o for processing
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: text }
+          ],
+          temperature: 0.1, // Low temperature for more deterministic output
+          max_tokens: 1000
+        });
+        
+        // Get the completion
+        const completion = response.choices[0]?.message?.content;
+        if (!completion) {
+          await interaction.editReply('❌ Error: No response received from AI.');
           return;
         }
         
-        // Convert to Notion properties format
+        // Parse the JSON response
+        let properties;
+        try {
+          // Extract JSON from the response (it might be wrapped in markdown code blocks)
+          const jsonMatch = completion.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || 
+                          completion.match(/(\{[\s\S]*\})/);
+                          
+          const jsonString = jsonMatch ? jsonMatch[1] : completion;
+          properties = JSON.parse(jsonString);
+          
+          logToFile(`Successfully parsed properties for ${projectCode}: ${JSON.stringify(properties)}`);
+        } catch (parseError) {
+          logToFile(`JSON parse error: ${parseError.message}, raw response: ${completion}`);
+          await interaction.editReply(`❌ Error parsing AI response: ${parseError.message}`);
+          return;
+        }
+        
+        // Convert extracted properties to Notion format
         const notionProperties = {};
         
-        // Map to Notion properties
-        Object.entries(properties).forEach(([key, value]) => {
-          const propertyKey = key.charAt(0).toUpperCase() + key.slice(1);
+        // Map properties to Notion format
+        for (const [key, value] of Object.entries(properties)) {
+          if (!value || value === '') continue;
           
           // Handle different property types
-          if (propertyKey === 'Status') {
-            notionProperties[propertyKey] = {
-              select: { name: value }
-            };
-          } 
-          else if (propertyKey === 'Script' || propertyKey === 'Frame.io') {
-            // URL properties
-            if (value.startsWith('http')) {
-              notionProperties[propertyKey] = {
-                url: value
-              };
-            }
-          }
-          else if (propertyKey === 'Date' || propertyKey === 'Due Date') {
-            // Try to parse as date
-            try {
-              const date = new Date(value);
-              if (!isNaN(date.getTime())) {
-                notionProperties['Date'] = {
-                  date: { start: date.toISOString().split('T')[0] }
-                };
+          switch (key) {
+            case 'Status':
+            case 'Caption Status':
+            case 'Category':
+            case '3D Status':
+              notionProperties[key] = { select: { name: value } };
+              break;
+              
+            case 'Portuguese':
+            case 'Spanish':
+            case 'Russian':
+            case 'Indonesian':
+              notionProperties[key] = { select: { name: value } };
+              break;
+              
+            case 'Date':
+            case 'Date for current stage':
+              notionProperties[key] = { date: { start: value } };
+              break;
+              
+            case 'Script':
+            case 'Frame.io':
+            case 'Discord Channel':
+              if (value.startsWith('http')) {
+                notionProperties[key] = { url: value };
+              } else {
+                notionProperties[key] = { rich_text: [{ text: { content: value } }] };
               }
-            } catch (e) {
-              // Not a valid date, ignore
-            }
+              break;
+              
+            case 'Lead':
+            case 'Project Owner':
+            case 'Editor':
+            case 'Writer':
+              // For person properties, we need to handle both single names and arrays
+              const people = Array.isArray(value) ? value : [value];
+              notionProperties[key] = { 
+                people: people.map(name => ({ name }))
+              };
+              break;
+              
+            case 'Change Log 1':
+            case 'Text':
+            case '3D Scenes':
+              notionProperties[key] = { 
+                rich_text: [{ text: { content: value } }]
+              };
+              break;
+              
+            default:
+              // For any other property, try to guess the type based on the value
+              if (typeof value === 'string') {
+                if (value.startsWith('http')) {
+                  notionProperties[key] = { url: value };
+                } else {
+                  notionProperties[key] = { 
+                    rich_text: [{ text: { content: value } }]
+                  };
+                }
+              }
           }
-          else if (propertyKey === 'Editor') {
-            // Multi-select property
-            notionProperties[propertyKey] = {
-              multi_select: value.split(',').map(name => ({ name: name.trim() }))
-            };
-          }
-          else if (propertyKey === 'Lead') {
-            // People property
-            notionProperties[propertyKey] = {
-              people: value.split(',').map(name => ({ name: name.trim() }))
-            };
-          }
-          // Add other property types as needed
-        });
+        }
         
         // Create embed for display
         const embed = new EmbedBuilder()
           .setTitle(`Sync Results: ${projectCode}`)
-          .setDescription(dryRun ? '⚠️ DRY RUN - Preview only, no changes made' : '✅ Notion updated successfully')
+          .setDescription(dryRun ? '⚠️ DRY RUN - Preview only, no changes made' : '✅ Notion will be updated with these properties')
           .setColor(dryRun ? 0xFFAA00 : 0x00AAFF)
           .setTimestamp();
         
         // Add fields for each property
         Object.entries(properties).forEach(([key, value]) => {
-          embed.addFields({ name: key, value: value.substring(0, 1024), inline: true });
+          const displayValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+          embed.addFields({ name: key, value: displayValue.substring(0, 1024), inline: true });
         });
         
         // Update Notion if not a dry run
@@ -1100,10 +1207,13 @@ client.on('interactionCreate', async interaction => {
             });
             
             logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(notionProperties).join(', ')}`);
+            embed.setFooter({ text: '✅ Notion updated successfully' });
           } catch (notionError) {
             logToFile(`Notion update error: ${notionError.message}`);
-            embed.setDescription(`❌ Error updating Notion: ${notionError.message}`);
+            embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
           }
+        } else {
+          embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
         }
         
         // Send response
@@ -1115,6 +1225,174 @@ client.on('interactionCreate', async interaction => {
           await interaction.editReply(`❌ Error syncing with Notion: ${error.message}`);
         } else {
           await interaction.reply({ content: `❌ Error syncing with Notion: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /set command
+    else if (commandName === 'set') {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        // Check if channel is linked to a project
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Get subcommand and value
+        const subcommand = interaction.options.getSubcommand();
+        const value = interaction.options.getString('value');
+        
+        // Process based on subcommand
+        logToFile(`Processing /set ${subcommand} for project ${projectCode}: "${value}"`);
+        
+        // Prepare Notion properties object
+        const notionProperties = {};
+        
+        // Set the appropriate property based on the subcommand
+        switch (subcommand) {
+          case 'status':
+            notionProperties['Status'] = { select: { name: value } };
+            break;
+            
+          case 'caption_status':
+            notionProperties['Caption Status'] = { select: { name: value } };
+            break;
+            
+          case 'category':
+            notionProperties['Category'] = { select: { name: value } };
+            break;
+            
+          case 'date':
+            try {
+              // Try to parse the date
+              const date = new Date(value);
+              if (isNaN(date.getTime())) {
+                throw new Error('Invalid date format');
+              }
+              notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
+            } catch (e) {
+              await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
+              return;
+            }
+            break;
+            
+          case 'script':
+            if (!value.startsWith('http')) {
+              await interaction.editReply('❌ Script value must be a valid URL starting with http:// or https://');
+              return;
+            }
+            notionProperties['Script'] = { url: value };
+            break;
+            
+          case 'frameio':
+            if (!value.startsWith('http')) {
+              await interaction.editReply('❌ Frame.io value must be a valid URL starting with http:// or https://');
+              return;
+            }
+            notionProperties['Frame.io'] = { url: value };
+            break;
+            
+          case 'lead':
+            notionProperties['Lead'] = { people: [{ name: value }] };
+            break;
+            
+          case 'editor':
+            notionProperties['Editor'] = { people: [{ name: value }] };
+            break;
+            
+          case 'writer':
+            notionProperties['Writer'] = { people: [{ name: value }] };
+            break;
+            
+          case '3d_status':
+            notionProperties['3D Status'] = { select: { name: value } };
+            break;
+            
+          case 'language':
+            // Handle language subcommand with additional parameter
+            const language = interaction.options.getString('language');
+            const languageStatus = value;
+            
+            if (!['Portuguese', 'Spanish', 'Russian', 'Indonesian'].includes(language)) {
+              await interaction.editReply('❌ Invalid language. Must be one of: Portuguese, Spanish, Russian, Indonesian');
+              return;
+            }
+            
+            notionProperties[language] = { select: { name: languageStatus } };
+            break;
+            
+          default:
+            await interaction.editReply(`❌ Unknown subcommand: ${subcommand}`);
+            return;
+        }
+        
+        try {
+          // Update the Notion page
+          await notion.pages.update({
+            page_id: project.page.id,
+            properties: notionProperties
+          });
+          
+          // Get the Notion URL for the page
+          const notionUrl = getNotionPageUrl(project.page.id);
+          
+          // Create components with button if there's a Notion URL
+          const components = [];
+          if (notionUrl) {
+            const row = new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setLabel('View in Notion')
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(notionUrl)
+              );
+            components.push(row);
+          }
+          
+          // Success message
+          await interaction.editReply({
+            content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`,
+            components: components.length > 0 ? components : undefined
+          });
+          
+          // Also send a non-ephemeral message to channel for visibility
+          await interaction.channel.send(
+            `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+          );
+          
+        } catch (updateError) {
+          logToFile(`Error updating property in /set command: ${updateError.message}`);
+          await interaction.editReply(`❌ Error updating property: ${updateError.message}`);
+        }
+        
+      } catch (error) {
+        logToFile(`Error in /set command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error setting property: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error setting property: ${error.message}`, ephemeral: true });
         }
       }
     }

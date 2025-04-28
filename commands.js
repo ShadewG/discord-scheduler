@@ -45,10 +45,69 @@ const commands = {
     new SlashCommandBuilder().setName('set').setDescription('Set a property on the Notion page for this channel')
       .addSubcommand(subcommand => subcommand.setName('status').setDescription('Set the Status property')
         .addStringOption(option => option.setName('value').setDescription('Status value').setRequired(true)
-          .addChoices({ name: 'Writing', value: 'Writing' }, { name: 'Writing Review', value: 'Writing Review' },
-                      { name: 'VA Render', value: 'VA Render' }, { name: 'Ready for Editing', value: 'Ready for Editing' },
-                      { name: 'Clip Selection', value: 'Clip Selection' }, { name: 'MGX', value: 'MGX' },
-                      { name: 'Pause', value: 'Pause' }))),
+          .addChoices(
+            { name: 'Backlog', value: 'Backlog' },
+            { name: 'FOIA Received', value: 'FOIA Received' },
+            { name: 'Ready for production', value: 'Ready for production' },
+            { name: 'Writing', value: 'Writing' }, 
+            { name: 'Writing Review', value: 'Writing Review' },
+            { name: 'VA Render', value: 'VA Render' },
+            { name: 'VA Review', value: 'VA Review' },
+            { name: 'Writing Revisions', value: 'Writing Revisions' },
+            { name: 'Ready for Editing', value: 'Ready for Editing' },
+            { name: 'Clip Selection', value: 'Clip Selection' },
+            { name: 'Clip Selection Review', value: 'Clip Selection Review' },
+            { name: 'MGX', value: 'MGX' },
+            { name: 'MGX Review/Cleanup', value: 'MGX Review/Cleanup' },
+            { name: 'Ready to upload', value: 'Ready to upload' },
+            { name: 'Paused', value: 'Paused' },
+            { name: 'TRIAL', value: 'TRIAL' }
+          )))
+      .addSubcommand(subcommand => subcommand.setName('caption_status').setDescription('Set the Caption Status property')
+        .addStringOption(option => option.setName('value').setDescription('Caption status value').setRequired(true)
+          .addChoices(
+            { name: 'Ready For Captions', value: 'Ready For Captions' },
+            { name: 'Captions In Progress', value: 'Captions In Progress' },
+            { name: 'Captions Done', value: 'Captions Done' }
+          )))
+      .addSubcommand(subcommand => subcommand.setName('category').setDescription('Set the Category property')
+        .addStringOption(option => option.setName('value').setDescription('Category value').setRequired(true)
+          .addChoices(
+            { name: 'CL', value: 'CL' },
+            { name: 'Bodycam', value: 'Bodycam' },
+            { name: 'IB', value: 'IB' }
+          )))
+      .addSubcommand(subcommand => subcommand.setName('date').setDescription('Set the Due Date property')
+        .addStringOption(option => option.setName('value').setDescription('Date (e.g., "2023-05-15" or "May 15, 2023")').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('script').setDescription('Set the Script URL')
+        .addStringOption(option => option.setName('value').setDescription('Script URL (must start with http:// or https://)').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('frameio').setDescription('Set the Frame.io URL')
+        .addStringOption(option => option.setName('value').setDescription('Frame.io URL (must start with http:// or https://)').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('lead').setDescription('Set the Lead person')
+        .addStringOption(option => option.setName('value').setDescription('Lead name').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('editor').setDescription('Set the Editor person')
+        .addStringOption(option => option.setName('value').setDescription('Editor name').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('writer').setDescription('Set the Writer person')
+        .addStringOption(option => option.setName('value').setDescription('Writer name').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('3d_status').setDescription('Set the 3D Status property')
+        .addStringOption(option => option.setName('value').setDescription('3D Status value').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('language').setDescription('Set a language version status')
+        .addStringOption(option => option.setName('language').setDescription('Language to update').setRequired(true)
+          .addChoices(
+            { name: 'Portuguese', value: 'Portuguese' },
+            { name: 'Spanish', value: 'Spanish' },
+            { name: 'Russian', value: 'Russian' },
+            { name: 'Indonesian', value: 'Indonesian' }
+          ))
+        .addStringOption(option => option.setName('value').setDescription('Language status').setRequired(true)
+          .addChoices(
+            { name: 'Done', value: 'Done' },
+            { name: 'Fixing Notes', value: 'Fixing Notes' },
+            { name: 'In Progress', value: 'In Progress' },
+            { name: 'QC', value: 'QC' },
+            { name: 'Approved for dub', value: 'Approved for dub' },
+            { name: 'Uploaded', value: 'Uploaded' }
+          ))),
     
     new SlashCommandBuilder().setName('notion').setDescription('Manage Notion status watchers')
       .addSubcommand(subcommand => subcommand.setName('add').setDescription('Add a new Notion watcher')
