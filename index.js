@@ -4028,4 +4028,17 @@ function getNotionPageUrl(pageId) {
   return `https://www.notion.so/${pageId.replace(/-/g, '')}`;
 }
 
-// End of file
+// Ensure all client handlers are properly closed
+client.on('error', (error) => {
+  console.error('Uncaught error:', error);
+  logToFile('Uncaught error: ' + error.message);
+});
+
+// Log when the bot is ready
+client.once('ready', () => {
+  console.log('Bot is ready and connected!');
+  logToFile('Bot started successfully at ' + new Date().toISOString());
+});
+
+// Export the client for testing
+module.exports = { client };
