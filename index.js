@@ -391,6 +391,16 @@ const DB = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID; // Suppor
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
 
+// Status watchers configuration
+const STATUS_WATCHERS = [
+  {
+    status: "MGX Review/Cleanup",
+    userId: "348547268695162890",
+    message: "This project might be ready for dubbing, check with the leads"
+  }
+  // Additional watchers can be added in the future
+];
+
 // Log environment variables for debugging (without showing full values)
 console.log('Environment variables check:');
 console.log(`- DISCORD_TOKEN: ${TOKEN ? '✅ Set' : '❌ Missing'}`);
@@ -950,6 +960,53 @@ function startScheduleHealthCheck() {
       logToFile(`Error in initial health check: ${error.message}`);
     }
   }, 5000); // After 5 seconds
+}
+
+
+// Function to check status and trigger notifications
+async function checkStatusAndNotify(projectCode, newStatus, channelId) {
+  try {
+    logToFile(`Checking status watchers for project ${projectCode} with status "${newStatus}"`);
+    
+    // Find watchers that match this status
+    const matchingWatchers = STATUS_WATCHERS.filter(watcher => 
+      watcher.status.toLowerCase() === newStatus.toLowerCase());
+    
+    if (matchingWatchers.length === 0) {
+      logToFile(`No status watchers found for status "${newStatus}"`);
+      return;
+    }
+    
+    logToFile(`Found ${matchingWatchers.length} matching watchers for status "${newStatus}"`);
+    
+    // If we don't have a channel ID, we can't send a notification
+    if (!channelId) {
+      logToFile(`No channel ID provided, can't send notification for project ${projectCode}`);
+      return;
+    }
+    
+    // Find the channel
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) {
+      logToFile(`Could not find channel with ID ${channelId} for project ${projectCode}`);
+      return;
+    }
+    
+    // Send a notification for each matching watcher
+    for (const watcher of matchingWatchers) {
+      try {
+        const message = `<@${watcher.userId}> ${watcher.message}`;
+        logToFile(`Sending status notification to user ${watcher.userId} in channel #${channel.name}`);
+        
+        await channel.send(message);
+        logToFile(`Successfully sent status notification for ${projectCode} to user ${watcher.userId}`);
+      } catch (error) {
+        logToFile(`Error sending status notification: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    logToFile(`Error in checkStatusAndNotify: ${error.message}`);
+  }
 }
 
 // Handle slash command interactions
@@ -1845,6 +1902,9 @@ Example Output: {
             
             // If setting status, log detailed information
             if (subcommand === 'status') {
+      // Check status watchers and send notifications if needed
+      checkStatusAndNotify(projectCode, value, channel.id);
+      
               // Try multiple variations of the property name
               const possibleNames = ['Status', 'status', 'STATUS'];
               
@@ -1968,6 +2028,14 @@ Example Output: {
         
         // Prepare Notion properties object
         const notionProperties = {};
+        
+        // For status changes, check the status watchers
+        if (subcommand === 'status') {
+          // Check if we need to trigger status watchers
+          checkStatusAndNotify(projectCode, value, channel.id);
+        }
+        
+        // Continue with the existing code...
         
         // For any property update, try to find the best property name match
         if (subcommand === 'status' || subcommand === 'caption_status' || subcommand === 'category') {
@@ -2476,237 +2544,14 @@ Example Output: {
     
     // Handle the /changelog command
     else if (commandName === 'changelog') {
-      try {
-        // Get command options
-        const projectCode = interaction.options.getString('project');
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
-        
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
-        hasResponded = true;
-        
-        // Check if Notion is configured
-        if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
-          return;
-        }
-        
-        // Determine which project to look up
-        let targetProjectCode = projectCode;
-        
-        // If no project specified, try to get from channel name
-        if (!targetProjectCode) {
-          const channelName = interaction.channel.name.toLowerCase();
-          const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
-          
-          if (codeMatch) {
-            targetProjectCode = codeMatch[0].toUpperCase();
-          } else {
-            await interaction.editReply('❌ Please specify a project code or use this command in a project-specific channel.');
-            return;
-          }
-        }
-        
-        // Find the project in Notion
-        const project = await findProjectByQuery(targetProjectCode);
-        if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${targetProjectCode}" in Notion database.`);
-          return;
-        }
-        
-        logToFile(`Fetching changelog for project ${targetProjectCode}`);
-        
-        try {
-          // Basic information about the project
-          let statusChanges = [];
-          const page = project.page;
-          
-          // Get the current status if available
-          if (page.properties.Status && page.properties.Status.status && page.properties.Status.status.name) {
-            const currentStatus = page.properties.Status.status.name;
-            statusChanges.push({
-              status: currentStatus,
-              date: new Date(page.last_edited_time),
-              by: 'Current'
-            });
-          }
-          
-          // Go through properties to find potential status dates
-          for (const [key, value] of Object.entries(page.properties)) {
-            // Look for date properties that might indicate status changes
-            if (value.type === 'date' && value.date) {
-              if (key.toLowerCase().includes('date') || 
-                  key.toLowerCase().includes('time') || 
-                  key.toLowerCase().includes('changed') || 
-                  key.toLowerCase().includes('updated')) {
-                
-                // Try to extract a status from the property name
-                const statusMatch = key.match(/^(.*?)\s*(?:date|time|changed|updated)/i);
-                if (statusMatch && statusMatch[1].trim()) {
-                  statusChanges.push({
-                    status: statusMatch[1].trim(),
-                    date: new Date(value.date.start),
-                    by: 'From Property'
-                  });
-                  continue;
-                }
-              }
-            }
-            
-            // Check for rich text properties that may contain changelog info
-            if (value.type === 'rich_text' && value.rich_text.length > 0 &&
-               (key.toLowerCase().includes('history') || 
-                key.toLowerCase().includes('changelog') || 
-                key.toLowerCase().includes('log'))) {
-              
-              const text = value.rich_text.map(t => t.plain_text).join('');
-              // Split into separate entries (by newline or semicolon)
-              const entries = text.split(/[\n;]/);
-              
-              for (const entry of entries) {
-                if (!entry.trim()) continue;
-                
-                // Try to find date-status or status-date patterns
-                const dateStatusMatch = entry.match(/(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})[\s:]+([A-Za-z\s/]+)/i);
-                const statusDateMatch = entry.match(/([A-Za-z\s/]+)[\s:\(]+(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})/i);
-                
-                if (dateStatusMatch) {
-                  try {
-                    statusChanges.push({
-                      status: dateStatusMatch[2].trim(),
-                      date: new Date(dateStatusMatch[1]),
-                      by: 'From Text'
-                    });
-                  } catch (e) {
-                    logToFile(`Error parsing date: ${dateStatusMatch[1]}`);
-                  }
-                } else if (statusDateMatch) {
-                  try {
-                    statusChanges.push({
-                      status: statusDateMatch[1].trim(),
-                      date: new Date(statusDateMatch[2]),
-                      by: 'From Text'
-                    });
-                  } catch (e) {
-                    logToFile(`Error parsing date: ${statusDateMatch[2]}`);
-                  }
-                }
-              }
-            }
-          }
-          
-          // If we still have no status changes, create a basic history
-          if (statusChanges.length === 0) {
-            statusChanges.push({
-              status: 'Created',
-              date: new Date(page.created_time),
-              by: 'System'
-            });
-            
-            // If we have an update time different from create time, add that
-            if (page.last_edited_time !== page.created_time) {
-              const currentStatus = page.properties.Status?.status?.name || 'Updated';
-              statusChanges.push({
-                status: currentStatus,
-                date: new Date(page.last_edited_time),
-                by: 'Current'
-              });
-            }
-          }
-          
-          // Sort changes by date
-          statusChanges.sort((a, b) => a.date - b.date);
-          
-          // If we still have no status changes, inform the user
-          if (statusChanges.length === 0) {
-            await interaction.editReply(`No status change history found for project ${targetProjectCode}.`);
-            return;
-          }
-          
-          // Calculate days between changes
-          for (let i = 1; i < statusChanges.length; i++) {
-            const prevDate = statusChanges[i-1].date;
-            const currDate = statusChanges[i].date;
-            const diffDays = Math.round((currDate - prevDate) / (1000 * 60 * 60 * 24));
-            statusChanges[i].daysSincePrevious = diffDays;
-          }
-          
-          // Create an embed to display the changelog
-          const embed = new EmbedBuilder()
-            .setTitle(`📋 Changelog for ${targetProjectCode}`)
-            .setColor(0x0099FF)
-            .setDescription(`Status change history for project **${targetProjectCode}**`)
-            .setTimestamp();
-          
-          // Format dates
-          const formatDate = (date) => {
-            return date.toLocaleDateString('en-US', { 
-              month: 'short', 
-              day: 'numeric',
-              year: 'numeric'
-            });
-          };
-          
-          // Add fields for each status change
-          statusChanges.forEach((change, index) => {
-            const formattedDate = formatDate(change.date);
-            const daysInfo = change.daysSincePrevious ? 
-              ` (${change.daysSincePrevious} day${change.daysSincePrevious !== 1 ? 's' : ''} since previous)` : 
-              '';
-            
-            embed.addFields({
-              name: `${index + 1}. ${change.status}`,
-              value: `📅 ${formattedDate}${daysInfo}`
-            });
-          });
-          
-          // Calculate total days in pipeline
-          if (statusChanges.length >= 2) {
-            const firstDate = statusChanges[0].date;
-            const lastDate = statusChanges[statusChanges.length - 1].date;
-            const totalDays = Math.round((lastDate - firstDate) / (1000 * 60 * 60 * 24));
-            
-            embed.addFields({
-              name: '⏱️ Total Time in Pipeline',
-              value: `${totalDays} day${totalDays !== 1 ? 's' : ''}`
-            });
-          }
-          
-          // Get Notion URL for button
-          const notionUrl = getNotionPageUrl(page.id);
-          
-          // Create button component if there's a Notion URL
-          const components = [];
-          if (notionUrl) {
-            const row = new ActionRowBuilder()
-              .addComponents(
-                new ButtonBuilder()
-                  .setLabel('View in Notion')
-                  .setStyle(ButtonStyle.Link)
-                  .setURL(notionUrl)
-              );
-            components.push(row);
-          }
-          
-          // Send the response
-          await interaction.editReply({
-            embeds: [embed],
-            components: components.length > 0 ? components : undefined
-          });
-          
-        } catch (notionError) {
-          logToFile(`Error fetching changelog: ${notionError.message}`);
-          await interaction.editReply(`❌ Error fetching changelog: ${notionError.message}`);
-        }
-        
-      } catch (error) {
-        logToFile(`Error in /changelog command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying changelog: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error displaying changelog: ${error.message}`, ephemeral: true });
-        }
-      }
-    }
+  try {
+    // Get command options
+    const projectCode = interaction.options.getString('project');
+    const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+    
+    await interaction.deferReply({ flags: ephemeral ? [1 << 6] : []}
+
+
     
     // Handle the /test_schedule command
     else if (commandName === 'test_schedule') {
@@ -3213,3 +3058,123 @@ function scheduleMeeting(meetingId, channelId, date, mentionedUsers, title, desc
   
   return { meetingCron, reminderCron, formattedDate };
 }
+
+// After loading environment variables, add this section:
+
+// Status watchers configuration
+const STATUS_WATCHERS = [
+  {
+    status: "MGX Review/Cleanup",
+    userId: "348547268695162890",
+    message: "This project might be ready for dubbing, check with the leads"
+  }
+  // Additional watchers can be added in the future
+];
+
+// Function to check status and trigger notifications
+async function checkStatusAndNotify(projectCode, newStatus, channelId) {
+  try {
+    logToFile(`Checking status watchers for project ${projectCode} with status "${newStatus}"`);
+    
+    // Find watchers that match this status
+    const matchingWatchers = STATUS_WATCHERS.filter(watcher => 
+      watcher.status.toLowerCase() === newStatus.toLowerCase());
+    
+    if (matchingWatchers.length === 0) {
+      logToFile(`No status watchers found for status "${newStatus}"`);
+      return;
+    }
+    
+    logToFile(`Found ${matchingWatchers.length} matching watchers for status "${newStatus}"`);
+    
+    // If we don't have a channel ID, we can't send a notification
+    if (!channelId) {
+      logToFile(`No channel ID provided, can't send notification for project ${projectCode}`);
+      return;
+    }
+    
+    // Find the channel
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) {
+      logToFile(`Could not find channel with ID ${channelId} for project ${projectCode}`);
+      return;
+    }
+    
+    // Send a notification for each matching watcher
+    for (const watcher of matchingWatchers) {
+      try {
+        const message = `<@${watcher.userId}> ${watcher.message}`;
+        logToFile(`Sending status notification to user ${watcher.userId} in channel #${channel.name}`);
+        
+        await channel.send(message);
+        logToFile(`Successfully sent status notification for ${projectCode} to user ${watcher.userId}`);
+      } catch (error) {
+        logToFile(`Error sending status notification: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    logToFile(`Error in checkStatusAndNotify: ${error.message}`);
+  }
+}
+
+// Find the /set command handler and modify it to check status watchers 
+// This should be in the section handling the 'status' subcommand:
+
+// In the /set command, add the status watcher check:
+    // Handle the /set command
+    else if (commandName === 'set') {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        // Check if channel is linked to a project
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Get subcommand and value
+        const subcommand = interaction.options.getSubcommand();
+        const value = interaction.options.getString('value');
+        
+        // Process based on subcommand
+        logToFile(`Processing /set ${subcommand} for project ${projectCode}: "${value}"`);
+        
+        // Prepare Notion properties object
+        const notionProperties = {};
+        
+        // For status changes, check the status watchers
+        if (subcommand === 'status') {
+          // Check if we need to trigger status watchers
+          checkStatusAndNotify(projectCode, value, channel.id);
+        }
+        
+        // Continue with the existing code...
+      } catch (error) {
+        logToFile(`Error in /set command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error setting property: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error setting property: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
