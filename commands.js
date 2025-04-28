@@ -134,6 +134,7 @@ const commands = {
       .addStringOption(option => option.setName('title').setDescription('Meeting title').setRequired(true))
       .addStringOption(option => option.setName('time').setDescription('Meeting time (e.g., "tomorrow at 3pm")').setRequired(true))
       .addStringOption(option => option.setName('description').setDescription('Meeting description'))
+      .addStringOption(option => option.setName('users').setDescription('Users to invite (use @ mentions)'))
       .addBooleanOption(option => option.setName('remind').setDescription('Send reminder 5 minutes before')),
       
     new SlashCommandBuilder().setName('send').setDescription('Manually send a scheduled message')

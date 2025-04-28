@@ -2192,6 +2192,106 @@ Example Output: {
       }
     }
     
+    // Handle the /meeting command
+    else if (commandName === 'meeting') {
+      try {
+        // Get command options
+        const title = interaction.options.getString('title') || 'Team Meeting';
+        const time = interaction.options.getString('time');
+        const description = interaction.options.getString('description') || '';
+        const usersString = interaction.options.getString('users') || '';
+        
+        await interaction.deferReply();
+        hasResponded = true;
+        
+        // Extract user IDs from the users string
+        const mentionedUserIds = [];
+        const userMatches = usersString.matchAll(/<@!?(\d+)>/g);
+        for (const match of userMatches) {
+          mentionedUserIds.push(match[1]);
+        }
+        
+        // If no users were mentioned, mention the person who created the meeting
+        if (mentionedUserIds.length === 0) {
+          mentionedUserIds.push(interaction.user.id);
+        }
+        
+        // Try to parse the date
+        let meetingDate = null;
+        
+        // Try GPT first if available
+        if (openai) {
+          logToFile(`Trying to parse date with GPT: "${time}"`);
+          meetingDate = await parseDate(time);
+          logToFile(`GPT parsed date: ${meetingDate}`);
+        }
+        
+        // Fall back to manual parsing if GPT fails
+        if (!meetingDate) {
+          logToFile(`Trying to parse date manually: "${time}"`);
+          meetingDate = manualDateParse(time);
+          logToFile(`Manually parsed date: ${meetingDate}`);
+        }
+        
+        // If date parsing failed, return an error
+        if (!meetingDate) {
+          await interaction.editReply(`❌ Could not parse the time: "${time}". Please use a more standard format like "tomorrow at 3pm" or "in 30m".`);
+          return;
+        }
+        
+        // Check if the date is in the past
+        const now = new Date();
+        if (meetingDate < now) {
+          await interaction.editReply(`❌ The meeting time is in the past. Please choose a future time.`);
+          return;
+        }
+        
+        // Generate a meeting ID
+        const meetingId = nextMeetingId++;
+        
+        // Schedule the meeting
+        const { formattedDate } = scheduleMeeting(
+          meetingId,
+          interaction.channel.id,
+          meetingDate,
+          mentionedUserIds,
+          title,
+          description
+        );
+        
+        // Create the user mentions string for the response
+        const mentionsString = mentionedUserIds.map(userId => `<@${userId}>`).join(' ');
+        
+        // Send confirmation message
+        const embed = new EmbedBuilder()
+          .setTitle(`🗓️ Meeting Scheduled: ${title}`)
+          .setColor(0x00AAFF)
+          .setDescription(description || 'No description provided')
+          .addFields(
+            { name: 'Time', value: formattedDate, inline: true },
+            { name: 'Participants', value: mentionsString || 'No participants', inline: true },
+            { name: 'Meeting ID', value: `#${meetingId}`, inline: true }
+          )
+          .setFooter({ text: 'A reminder will be sent 5 minutes before the meeting' })
+          .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+        
+        // Send notification to channel
+        await interaction.channel.send(
+          `🆕 <@${interaction.user.id}> scheduled a meeting **${title}** for ${formattedDate} with ${mentionsString}`
+        );
+        
+      } catch (error) {
+        logToFile(`Error in /meeting command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error scheduling meeting: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error scheduling meeting: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
     // Handle other commands here
     // ...
     
@@ -2377,4 +2477,229 @@ function checkAllNextExecutionTimes() {
   });
   
   logToFile('=== Next Execution Times Check Complete ===');
+}
+
+// Store temporary meetings
+const scheduledMeetings = new Map();
+
+// Add a unique identifier for meetings
+let nextMeetingId = 1;
+
+// Function to parse natural language dates using GPT
+async function parseDate(dateString) {
+  if (!openai) {
+    logToFile('OpenAI not configured for date parsing');
+    return null;
+  }
+  
+  try {
+    // Use GPT to parse the date string
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { 
+          role: 'system', 
+          content: `Parse the given date/time string and convert it to a precise ISO date time.
+          Current time: ${new Date().toISOString()}
+          Timezone: ${TZ}
+          Return ONLY the ISO string without any explanation or additional text.`
+        },
+        { role: 'user', content: dateString }
+      ],
+      temperature: 0.1,
+      max_tokens: 100
+    });
+    
+    // Extract the completion
+    const completion = response.choices[0]?.message?.content.trim();
+    if (!completion) {
+      return null;
+    }
+    
+    // Try to parse the date
+    const date = new Date(completion);
+    if (isNaN(date.getTime())) {
+      // Fallback: try to extract ISO date with regex
+      const isoMatch = completion.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})/);
+      if (isoMatch) {
+        return new Date(isoMatch[0]);
+      }
+      return null;
+    }
+    
+    return date;
+  } catch (error) {
+    logToFile(`Error parsing date with GPT: ${error.message}`);
+    return null;
+  }
+}
+
+// Manual date parser fallback
+function manualDateParse(dateString) {
+  // Try to handle common formats
+  const now = new Date();
+  const lowerInput = dateString.toLowerCase();
+  
+  // Handle relative times like "30m" or "2h"
+  const minutesMatch = lowerInput.match(/^(\d+)m$/);
+  if (minutesMatch) {
+    const minutes = parseInt(minutesMatch[1]);
+    const date = new Date(now.getTime() + minutes * 60000);
+    return date;
+  }
+  
+  const hoursMatch = lowerInput.match(/^(\d+)h$/);
+  if (hoursMatch) {
+    const hours = parseInt(hoursMatch[1]);
+    const date = new Date(now.getTime() + hours * 3600000);
+    return date;
+  }
+  
+  // Handle "tomorrow at X"
+  if (lowerInput.includes('tomorrow')) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    // Extract time if available
+    const timeMatch = lowerInput.match(/(\d{1,2})(?::(\d{2}))?(?:\s*(am|pm))?/);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1]);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const ampm = timeMatch[3];
+      
+      // Handle AM/PM
+      if (ampm === 'pm' && hours < 12) {
+        hours += 12;
+      } else if (ampm === 'am' && hours === 12) {
+        hours = 0;
+      }
+      
+      tomorrow.setHours(hours, minutes, 0, 0);
+    } else {
+      // Default to 9 AM if no time specified
+      tomorrow.setHours(9, 0, 0, 0);
+    }
+    
+    return tomorrow;
+  }
+  
+  // Handle "today at X"
+  if (lowerInput.includes('today')) {
+    const today = new Date(now);
+    
+    // Extract time if available
+    const timeMatch = lowerInput.match(/(\d{1,2})(?::(\d{2}))?(?:\s*(am|pm))?/);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1]);
+      const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const ampm = timeMatch[3];
+      
+      // Handle AM/PM
+      if (ampm === 'pm' && hours < 12) {
+        hours += 12;
+      } else if (ampm === 'am' && hours === 12) {
+        hours = 0;
+      }
+      
+      today.setHours(hours, minutes, 0, 0);
+    } else {
+      // Default to current time + 1 hour if no time specified
+      today.setHours(today.getHours() + 1, 0, 0, 0);
+    }
+    
+    return today;
+  }
+  
+  // Try to parse with Date constructor as a last resort
+  const date = new Date(dateString);
+  if (!isNaN(date.getTime())) {
+    return date;
+  }
+  
+  return null;
+}
+
+// Helper function to create a cron expression from a Date object
+function createCronFromDate(date) {
+  const minutes = date.getMinutes();
+  const hours = date.getHours();
+  const dayOfMonth = date.getDate();
+  const month = date.getMonth() + 1; // JS months are 0-indexed
+  const dayOfWeek = date.getDay();
+  
+  return `${minutes} ${hours} ${dayOfMonth} ${month} ${dayOfWeek}`;
+}
+
+// Function to schedule a meeting
+function scheduleMeeting(meetingId, channelId, date, mentionedUsers, title, description) {
+  // Create a cron expression for the meeting time
+  const meetingCron = createCronFromDate(date);
+  
+  // Create a date for 5 minutes before
+  const reminderDate = new Date(date.getTime() - 5 * 60000);
+  const reminderCron = createCronFromDate(reminderDate);
+  
+  // Format date for display
+  const formattedDate = date.toLocaleString('en-US', { 
+    timeZone: TZ,
+    weekday: 'short',
+    month: 'short', 
+    day: 'numeric',
+    hour: '2-digit', 
+    minute: '2-digit'
+  });
+  
+  // Create user mentions string
+  const mentionsString = mentionedUsers.map(userId => `<@${userId}>`).join(' ');
+  
+  // Create meeting message
+  const meetingMessage = `🗓️ **${title}** - Meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
+  
+  // Create reminder message
+  const reminderMessage = `🔔 Reminder: **${title}** starts in 5 minutes at ${formattedDate}\n${mentionsString}`;
+  
+  // Store the meeting in memory
+  scheduledMeetings.set(meetingId, {
+    title,
+    description,
+    date,
+    channelId,
+    mentionedUsers,
+    meetingJob: null,
+    reminderJob: null
+  });
+  
+  logToFile(`Scheduling meeting "${title}" for ${formattedDate} with ${mentionedUsers.length} users`);
+  
+  // Schedule the meeting job
+  const meetingJob = cron.schedule(meetingCron, () => {
+    // Send the meeting message
+    const channel = client.channels.cache.get(channelId);
+    if (channel) {
+      channel.send(meetingMessage)
+        .then(() => logToFile(`Sent meeting message for "${title}"`))
+        .catch(err => logToFile(`Error sending meeting message: ${err.message}`));
+      
+      // Remove the meeting from memory after it's done
+      scheduledMeetings.delete(meetingId);
+    }
+  }, { timezone: TZ, scheduled: true });
+  
+  // Schedule the reminder job
+  const reminderJob = cron.schedule(reminderCron, () => {
+    // Send the reminder message
+    const channel = client.channels.cache.get(channelId);
+    if (channel) {
+      channel.send(reminderMessage)
+        .then(() => logToFile(`Sent reminder message for "${title}"`))
+        .catch(err => logToFile(`Error sending reminder message: ${err.message}`));
+    }
+  }, { timezone: TZ, scheduled: true });
+  
+  // Store the jobs in memory
+  const meeting = scheduledMeetings.get(meetingId);
+  meeting.meetingJob = meetingJob;
+  meeting.reminderJob = reminderJob;
+  
+  return { meetingCron, reminderCron, formattedDate };
 }
