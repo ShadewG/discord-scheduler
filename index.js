@@ -1504,17 +1504,38 @@ Example Output: {
             const availableProps = Object.keys(pageProperties);
             logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
             
-            // If setting status, log the status property details
+            // If setting status, log detailed information
             if (subcommand === 'status') {
-              const statusProp = pageProperties['Status'] || pageProperties['status'];
-              if (statusProp) {
-                logToFile(`Status property found: ${JSON.stringify(statusProp)}`);
-              } else {
-                logToFile('Status property not found on the page!');
+              // Try multiple variations of the property name
+              const possibleNames = ['Status', 'status', 'STATUS'];
+              
+              possibleNames.forEach(propName => {
+                if (pageProperties[propName]) {
+                  logToFile(`Found Status property as "${propName}": ${JSON.stringify(pageProperties[propName])}`);
+                } else {
+                  logToFile(`Property "${propName}" does not exist on the page`);
+                }
+              });
+              
+              // Find any property that looks like a status property
+              const statusLikeProps = availableProps.filter(prop => 
+                prop.toLowerCase().includes('status')
+              );
+              
+              if (statusLikeProps.length > 0) {
+                logToFile(`Found status-like properties: ${statusLikeProps.join(', ')}`);
+                statusLikeProps.forEach(prop => {
+                  logToFile(`Details for "${prop}": ${JSON.stringify(pageProperties[prop])}`);
+                });
               }
             }
             
             // Update the Notion page
+            logToFile(`Sending update to Notion API: ${JSON.stringify({
+              page_id: project.page.id,
+              properties: notionProperties
+            })}`);
+            
             await notion.pages.update({
               page_id: project.page.id,
               properties: notionProperties
@@ -1624,13 +1645,13 @@ Example Output: {
                 logToFile(`Using exact property name from schema: "${statusProperty}"`);
                 notionProperties[statusProperty] = { select: { name: value } };
               } else {
-                // Fallback to lowercase as that's what the API seems to expect
-                logToFile('Status property not found in schema, using lowercase "status"');
-                notionProperties['status'] = { select: { name: value } };
+                // Use "Status" with capital S since that's what Notion has
+                logToFile('Status property not found in schema, using "Status" with capital S');
+                notionProperties['Status'] = { select: { name: value } };
               }
             } else {
-              // Fallback to lowercase if schema not available
-              notionProperties['status'] = { select: { name: value } };
+              // Default to "Status" with capital S
+              notionProperties['Status'] = { select: { name: value } };
             }
             break;
             
@@ -1745,17 +1766,38 @@ Example Output: {
           const availableProps = Object.keys(pageProperties);
           logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
           
-          // If setting status, log the status property details
+          // If setting status, log detailed information
           if (subcommand === 'status') {
-            const statusProp = pageProperties['Status'] || pageProperties['status'];
-            if (statusProp) {
-              logToFile(`Status property found: ${JSON.stringify(statusProp)}`);
-            } else {
-              logToFile('Status property not found on the page!');
+            // Try multiple variations of the property name
+            const possibleNames = ['Status', 'status', 'STATUS'];
+            
+            possibleNames.forEach(propName => {
+              if (pageProperties[propName]) {
+                logToFile(`Found Status property as "${propName}": ${JSON.stringify(pageProperties[propName])}`);
+              } else {
+                logToFile(`Property "${propName}" does not exist on the page`);
+              }
+            });
+            
+            // Find any property that looks like a status property
+            const statusLikeProps = availableProps.filter(prop => 
+              prop.toLowerCase().includes('status')
+            );
+            
+            if (statusLikeProps.length > 0) {
+              logToFile(`Found status-like properties: ${statusLikeProps.join(', ')}`);
+              statusLikeProps.forEach(prop => {
+                logToFile(`Details for "${prop}": ${JSON.stringify(pageProperties[prop])}`);
+              });
             }
           }
           
           // Update the Notion page
+          logToFile(`Sending update to Notion API: ${JSON.stringify({
+            page_id: project.page.id,
+            properties: notionProperties
+          })}`);
+          
           await notion.pages.update({
             page_id: project.page.id,
             properties: notionProperties
@@ -2102,3 +2144,122 @@ function checkAllNextExecutionTimes() {
   
   logToFile('=== Next Execution Times Check Complete ===');
 }
+
+// After fetchDatabaseSchema, add:
+
+// Helper function to find the best matching property name
+function findBestPropertyMatch(propertyPage, targetName) {
+  if (!propertyPage || !targetName) return null;
+  
+  // Try exact match first
+  if (propertyPage[targetName]) {
+    return targetName;
+  }
+  
+  // Try case-insensitive match (exact spelling but different case)
+  const caseInsensitiveMatch = Object.keys(propertyPage).find(
+    propName => propName.toLowerCase() === targetName.toLowerCase()
+  );
+  
+  if (caseInsensitiveMatch) {
+    logToFile(`Found case-insensitive match for "${targetName}": "${caseInsensitiveMatch}"`);
+    return caseInsensitiveMatch;
+  }
+  
+  // Try fuzzy match (contains the target name)
+  const fuzzyMatches = Object.keys(propertyPage).filter(
+    propName => propName.toLowerCase().includes(targetName.toLowerCase())
+  );
+  
+  if (fuzzyMatches.length === 1) {
+    logToFile(`Found fuzzy match for "${targetName}": "${fuzzyMatches[0]}"`);
+    return fuzzyMatches[0];
+  } else if (fuzzyMatches.length > 1) {
+    logToFile(`Found multiple fuzzy matches for "${targetName}": ${fuzzyMatches.join(', ')}`);
+    // Return the closest match
+    return fuzzyMatches[0]; // Take the first one for now
+  }
+  
+  // No match found
+  return null;
+}
+
+// Now in the /set command handler, add a generic property finder:
+
+        // Before the switch statement, add:
+        
+        // For any property update, try to find the best property name match
+        if (subcommand === 'status' || subcommand === 'caption_status' || subcommand === 'category') {
+          // Get the page properties
+          const pageProperties = project.page.properties;
+          
+          // Normalize expected property name based on subcommand
+          let propertyNameToFind = '';
+          if (subcommand === 'status') {
+            propertyNameToFind = 'Status';
+          } else if (subcommand === 'caption_status') {
+            propertyNameToFind = 'Caption Status';
+          } else if (subcommand === 'category') {
+            propertyNameToFind = 'Category';
+          }
+          
+          // Find the best property match
+          const bestMatch = findBestPropertyMatch(pageProperties, propertyNameToFind);
+          
+          if (bestMatch) {
+            logToFile(`Using best match property name: "${bestMatch}" for "${propertyNameToFind}"`);
+            notionProperties[bestMatch] = { select: { name: value } };
+            
+            // Log extra debugging info about the property
+            logToFile(`Property details: ${JSON.stringify(pageProperties[bestMatch])}`);
+            
+            // Skip the switch statement since we've already set the property
+            try {
+              // Update the Notion page
+              await notion.pages.update({
+                page_id: project.page.id,
+                properties: notionProperties
+              });
+              
+              // Get the Notion URL for the page
+              const notionUrl = getNotionPageUrl(project.page.id);
+              
+              // Create components with button if there's a Notion URL
+              const components = [];
+              if (notionUrl) {
+                const row = new ActionRowBuilder()
+                  .addComponents(
+                    new ButtonBuilder()
+                      .setLabel('View in Notion')
+                      .setStyle(ButtonStyle.Link)
+                      .setURL(notionUrl)
+                  );
+                components.push(row);
+              }
+              
+              // Success message
+              await interaction.editReply({
+                content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
+                components: components.length > 0 ? components : undefined
+              });
+              
+              // Also send a non-ephemeral message to channel for visibility
+              await interaction.channel.send(
+                `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+              );
+              
+              // Skip the rest of the function since we've handled it
+              return;
+            } catch (updateError) {
+              logToFile(`Error updating property using best match: ${updateError.message}`);
+              // Continue to switch statement as fallback
+            }
+          } else {
+            logToFile(`No matching property found for "${propertyNameToFind}"`);
+          }
+        }
+        
+        // Proceed with the switch statement as fallback
+        
+        // Set the appropriate property based on the subcommand
+// ... existing code ...
