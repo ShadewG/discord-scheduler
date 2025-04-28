@@ -2520,11 +2520,12 @@ Example Output: {
           
           // Query for all pages related to this project that have status changes
           // We'll search for pages with the project code in their title
-          const databaseId = process.env.NOTION_DATABASE_ID || global.NOTION_DATABASE_ID;
-          logToFile(`Searching for status changes in database ${databaseId} for project ${targetProjectCode}`);
+          // Use specific database ID for changelog
+          const changelogDbId = "1d987c20070a80b9aacce39262b5da60";
+          logToFile(`Searching for status changes in changelog database ${changelogDbId} for project ${targetProjectCode}`);
           
           const response = await notion.databases.query({
-            database_id: databaseId,
+            database_id: changelogDbId,
             filter: {
               property: "Project name",
               title: {
