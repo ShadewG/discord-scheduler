@@ -142,14 +142,14 @@ const commands = {
           .setDescription('The type of message to send')
           .setRequired(true)
           .addChoices(
-            { name: 'Morning Stand-up', value: 'Morning Stand-up' },
-            { name: 'Deep Work Session 1', value: 'Deep Work Session 1' },
+            { name: 'Social Fika', value: 'Social Fika' },
+            { name: 'Deep Work AM', value: 'Deep Work AM' },
+            { name: 'Fika Break', value: 'Fika Break' },
+            { name: 'Deep Work Continue', value: 'Deep Work Continue' },
             { name: 'Lunch Break', value: 'Lunch Break' },
-            { name: 'Team Sync Meeting', value: 'Team Sync Meeting' },
-            { name: 'Deep Work Session 2', value: 'Deep Work Session 2' },
-            { name: 'Client Call', value: 'Client Call' },
-            { name: 'Project Planning', value: 'Project Planning' },
-            { name: 'End of Day', value: 'End of Day' }
+            { name: 'Planning Huddle', value: 'Planning Huddle' },
+            { name: 'Deep Work PM', value: 'Deep Work PM' },
+            { name: 'Wrap-Up Meeting', value: 'Wrap-Up Meeting' }
           ))
       .addBooleanOption(option => option.setName('notification').setDescription('Send as a notification (5 min before) instead of the main message')),
   ],

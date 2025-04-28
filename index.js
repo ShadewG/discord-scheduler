@@ -26,14 +26,14 @@ const TEAM_ROLE_ID = '1364657163598823474';
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
-  { tag: 'Morning Stand-up', cron: '0 9 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Morning Stand-up** - Daily planning meeting to discuss goals and blockers.`, notify: true },
-  { tag: 'Deep Work Session 1', cron: '30 9 * * 1-5', text: '🧠 @Schedule **Deep Work (AM)** starts now — focus mode ON.' },
-  { tag: 'Lunch Break', cron: '0 12 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** @Schedule — enjoy! Back in 45 min.`, notify: true },
-  { tag: 'Team Sync Meeting', cron: '0 13 * * 1-5', text: `🔄 <@&${TEAM_ROLE_ID}> **Team Sync Meeting** - Weekly progress update and roadmap discussion.`, notify: true },
-  { tag: 'Deep Work Session 2', cron: '0 14 * * 1-5', text: '🧠 @Schedule **Deep Work (PM)** starts now — last push of the day.' },
-  { tag: 'Client Call', cron: '0 16 * * 1,3,5', text: `📞 <@&${TEAM_ROLE_ID}> **Client Call** - Scheduled client meeting on Monday, Wednesday, Friday.`, notify: true },
-  { tag: 'Project Planning', cron: '0 16 * * 2,4', text: `📊 <@&${TEAM_ROLE_ID}> **Project Planning** - Internal planning session on Tuesday and Thursday.`, notify: true },
-  { tag: 'End of Day', cron: '0 17 * * 1-5', text: '👋 @Schedule **End of Day** - That\'s a wrap! Remember to log your hours and update task status.' }
+  { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☕ <@&${TEAM_ROLE_ID}> **Social Fika** @Schedule - Casual check-in + daily sync (9:00-9:20).`, notify: true },
+  { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: '🧠 @Schedule **Deep Work** starts now — focus mode ON (9:20-11:00).' },
+  { tag: 'Fika Break', cron: '0 11 * * 1-5', text: '🍪 @Schedule **Fika Break** - Short break time! (11:00-11:20)', notify: true },
+  { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: '🧠 @Schedule **Deep Work** continues — back to focused mode (11:20-13:00).' },
+  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** @Schedule — enjoy! Back at 13:45.`, notify: true },
+  { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** @Schedule - Quick team sync (13:45-14:00).`, notify: true },
+  { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: '🧠 @Schedule **Deep Work PM** - Project execution and reviews (14:00-17:00).' },
+  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: '👋 @Schedule **Wrap-Up Meeting** - Daily summary + vibes check (17:00-17:30).', notify: true }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -945,10 +945,12 @@ client.on('interactionCreate', async interaction => {
         // Fetch messages
         let messages;
         try {
+          logToFile(`Attempting to fetch ${Math.min(messageCount, 100)} messages from #${channel.name}`);
           messages = await channel.messages.fetch({ limit: Math.min(messageCount, 100) });
           logToFile(`Fetched ${messages.size} messages from #${channel.name}`);
         } catch (fetchError) {
-          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}`);
+          logToFile(`Error fetching messages: ${fetchError.message}`);
+          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}. Make sure the bot has the "Read Message History" permission in this channel.`);
           return;
         }
         
@@ -1405,6 +1407,26 @@ Example Output: {
         // Update Notion if not a dry run
         if (!dryRun) {
           try {
+            // Log the properties object for debugging
+            logToFile(`Updating Notion page with properties: ${JSON.stringify(notionProperties)}`);
+            logToFile(`Page ID: ${project.page.id}`);
+            
+            // Log the available properties on the page for debugging
+            const pageProperties = project.page.properties;
+            const availableProps = Object.keys(pageProperties);
+            logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
+            
+            // If setting status, log the status property details
+            if (subcommand === 'status') {
+              const statusProp = pageProperties['Status'] || pageProperties['status'];
+              if (statusProp) {
+                logToFile(`Status property found: ${JSON.stringify(statusProp)}`);
+              } else {
+                logToFile('Status property not found on the page!');
+              }
+            }
+            
+            // Update the Notion page
             await notion.pages.update({
               page_id: project.page.id,
               properties: notionProperties
@@ -1553,6 +1575,25 @@ Example Output: {
         }
         
         try {
+          // Log the properties object for debugging
+          logToFile(`Updating Notion page with properties: ${JSON.stringify(notionProperties)}`);
+          logToFile(`Page ID: ${project.page.id}`);
+          
+          // Log the available properties on the page for debugging
+          const pageProperties = project.page.properties;
+          const availableProps = Object.keys(pageProperties);
+          logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
+          
+          // If setting status, log the status property details
+          if (subcommand === 'status') {
+            const statusProp = pageProperties['Status'] || pageProperties['status'];
+            if (statusProp) {
+              logToFile(`Status property found: ${JSON.stringify(statusProp)}`);
+            } else {
+              logToFile('Status property not found on the page!');
+            }
+          }
+          
           // Update the Notion page
           await notion.pages.update({
             page_id: project.page.id,
