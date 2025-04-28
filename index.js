@@ -2527,7 +2527,7 @@ Example Output: {
           const response = await notion.databases.query({
             database_id: changelogDbId,
             filter: {
-              property: "Project name",
+              property: "Title",
               title: {
                 contains: targetProjectCode
               }
@@ -2554,14 +2554,14 @@ Example Output: {
               // Try to extract status from properties
               let pageStatus = null;
               // Try different property names for Status
-              const statusProps = ["Status", "status", "Stage", "Pipeline Stage"];
+              const statusProps = ["New Status", "Status", "status", "Stage", "Pipeline Stage"];
               
               for (const propName of statusProps) {
                 if (relatedPage.properties[propName] && 
-                   (relatedPage.properties[propName].status?.name || 
+                  (relatedPage.properties[propName].status?.name || 
                     relatedPage.properties[propName].select?.name)) {
                   pageStatus = relatedPage.properties[propName].status?.name || 
-                              relatedPage.properties[propName].select?.name;
+                             relatedPage.properties[propName].select?.name;
                   break;
                 }
               }
@@ -2694,7 +2694,9 @@ Example Output: {
           }
           
           // Get project name
-          const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || targetProjectCode;
+          const projectName = page.properties["Title"]?.title?.[0]?.plain_text 
+                           || page.properties["Project name"]?.title?.[0]?.plain_text 
+                           || targetProjectCode;
           
           // Create an embed to display the changelog
           const embed = new EmbedBuilder()
