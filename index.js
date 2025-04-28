@@ -755,6 +755,48 @@ client.once('ready', () => {
   console.log('Bot is ready!');
   logToFile('Bot started successfully');
   
+  // Verify schedule channel access
+  const scheduleChannel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
+  if (!scheduleChannel) {
+    console.error(`❌ ERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+    logToFile(`❌ CRITICAL ERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+    logToFile('Available text channels:');
+    client.channels.cache.forEach(ch => {
+      if (ch.type === 0) { // Text channels
+        logToFile(`- ${ch.id}: #${ch.name} (${ch.guild.name})`);
+      }
+    });
+  } else {
+    console.log(`✅ Found schedule channel: #${scheduleChannel.name}`);
+    logToFile(`✅ Found schedule channel: #${scheduleChannel.name} in server ${scheduleChannel.guild.name}`);
+    
+    // Check permissions
+    const permissions = scheduleChannel.permissionsFor(client.user);
+    if (!permissions) {
+      console.error('❌ Cannot check permissions for the schedule channel');
+      logToFile('❌ Cannot check permissions for the schedule channel');
+    } else {
+      const requiredPermissions = ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory'];
+      const missingPermissions = requiredPermissions.filter(perm => !permissions.has(perm));
+      
+      if (missingPermissions.length > 0) {
+        console.error(`❌ Missing permissions for schedule channel: ${missingPermissions.join(', ')}`);
+        logToFile(`❌ Missing permissions for schedule channel: ${missingPermissions.join(', ')}`);
+      } else {
+        console.log('✅ Bot has all required permissions for the schedule channel');
+        logToFile('✅ Bot has all required permissions for the schedule channel');
+        
+        // Try sending a test message
+        scheduleChannel.send('🤖 Bot started successfully and has access to this channel.')
+          .then(() => logToFile('✅ Test message sent successfully to schedule channel'))
+          .catch(error => {
+            logToFile(`❌ Failed to send test message to schedule channel: ${error.message}`);
+            console.error('Failed to send test message:', error);
+          });
+      }
+    }
+  }
+  
   // Log the jobs array for debugging
   logToFile(`Initial jobs array contains ${jobs.length} jobs:`);
   jobs.forEach((job, index) => {
