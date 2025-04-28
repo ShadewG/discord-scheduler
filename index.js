@@ -74,6 +74,67 @@ const notificationJobs = jobs
 // Combine regular jobs and notification jobs
 jobs = [...jobs, ...notificationJobs];
 
+// Function to validate all cron expressions
+function validateCronExpressions() {
+  logToFile('Validating cron expressions...');
+  
+  const now = new Date();
+  const currentDayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday, etc.
+  logToFile(`Current day of week: ${currentDayOfWeek} (${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][currentDayOfWeek]})`);
+  
+  let allValid = true;
+  
+  jobs.forEach((job, index) => {
+    try {
+      // Simple validation - check parts
+      const parts = job.cron.split(' ');
+      if (parts.length !== 5) {
+        logToFile(`❌ Job ${index + 1}: ${job.tag} - Invalid cron expression format: ${job.cron}`);
+        allValid = false;
+        return;
+      }
+      
+      // Check if job should run on current day
+      const dayOfWeekPart = parts[4];
+      let shouldRunToday = false;
+      
+      if (dayOfWeekPart === '*') {
+        shouldRunToday = true;
+      } else if (dayOfWeekPart.includes(',')) {
+        // Handle comma-separated days (e.g., "1,3,5")
+        const days = dayOfWeekPart.split(',').map(Number);
+        shouldRunToday = days.includes(currentDayOfWeek);
+      } else if (dayOfWeekPart.includes('-')) {
+        // Handle range of days (e.g., "1-5")
+        const [start, end] = dayOfWeekPart.split('-').map(Number);
+        shouldRunToday = currentDayOfWeek >= start && currentDayOfWeek <= end;
+      } else {
+        // Single day
+        shouldRunToday = Number(dayOfWeekPart) === currentDayOfWeek;
+      }
+      
+      // Try to create a scheduler to validate the expression
+      const scheduler = cron.schedule(job.cron, () => {}, { scheduled: false });
+      scheduler.stop();
+      
+      const status = shouldRunToday ? '✅ Should run today' : '⚠️ Not scheduled for today';
+      logToFile(`${status} - Job ${index + 1}: ${job.tag} (${job.cron})`);
+      
+    } catch (error) {
+      logToFile(`❌ Job ${index + 1}: ${job.tag} - Error validating cron expression: ${error.message}`);
+      allValid = false;
+    }
+  });
+  
+  if (allValid) {
+    logToFile('✅ All cron expressions are valid');
+  } else {
+    logToFile('❌ Some cron expressions have issues - check logs');
+  }
+  
+  return allValid;
+}
+
 // Helper function to get the next execution time for a cron expression
 function getNextExecution(cronExpression) {
   try {
@@ -405,6 +466,15 @@ async function findProjectByQuery(query) {
 client.once('ready', () => {
   console.log('Bot is ready!');
   logToFile('Bot started successfully');
+  
+  // Log the jobs array for debugging
+  logToFile(`Initial jobs array contains ${jobs.length} jobs:`);
+  jobs.forEach((job, index) => {
+    logToFile(`  ${index + 1}. ${job.tag} (${job.cron}): ${job.text.substring(0, 50)}${job.text.length > 50 ? '...' : ''}`);
+  });
+  
+  // Validate cron expressions
+  validateCronExpressions();
   
   // Register commands on startup
   try {
@@ -1602,11 +1672,19 @@ module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
+  logToFile('=== Scheduling All Jobs ===');
+  
   // Clear any existing jobs
+  const existingJobCount = activeJobs.size;
+  logToFile(`Clearing ${existingJobCount} existing jobs`);
+  
   for (const job of activeJobs.values()) {
     job.stop();
   }
   activeJobs.clear();
+  
+  // Log jobs array before scheduling
+  logToFile(`Preparing to schedule ${jobs.length} jobs`);
   
   // Schedule each job
   jobs.forEach(job => {
@@ -1617,24 +1695,42 @@ function scheduleAllJobs() {
     };
     
     // Schedule the new job
-    const scheduledJob = cron.schedule(job.cron, () => {
-      // Log the execution with timestamp
-      const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
-      logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
+    try {
+      logToFile(`Scheduling job: ${job.tag} (${job.cron})`);
       
-      // Send the message
-      ping(job.text);
-    }, options);
-    
-    activeJobs.set(job.tag, scheduledJob);
-    logToFile(`Scheduled job: ${job.tag} (${job.cron} in ${TZ} timezone)`);
-    
-    // Log next execution time
-    const nextExecution = getNextExecution(job.cron);
-    if (nextExecution) {
-      logToFile(`   → Next execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+      const scheduledJob = cron.schedule(job.cron, () => {
+        // Log the execution with timestamp
+        const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
+        logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
+        
+        // Send the message
+        ping(job.text);
+      }, options);
+      
+      activeJobs.set(job.tag, scheduledJob);
+      logToFile(`Successfully scheduled job: ${job.tag} (${job.cron} in ${TZ} timezone)`);
+      
+      // Log next execution time
+      const nextExecution = getNextExecution(job.cron);
+      if (nextExecution) {
+        logToFile(`   → Next execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+      } else {
+        logToFile(`   → Failed to calculate next execution time for job: ${job.tag}`);
+      }
+    } catch (error) {
+      logToFile(`ERROR scheduling job ${job.tag}: ${error.message}`);
+      console.error(`Failed to schedule job ${job.tag}:`, error);
     }
   });
   
-  logToFile(`Total jobs scheduled: ${activeJobs.size}`);
+  logToFile(`Total jobs scheduled: ${activeJobs.size} of ${jobs.length} attempted`);
+  
+  // List all scheduled jobs
+  logToFile('Currently scheduled jobs:');
+  let jobIndex = 1;
+  for (const [tag, job] of activeJobs.entries()) {
+    logToFile(`  ${jobIndex++}. ${tag}`);
+  }
+  
+  logToFile('=== Job Scheduling Complete ===');
 }
