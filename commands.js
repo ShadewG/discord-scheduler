@@ -127,7 +127,8 @@ const commands = {
   
   // Meeting and schedule commands
   meetings: [
-    new SlashCommandBuilder().setName('schedule').setDescription('Show the weekly schedule of reminders'),
+    new SlashCommandBuilder().setName('schedule').setDescription('Show the weekly schedule of reminders')
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
     
     new SlashCommandBuilder().setName('meeting').setDescription('Schedule a meeting with reminders')
       .addStringOption(option => option.setName('title').setDescription('Meeting title').setRequired(true))

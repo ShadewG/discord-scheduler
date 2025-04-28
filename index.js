@@ -109,7 +109,7 @@ function getNextExecution(cronExpression) {
     });
     
     // Format the time left
-    const formattedTimeLeft = `${hours}h ${minutes}m`;
+    const formattedTimeLeft = `${hours}h ${minutes}m ${seconds}s`;
     
     return { 
       date: nextDate, 
@@ -128,7 +128,7 @@ function createScheduleEmbed() {
   const embed = new EmbedBuilder()
     .setColor(0x00AAFF)
     .setTitle('Daily Work Schedule')
-    .setDescription(`Current time in ${TZ}: **${moment().tz(TZ).format('dddd, MMM D, HH:mm')}**`)
+    .setDescription(`Current time in ${TZ}: **${moment().tz(TZ).format('dddd, MMM D, HH:mm:ss')}**\nThis schedule shows all upcoming reminders and events.`)
     .setTimestamp();
 
   // Process jobs for display
@@ -187,10 +187,18 @@ function createScheduleEmbed() {
       const hour = cronParts[1].padStart(2, '0');
       const minute = cronParts[0].padStart(2, '0');
       
+      // Format message text - remove any @Schedule mentions and trim
+      const messageText = job.text.replace('@Schedule', '').trim();
+      
       embed.addFields({ 
         name: `${index + 1}. ${job.tag} (${hour}:${minute})`, 
-        value: `⏱️ In: **${job.timeUntil}**\n🕒 At: ${job.formatted}\n📝 ${job.text.replace('@Schedule', '').trim()}`
+        value: `⏱️ **Countdown:** ${job.timeUntil}\n🕒 **At:** ${job.formatted}\n\n📝 **Message:**\n${messageText}`
       });
+    });
+  } else {
+    embed.addFields({ 
+      name: '⏰ UPCOMING SCHEDULE EVENTS', 
+      value: '*No events scheduled in the next 12 hours*'
     });
   }
   
@@ -200,19 +208,29 @@ function createScheduleEmbed() {
     value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
   });
   
-  regularJobs.forEach((job) => {
-    // Extract hour and minute from cron for readability
-    const cronParts = job.cronExpr.split(' ');
-    const hour = cronParts[1].padStart(2, '0');
-    const minute = cronParts[0].padStart(2, '0');
-    
-    embed.addFields({ 
-      name: `${hour}:${minute} — ${job.tag}`, 
-      value: job.text.replace('@Schedule', '').trim()
+  if (regularJobs.length > 0) {
+    regularJobs.forEach((job) => {
+      // Extract hour and minute from cron for readability
+      const cronParts = job.cronExpr.split(' ');
+      const hour = cronParts[1].padStart(2, '0');
+      const minute = cronParts[0].padStart(2, '0');
+      
+      // Format message text - remove any @Schedule mentions and trim
+      const messageText = job.text.replace('@Schedule', '').trim();
+      
+      embed.addFields({ 
+        name: `${hour}:${minute} — ${job.tag}`, 
+        value: messageText
+      });
     });
-  });
+  } else {
+    embed.addFields({ 
+      name: 'No Regular Jobs', 
+      value: '*No regular daily events configured*'
+    });
+  }
   
-  embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
+  embed.setFooter({ text: `All times are in ${TZ} timezone • Use the Refresh button to update countdowns` });
   
   return embed;
 }
@@ -1463,8 +1481,21 @@ Example Output: {
         hasResponded = true;
         
         // Create and send the schedule embed
-        const embed = createScheduleEmbed();
-        await interaction.editReply({ embeds: [embed] });
+        const scheduleEmbed = createScheduleEmbed();
+        
+        const row = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('refresh_schedule')
+              .setLabel('Refresh Timers')
+              .setStyle(ButtonStyle.Primary),
+          );
+        
+        await interaction.editReply({
+          content: '📅 Here is the complete schedule with countdown timers:',
+          embeds: [scheduleEmbed],
+          components: [row]
+        });
         
       } catch (error) {
         logToFile(`Error in /schedule command: ${error.message}`);
@@ -1500,6 +1531,39 @@ Example Output: {
     } catch (notifyError) {
       logToFile(`Failed to notify user about error: ${notifyError.message}`);
     }
+  }
+});
+
+// Handle button interactions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton()) return;
+  
+  try {
+    if (interaction.customId === 'refresh_schedule') {
+      const scheduleEmbed = createScheduleEmbed();
+      
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('refresh_schedule')
+            .setLabel('Refresh Timers')
+            .setStyle(ButtonStyle.Primary),
+        );
+      
+      await interaction.update({
+        content: '📅 Here is the complete schedule with countdown timers:',
+        embeds: [scheduleEmbed],
+        components: [row]
+      });
+      
+      logToFile(`Schedule timers refreshed by ${interaction.user.tag}`);
+    }
+  } catch (error) {
+    logToFile(`Error handling button interaction: ${error.message}`);
+    await interaction.reply({ 
+      content: '❌ Error refreshing schedule timers. Please try again.',
+      ephemeral: true 
+    });
   }
 });
 
