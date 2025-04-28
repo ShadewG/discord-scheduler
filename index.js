@@ -11,6 +11,192 @@ const moment = require('moment-timezone');
 // Import availability module
 const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
 
+// Define timezone for all operations
+const TZ = 'Europe/Berlin';
+
+// Map of active jobs
+const activeJobs = new Map();
+
+// Store jobs in memory, each with a tag, cron expression, and text
+let jobs = [
+  { tag: 'Deep Work Start', cron: '20 12 * * 1-5', text: '🔨 @Schedule Deep Work resumes now — back at it.' },
+  { tag: 'Lunch Break', cron: '0 14 * * 1-5', text: '🍽️ Lunch break @Schedule — enjoy! Back in 45 min.' },
+  { tag: 'Planning Huddle', cron: '35 14 * * 1-5', text: '📋 Reminder @Schedule — Planning Huddle in 10 min (13:45).' },
+  { tag: 'Afternoon Deep Work', cron: '0 15 * * 1-5', text: '🔨 @Schedule Deep Work (PM) starts now — last push of the day.' },
+  { tag: 'Wrap-Up Meeting', cron: '50 17 * * 1-5', text: '✅ Heads-up @Schedule — Wrap-Up Meeting in 10 min (17:00).' }
+];
+
+// Helper function to get the next execution time for a cron expression
+function getNextExecution(cronExpression) {
+  try {
+    // Get current time
+    const now = new Date();
+    
+    // Schedule a one-time job to get the next date
+    const scheduler = cron.schedule(cronExpression, () => {}, { 
+      timezone: TZ,
+      scheduled: false
+    });
+    
+    // Get the next execution date
+    const nextDate = scheduler.nextDate().toDate();
+    
+    // Stop the job
+    scheduler.stop();
+    
+    // Calculate the time difference
+    const diffMs = nextDate - now;
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+    
+    // Format the next date in the specified timezone
+    const formatted = nextDate.toLocaleString('en-US', { 
+      timeZone: TZ,
+      weekday: 'short',
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit', 
+      minute: '2-digit'
+    });
+    
+    // Format the time left
+    const formattedTimeLeft = `${hours}h ${minutes}m`;
+    
+    return { 
+      date: nextDate, 
+      formatted, 
+      timeLeft: { hours, minutes, seconds },
+      formattedTimeLeft 
+    };
+  } catch (error) {
+    console.error(`Error calculating next execution: ${error.message}`);
+    return null;
+  }
+}
+
+// Function to create schedule embed
+function createScheduleEmbed() {
+  const embed = new EmbedBuilder()
+    .setColor(0x00AAFF)
+    .setTitle('Schedule Overview')
+    .setDescription(`Current time in ${TZ}: **${moment().tz(TZ).format('dddd, MMM D, HH:mm')}**`)
+    .setTimestamp();
+
+  // Process jobs for display
+  const upcomingJobs = [];
+  const weekdayJobs = [];
+  const weekendJobs = [];
+  
+  jobs.forEach(job => {
+    const nextExecution = getNextExecution(job.cron);
+    if (!nextExecution) return;
+    
+    const isWeekdayOnly = job.cron.includes('1-5') || job.cron.includes('1,2,3,4,5');
+    const isWeekendOnly = job.cron.includes('0,6') || job.cron.includes('6,0');
+    
+    // Create formatted job info
+    const jobInfo = {
+      tag: job.tag,
+      cronExpr: job.cron,
+      text: job.text,
+      next: nextExecution,
+      timeUntil: nextExecution.formattedTimeLeft,
+      formatted: nextExecution.formatted
+    };
+    
+    // Add to upcoming if it's within the next 24 hours
+    if (nextExecution.timeLeft.hours < 24) {
+      upcomingJobs.push(jobInfo);
+    }
+    // Sort other jobs by weekday/weekend status
+    else if (isWeekdayOnly) {
+      weekdayJobs.push(jobInfo);
+    } 
+    else if (isWeekendOnly) {
+      weekendJobs.push(jobInfo);
+    }
+    else {
+      // Daily jobs
+      weekdayJobs.push(jobInfo);
+    }
+  });
+  
+  // Sort upcoming jobs by execution time
+  upcomingJobs.sort((a, b) => a.next.date.getTime() - b.next.date.getTime());
+  
+  // Sort weekday and weekend jobs by time of day
+  const sortByTimeOfDay = (a, b) => {
+    const getMinutes = (cronExpr) => {
+      const parts = cronExpr.split(' ');
+      return parseInt(parts[0]) + parseInt(parts[1]) * 60;
+    };
+    return getMinutes(a.cronExpr) - getMinutes(b.cronExpr);
+  };
+  
+  weekdayJobs.sort(sortByTimeOfDay);
+  weekendJobs.sort(sortByTimeOfDay);
+  
+  // Add upcoming reminders section if there are any
+  if (upcomingJobs.length > 0) {
+    embed.addFields({ 
+      name: '⏰ UPCOMING REMINDERS', 
+      value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    });
+    
+    upcomingJobs.forEach((job, index) => {
+      embed.addFields({ 
+        name: `${index + 1}. ${job.tag}`, 
+        value: `⏱️ In: **${job.timeUntil}**\n🕒 At: ${job.formatted}\n📝 Message: ${job.text}`
+      });
+    });
+  }
+  
+  // Add weekday reminders section
+  if (weekdayJobs.length > 0) {
+    embed.addFields({ 
+      name: '📅 WEEKDAY SCHEDULE (Mon-Fri)', 
+      value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    });
+    
+    weekdayJobs.forEach((job) => {
+      // Extract hour and minute from cron for readability
+      const cronParts = job.cronExpr.split(' ');
+      const minute = cronParts[0].padStart(2, '0');
+      const hour = cronParts[1].padStart(2, '0');
+      
+      embed.addFields({ 
+        name: `${hour}:${minute} — ${job.tag}`, 
+        value: `📝 Message: ${job.text}`
+      });
+    });
+  }
+  
+  // Add weekend reminders section if there are any
+  if (weekendJobs.length > 0) {
+    embed.addFields({ 
+      name: '🏖️ WEEKEND SCHEDULE (Sat-Sun)', 
+      value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    });
+    
+    weekendJobs.forEach((job) => {
+      // Extract hour and minute from cron for readability
+      const cronParts = job.cronExpr.split(' ');
+      const minute = cronParts[0].padStart(2, '0');
+      const hour = cronParts[1].padStart(2, '0');
+      
+      embed.addFields({ 
+        name: `${hour}:${minute} — ${job.tag}`, 
+        value: `📝 Message: ${job.text}`
+      });
+    });
+  }
+  
+  embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
+  
+  return embed;
+}
+
 // Load environment variables
 const TOKEN = process.env.DISCORD_TOKEN;
 const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
@@ -34,6 +220,23 @@ const client = new Client({
   ],
   partials: [Partials.Channel]
 });
+
+// Function to send a message to the specified channel
+function ping(message) {
+  // Find the Schedule channel
+  const guilds = client.guilds.cache;
+  for (const guild of guilds.values()) {
+    const channel = guild.channels.cache.find(ch => 
+      ch.name.toLowerCase().includes('schedule'));
+    
+    if (channel) {
+      // Send the message
+      channel.send(message)
+        .then(() => logToFile(`Sent message to ${channel.name}: ${message}`))
+        .catch(err => logToFile(`Error sending message: ${err.message}`));
+    }
+  }
+}
 
 // Initialize Notion client
 let notion = null;
@@ -950,12 +1153,22 @@ client.on('interactionCreate', async interaction => {
     // Handle the /schedule command
     else if (commandName === 'schedule') {
       try {
-        await interaction.reply({ content: 'The scheduling feature is currently under development. Please check back soon!', ephemeral: true });
+        // Check if ephemeral flag is set
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
+        
+        // Create and send the schedule embed
+        const embed = createScheduleEmbed();
+        await interaction.editReply({ embeds: [embed] });
+        
       } catch (error) {
         logToFile(`Error in /schedule command: ${error.message}`);
-        if (!hasResponded) {
-          await interaction.reply({ content: `❌ Error with schedule command: ${error.message}`, ephemeral: true });
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error displaying schedule: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error displaying schedule: ${error.message}`, ephemeral: true });
         }
       }
     }
