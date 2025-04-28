@@ -88,7 +88,7 @@ try {
 client.on('error', (error) => {
   console.error('Error:', error);
   // Handle the error here
-  }
+});
 
 // Constants for Notion/OpenAI integration
 const TRIGGER_PREFIX = '!sync';
@@ -4470,7 +4470,7 @@ async function findProjectByQuery(query) {
     
     // Case 2: Search by name or partial match
     const response = await notion.databases.query({
-      database_id: NOTION_DB_ID,
+      database_id: DB,
       filter: {
         or: [
           {
