@@ -9,8 +9,8 @@ const path = require('path');
 
 // Load environment variables
 const TOKEN = process.env.DISCORD_TOKEN;
-const NOTION_KEY = process.env.NOTION_KEY;
-const DB = process.env.NOTION_DATABASE_ID;
+const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
+const DB = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID; // Support both naming conventions
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
 
