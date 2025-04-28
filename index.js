@@ -518,11 +518,13 @@ async function findProjectByQuery(query) {
       try {
         logToFile(`Looking up page by direct ID: ${query}`);
         const page = await notion.pages.retrieve({ page_id: query });
-        return { 
-          page: page,
-          name: page.properties.Name?.title?.[0]?.plain_text || "Unknown",
-          code: page.properties.Code?.rich_text?.[0]?.plain_text || "Unknown"
-        };
+        
+        // Extract name and code from title
+        const name = page.properties.Name?.title?.[0]?.plain_text || "Unknown";
+        const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
+        const code = codeFromName ? codeFromName[0].toUpperCase() : "";
+        
+        return { page, name, code };
       } catch (error) {
         logToFile(`Error retrieving page by ID: ${error.message}`);
       }
@@ -535,116 +537,84 @@ async function findProjectByQuery(query) {
     logToFile(`Querying Notion database for: "${query}" with database ID: ${databaseId.substring(0, 8)}...`);
     
     // Try different approaches to find the project
-    let filter;
-    let responsePages = [];
+    let response;
     
-    // First try: exact code match if we have a code pattern
+    // IMPORTANT: Only search the Name property, never try to use "Code" property since it doesn't exist
     if (queryCode) {
-      logToFile(`Found code pattern in query: ${queryCode}`);
+      logToFile(`Found code pattern in query: ${queryCode}, searching by Name property`);
       
-      // 1. Try to match by Code property
-      filter = {
-        property: "Code",
-        rich_text: {
-          equals: queryCode
-        }
-      };
-      
-      let response = await notion.databases.query({
+      // Search by Name property containing the code
+      response = await notion.databases.query({
         database_id: databaseId,
-        filter: filter
-      });
-      
-      responsePages = response.results;
-      logToFile(`Found ${responsePages.length} results by Code property`);
-      
-      // 2. If no results, try with Name property containing the code
-      if (responsePages.length === 0) {
-        filter = {
+        filter: {
           property: "Name",
           title: {
             contains: queryCode
           }
-        };
-        
-        response = await notion.databases.query({
-          database_id: databaseId,
-          filter: filter
-        });
-        
-        responsePages = response.results;
-        logToFile(`Found ${responsePages.length} results by Name property containing code`);
-      }
+        },
+        page_size: 10
+      });
       
-      // 3. If still no results, try a more flexible approach with just the prefix
-      if (responsePages.length === 0) {
-        // Get just the prefix (IB, CL, BC)
-        const prefix = queryCode.substring(0, 2);
+      logToFile(`Found ${response.results.length} results with Name containing "${queryCode}"`);
+      
+      // If no results, try with just the prefix (IB, CL, BC)
+      if (response.results.length === 0) {
+        const prefix = queryCode.substring(0, 2); // Get just the prefix (IB, CL, BC)
         
-        filter = {
-          property: "Name",
-          title: {
-            contains: prefix
-          }
-        };
+        logToFile(`No results with exact code, trying prefix "${prefix}" in Name property`);
         
         response = await notion.databases.query({
           database_id: databaseId,
-          filter: filter
+          filter: {
+            property: "Name",
+            title: {
+              contains: prefix
+            }
+          },
+          page_size: 20
         });
         
-        responsePages = response.results;
-        logToFile(`Found ${responsePages.length} results by Name property containing prefix ${prefix}`);
+        logToFile(`Found ${response.results.length} results with Name containing prefix "${prefix}"`);
       }
     } else {
       // If no code pattern, just search by name containing the query
-      filter = {
-        property: "Name",
-        title: {
-          contains: query
-        }
-      };
-      
-      const response = await notion.databases.query({
+      response = await notion.databases.query({
         database_id: databaseId,
-        filter: filter
+        filter: {
+          property: "Name",
+          title: {
+            contains: query
+          }
+        },
+        page_size: 10
       });
       
-      responsePages = response.results;
-      logToFile(`Found ${responsePages.length} results by general query`);
+      logToFile(`Found ${response.results.length} results with Name containing general query "${query}"`);
     }
     
     // If no results, return null
-    if (responsePages.length === 0) {
+    if (response.results.length === 0) {
       logToFile(`No projects found for query: "${query}"`);
       return null;
     }
     
     // Get the first result
-    const page = responsePages[0];
+    const page = response.results[0];
     
-    // Extract name and code from the page properties
+    // Extract name from the page properties
     const name = page.properties.Name?.title?.[0]?.plain_text || "Unknown";
     
-    // Extract code from rich text or from the name if not found
-    let code = "";
-    if (page.properties.Code && page.properties.Code.rich_text && page.properties.Code.rich_text.length > 0) {
-      code = page.properties.Code.rich_text[0].plain_text;
-    } else if (name) {
-      // Try to extract code from the name
-      const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
-      if (codeFromName) {
-        code = codeFromName[0].toUpperCase();
-      }
-    }
+    // Extract code from the name (not from a separate Code property)
+    const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
+    const code = codeFromName ? codeFromName[0].toUpperCase() : "";
     
     // Log available properties
-    logToFile(`Project found: ${name} (${code})`);
+    logToFile(`Project found: ${name} (extracted code: ${code})`);
     logToFile(`Properties available: ${Object.keys(page.properties).join(', ')}`);
     
     // Ensure we have a valid page.id before returning
     if (!page.id) {
-      logToFile(`Error: No valid page.id found for project ${name} (${code})`);
+      logToFile(`Error: No valid page.id found for project ${name}`);
       return null;
     }
     
@@ -657,6 +627,7 @@ async function findProjectByQuery(query) {
     
   } catch (error) {
     logToFile(`Error finding project: ${error.message}`);
+    console.error(`Error finding project: ${error.message}`);
     return null;
   }
 }
