@@ -801,16 +801,10 @@ client.once('ready', () => {
           logToFile('✅ Bot has permission to mention roles');
         }
         
-        // Try sending a test message with a role mention
+        // Create a test message with a role mention but don't send it
         const testMessage = `🤖 Bot startup test: This is a test message with role mention <@&${TEAM_ROLE_ID}>`;
-        logToFile(`Sending test message with role mention: ${testMessage}`);
-        
-        scheduleChannel.send(testMessage)
-          .then(() => logToFile('✅ Test message with role mention sent successfully'))
-          .catch(error => {
-            logToFile(`❌ Failed to send test message with role mention: ${error.message}`);
-            console.error('Failed to send test message:', error);
-          });
+        logToFile(`Test message format with role mention: ${testMessage}`);
+        logToFile('✅ Startup checks complete - no test message sent to avoid channel spam');
       }
     }
   }
