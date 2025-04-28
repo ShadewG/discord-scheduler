@@ -33,7 +33,7 @@ let jobs = [
   { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** @Schedule — enjoy! Back at 13:45.`, notify: true },
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** @Schedule - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: '🧠 @Schedule **Deep Work PM** - Project execution and reviews (14:00-17:00).' },
-  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: '👋 @Schedule **Wrap-Up Meeting** - Daily summary + vibes check (17:00-17:30).', notify: true }
+  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: '👋 @Schedule **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).', notify: true }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -477,53 +477,114 @@ function getNotionPageUrl(pageId) {
 
 // Function to find a project by query
 async function findProjectByQuery(query) {
-  if (!query) return null;
-  
-  // Check if Notion client is initialized
-  if (!notion) {
-    logToFile('❌ Cannot search for projects: Notion client is not initialized');
-    throw new Error('Notion client is not initialized. Please check your environment variables.');
-  }
-  
   try {
-    // Case 1: Direct ID lookup
-    if (query.match(/^[a-zA-Z0-9-]+$/)) {
+    if (!notion) {
+      logToFile('Notion client not initialized');
+      return null;
+    }
+    
+    // Trim the query
+    query = query.trim();
+    
+    // If query is empty, return null
+    if (!query) {
+      logToFile('Empty query');
+      return null;
+    }
+    
+    // Direct ID lookup (if query is a valid UUID)
+    if (query.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
       try {
+        logToFile(`Looking up page by direct ID: ${query}`);
         const page = await notion.pages.retrieve({ page_id: query });
-        return page;
+        return { 
+          page: page,
+          name: page.properties.Name?.title?.[0]?.plain_text || "Unknown",
+          code: page.properties.Code?.rich_text?.[0]?.plain_text || "Unknown"
+        };
       } catch (error) {
-        // Not a valid ID, continue to search
-        logToFile(`Not a valid page ID: ${query}. Continuing to search by name.`);
+        logToFile(`Error retrieving page by ID: ${error.message}`);
       }
     }
     
-    // Case 2: Search by name or partial match
-    const response = await notion.databases.query({
-      database_id: DB,
-      filter: {
-        property: "Project name",
+    // Get database ID from environment variable
+    const databaseId = process.env.NOTION_DATABASE_ID;
+    
+    // Query the database
+    logToFile(`Querying Notion database for: "${query}"`);
+    
+    // Extract code pattern if it exists (e.g., IB23, CL45)
+    const codeMatch = query.match(/(ib|cl|bc)\d{2}/i);
+    const queryCode = codeMatch ? codeMatch[0].toUpperCase() : null;
+    
+    // Prepare filters based on query
+    let filter;
+    
+    if (queryCode) {
+      logToFile(`Found code pattern in query: ${queryCode}`);
+      // Search by code
+      filter = {
+        property: "Code",
+        rich_text: {
+          equals: queryCode
+        }
+      };
+    } else {
+      // Search by name
+      filter = {
+        property: "Name",
         title: {
           contains: query
         }
-      }
-    });
-    
-    if (response.results.length > 0) {
-      // Return both the page and the code for reference
-      const page = response.results[0];
-      
-      // Extract code from the beginning of the project name (usually something like IB23, CL45, etc.)
-      const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || '';
-      const codeMatch = projectName.match(/^([A-Z]{2}\d{2})/);
-      const code = codeMatch ? codeMatch[0] : query;
-      
-      return { page, code };
+      };
     }
     
-    return null;
+    // Execute the query
+    const response = await notion.databases.query({
+      database_id: databaseId,
+      filter: filter
+    });
+    
+    // Log results count
+    logToFile(`Found ${response.results.length} results`);
+    
+    // If no results, return null
+    if (response.results.length === 0) {
+      return null;
+    }
+    
+    // Get the first result
+    const page = response.results[0];
+    
+    // Extract name and code from the page properties
+    const name = page.properties.Name?.title?.[0]?.plain_text || "Unknown";
+    
+    // Extract code from rich text
+    let code = "";
+    if (page.properties.Code && page.properties.Code.rich_text && page.properties.Code.rich_text.length > 0) {
+      code = page.properties.Code.rich_text[0].plain_text;
+    }
+    
+    // Log available properties
+    logToFile(`Project found: ${name} (${code})`);
+    logToFile(`Properties available: ${Object.keys(page.properties).join(', ')}`);
+    
+    // Ensure we have a valid page.id before returning
+    if (!page.id) {
+      logToFile(`Error: No valid page.id found for project ${name} (${code})`);
+      return null;
+    }
+    
+    // Return the project
+    return {
+      page: page,
+      name: name,
+      code: code
+    };
+    
   } catch (error) {
     logToFile(`Error finding project: ${error.message}`);
-    throw error;
+    return null;
   }
 }
 
@@ -709,17 +770,22 @@ client.on('interactionCreate', async interaction => {
         // Get code from the result or extract from project name
         const code = result.code || projectName.match(/^([A-Z]{2}\d{2})/)?.['0'] || 'Unknown';
         
-        // Status could be under different property names, try them all
+        // Find the status property using the best match function
         let status = 'No Status';
-        if (properties.Status?.select?.name) {
-          status = properties.Status.select.name;
-        } else if (properties['Status']?.select?.name) {
-          status = properties['Status'].select.name;
-        } else if (properties.status?.select?.name) {
-          status = properties.status.select.name;
+        const statusPropertyName = findBestPropertyMatch(properties, 'Status');
+        if (statusPropertyName && properties[statusPropertyName]?.select?.name) {
+          status = properties[statusPropertyName].select.name;
+          logToFile(`Found status using property name: "${statusPropertyName}"`);
         } else {
-          // Log all property names for debugging
-          logToFile(`Available properties for ${code}: ${Object.keys(properties).join(', ')}`);
+          // Fallback to old method for backwards compatibility
+          if (properties.Status?.select?.name) {
+            status = properties.Status.select.name;
+          } else if (properties.status?.select?.name) {
+            status = properties.status.select.name;
+          } else {
+            // Log all property names for debugging
+            logToFile(`Available properties for ${code}: ${Object.keys(properties).join(', ')}`);
+          }
         }
         
         const dueDate = properties.Date?.date?.start || 'No Due Date';
@@ -1152,8 +1218,8 @@ client.on('interactionCreate', async interaction => {
           
           // Map extracted data to Notion properties
           if (extractedData.status) {
-            propertiesToUpdate['Status'] = {
-              select: { name: extractedData.status }
+            propertiesToUpdate['status'] = {
+              status: { name: extractedData.status }
             };
           }
           
@@ -1454,34 +1520,38 @@ Example Output: {
         for (const [key, value] of Object.entries(properties)) {
           if (!value || value === '') continue;
           
+          // Find the best matching property name in the page properties
+          const bestMatch = findBestPropertyMatch(project.page.properties, key);
+          const propertyKey = bestMatch || key;
+          
           // Handle different property types
           switch (key) {
             case 'Status':
             case 'Caption Status':
             case 'Category':
             case '3D Status':
-              notionProperties[key] = { select: { name: value } };
+              notionProperties[propertyKey] = { select: { name: value } };
               break;
               
             case 'Portuguese':
             case 'Spanish':
             case 'Russian':
             case 'Indonesian':
-              notionProperties[key] = { select: { name: value } };
+              notionProperties[propertyKey] = { select: { name: value } };
               break;
               
             case 'Date':
             case 'Date for current stage':
-              notionProperties[key] = { date: { start: value } };
+              notionProperties[propertyKey] = { date: { start: value } };
               break;
               
             case 'Script':
             case 'Frame.io':
             case 'Discord Channel':
               if (value.startsWith('http')) {
-                notionProperties[key] = { url: value };
+                notionProperties[propertyKey] = { url: value };
               } else {
-                notionProperties[key] = { rich_text: [{ text: { content: value } }] };
+                notionProperties[propertyKey] = { rich_text: [{ text: { content: value } }] };
               }
               break;
               
@@ -1491,7 +1561,7 @@ Example Output: {
             case 'Writer':
               // For person properties, we need to handle both single names and arrays
               const people = Array.isArray(value) ? value : [value];
-              notionProperties[key] = { 
+              notionProperties[propertyKey] = { 
                 people: people.map(name => ({ name }))
               };
               break;
@@ -1499,7 +1569,7 @@ Example Output: {
             case 'Change Log 1':
             case 'Text':
             case '3D Scenes':
-              notionProperties[key] = { 
+              notionProperties[propertyKey] = { 
                 rich_text: [{ text: { content: value } }]
               };
               break;
@@ -1508,9 +1578,9 @@ Example Output: {
               // For any other property, try to guess the type based on the value
               if (typeof value === 'string') {
                 if (value.startsWith('http')) {
-                  notionProperties[key] = { url: value };
+                  notionProperties[propertyKey] = { url: value };
                 } else {
-                  notionProperties[key] = { 
+                  notionProperties[propertyKey] = { 
                     rich_text: [{ text: { content: value } }]
                   };
                 }
@@ -1684,7 +1754,9 @@ Example Output: {
             propertyNameToFind = 'Category';
           }
           
-          // Find the best property match
+          // Find the best property match - log all property names for debugging
+          logToFile(`Available property names: ${Object.keys(pageProperties).join(', ')}`);
+          
           const bestMatch = findBestPropertyMatch(pageProperties, propertyNameToFind);
           
           if (bestMatch) {
@@ -1694,11 +1766,10 @@ Example Output: {
             // Log extra debugging info about the property
             logToFile(`Property details: ${JSON.stringify(pageProperties[bestMatch])}`);
             
-            // Skip the switch statement since we've already set the property
             try {
               // Update the Notion page
               await notion.pages.update({
-                page_id: project.page.id,
+                page_id: project.page.id, // Use the actual page ID from the page object
                 properties: notionProperties
               });
               
@@ -1755,13 +1826,13 @@ Example Output: {
                 logToFile(`Using exact property name from schema: "${statusProperty}"`);
                 notionProperties[statusProperty] = { select: { name: value } };
               } else {
-                // Use "Status" with capital S since that's what Notion has
-                logToFile('Status property not found in schema, using "Status" with capital S');
-                notionProperties['Status'] = { select: { name: value } };
+                // Use "status" with lowercase
+                logToFile('Status property not found in schema, using "status" with lowercase');
+                notionProperties['status'] = { select: { name: value } };
               }
             } else {
-              // Default to "Status" with capital S
-              notionProperties['Status'] = { select: { name: value } };
+              // Default to "status" with lowercase
+              notionProperties['status'] = { select: { name: value } };
             }
             break;
             
@@ -1904,12 +1975,12 @@ Example Output: {
           
           // Update the Notion page
           logToFile(`Sending update to Notion API: ${JSON.stringify({
-            page_id: project.page.id,
+            page_id: project.page.id, // Use the actual page ID
             properties: notionProperties
           })}`);
           
           await notion.pages.update({
-            page_id: project.page.id,
+            page_id: project.page.id, // Use the actual page ID
             properties: notionProperties
           });
           
