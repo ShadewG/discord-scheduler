@@ -26,14 +26,14 @@ const TEAM_ROLE_ID = '1364657163598823474';
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
-  { tag: 'Morning Stand-up', cron: '0 9 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Morning Stand-up** (9:00-9:30) - Daily planning meeting to discuss goals and blockers.`, notify: true },
-  { tag: 'Deep Work Session 1', cron: '30 9 * * 1-5', text: '🧠 **Deep Work Session 1** (9:30-12:00) - Focused work time with minimal interruptions.' },
-  { tag: 'Lunch Break', cron: '0 12 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch Break** (12:00-13:00) - Time to recharge!`, notify: true },
-  { tag: 'Team Sync Meeting', cron: '0 13 * * 1-5', text: `🔄 <@&${TEAM_ROLE_ID}> **Team Sync Meeting** (13:00-14:00) - Weekly progress update and roadmap discussion.`, notify: true },
-  { tag: 'Deep Work Session 2', cron: '0 14 * * 1-5', text: '🧠 **Deep Work Session 2** (14:00-16:00) - Afternoon focus time for project execution.' },
-  { tag: 'Client Call', cron: '0 16 * * 1,3,5', text: `📞 <@&${TEAM_ROLE_ID}> **Client Call** (16:00-17:00) - Scheduled client meeting on Monday, Wednesday, Friday.`, notify: true },
-  { tag: 'Project Planning', cron: '0 16 * * 2,4', text: `📊 <@&${TEAM_ROLE_ID}> **Project Planning** (16:00-17:00) - Internal planning session on Tuesday and Thursday.`, notify: true },
-  { tag: 'End of Day', cron: '0 17 * * 1-5', text: '👋 **End of Day** - That\'s a wrap! Remember to log your hours and update task status.' }
+  { tag: 'Morning Stand-up', cron: '0 9 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Morning Stand-up** - Daily planning meeting to discuss goals and blockers.`, notify: true },
+  { tag: 'Deep Work Session 1', cron: '30 9 * * 1-5', text: '🧠 @Schedule **Deep Work (AM)** starts now — focus mode ON.' },
+  { tag: 'Lunch Break', cron: '0 12 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** @Schedule — enjoy! Back in 45 min.`, notify: true },
+  { tag: 'Team Sync Meeting', cron: '0 13 * * 1-5', text: `🔄 <@&${TEAM_ROLE_ID}> **Team Sync Meeting** - Weekly progress update and roadmap discussion.`, notify: true },
+  { tag: 'Deep Work Session 2', cron: '0 14 * * 1-5', text: '🧠 @Schedule **Deep Work (PM)** starts now — last push of the day.' },
+  { tag: 'Client Call', cron: '0 16 * * 1,3,5', text: `📞 <@&${TEAM_ROLE_ID}> **Client Call** - Scheduled client meeting on Monday, Wednesday, Friday.`, notify: true },
+  { tag: 'Project Planning', cron: '0 16 * * 2,4', text: `📊 <@&${TEAM_ROLE_ID}> **Project Planning** - Internal planning session on Tuesday and Thursday.`, notify: true },
+  { tag: 'End of Day', cron: '0 17 * * 1-5', text: '👋 @Schedule **End of Day** - That\'s a wrap! Remember to log your hours and update task status.' }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -63,10 +63,14 @@ const notificationJobs = jobs
     const meetingNameMatch = job.text.match(/\*\*(.*?)\*\*/);
     const meetingName = meetingNameMatch ? meetingNameMatch[1] : job.tag;
     
+    // Format the time as HH:MM
+    const formattedHour = hour.toString().padStart(2, '0');
+    const formattedMinute = minute.toString().padStart(2, '0');
+    
     return {
       tag: `${job.tag} Notification`,
       cron: notifyCron,
-      text: `🔔 <@&${TEAM_ROLE_ID}> **${meetingName}** starting in 5 minutes!`,
+      text: `🔔 <@&${TEAM_ROLE_ID}> Heads-up @Schedule — **${meetingName}** in 5 minutes (${formattedHour}:${formattedMinute}).`,
       isNotification: true
     };
   });
@@ -553,6 +557,9 @@ client.once('ready', () => {
   
   // Schedule all jobs
   scheduleAllJobs();
+  
+  // Check next execution times
+  checkAllNextExecutionTimes();
 });
 
 // Handle slash command interactions
@@ -1661,6 +1668,52 @@ Example Output: {
       }
     }
     
+    // Handle the /send command
+    else if (commandName === 'send') {
+      try {
+        // Get command options
+        const messageType = interaction.options.getString('message_type');
+        const isNotification = interaction.options.getBoolean('notification') || false;
+        
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        // Find the job with the matching tag
+        let jobToSend = null;
+        
+        if (isNotification) {
+          // Look for the notification job
+          jobToSend = jobs.find(job => job.tag === `${messageType} Notification`);
+        } else {
+          // Look for the main job
+          jobToSend = jobs.find(job => job.tag === messageType);
+        }
+        
+        if (!jobToSend) {
+          await interaction.editReply(`❌ Could not find a job with the tag "${messageType}${isNotification ? ' Notification' : ''}".`);
+          return;
+        }
+        
+        // Send the message using the ping function
+        ping(jobToSend.text);
+        
+        logToFile(`Manually sent message for job: ${jobToSend.tag}`);
+        
+        await interaction.editReply({
+          content: `✅ Successfully sent the ${isNotification ? 'notification for' : ''} "${messageType}" message.`,
+          components: []
+        });
+        
+      } catch (error) {
+        logToFile(`Error in /send command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error sending message: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error sending message: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
     // Handle other commands here
     // ...
     
@@ -1794,4 +1847,56 @@ function scheduleAllJobs() {
   }
   
   logToFile('=== Job Scheduling Complete ===');
+}
+
+// Function to check next execution times for all jobs
+function checkAllNextExecutionTimes() {
+  logToFile('=== Checking Next Execution Times ===');
+  
+  // Current time
+  const now = new Date();
+  const currentTimeFormatted = now.toLocaleString('en-US', { timeZone: TZ });
+  logToFile(`Current time (${TZ}): ${currentTimeFormatted}`);
+  
+  // Process regular jobs
+  const regularJobs = jobs.filter(job => !job.isNotification);
+  
+  logToFile(`\nRegular Jobs (${regularJobs.length}):`);
+  regularJobs.forEach((job, index) => {
+    try {
+      const nextExecution = getNextExecution(job.cron);
+      if (nextExecution) {
+        logToFile(`${index + 1}. ${job.tag} (${job.cron})`);
+        logToFile(`   Next execution: ${nextExecution.formatted}`);
+        logToFile(`   Time until: ${nextExecution.formattedTimeLeft}`);
+        logToFile(`   Message: ${job.text.substring(0, 50)}${job.text.length > 50 ? '...' : ''}`);
+      } else {
+        logToFile(`${index + 1}. ${job.tag} (${job.cron}) - Failed to calculate next execution`);
+      }
+    } catch (error) {
+      logToFile(`${index + 1}. ${job.tag} - Error calculating next execution: ${error.message}`);
+    }
+  });
+  
+  // Process notification jobs
+  const notificationJobs = jobs.filter(job => job.isNotification);
+  
+  logToFile(`\nNotification Jobs (${notificationJobs.length}):`);
+  notificationJobs.forEach((job, index) => {
+    try {
+      const nextExecution = getNextExecution(job.cron);
+      if (nextExecution) {
+        logToFile(`${index + 1}. ${job.tag} (${job.cron})`);
+        logToFile(`   Next execution: ${nextExecution.formatted}`);
+        logToFile(`   Time until: ${nextExecution.formattedTimeLeft}`);
+        logToFile(`   Message: ${job.text.substring(0, 50)}${job.text.length > 50 ? '...' : ''}`);
+      } else {
+        logToFile(`${index + 1}. ${job.tag} (${job.cron}) - Failed to calculate next execution`);
+      }
+    } catch (error) {
+      logToFile(`${index + 1}. ${job.tag} - Error calculating next execution: ${error.message}`);
+    }
+  });
+  
+  logToFile('=== Next Execution Times Check Complete ===');
 }

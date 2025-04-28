@@ -135,6 +135,23 @@ const commands = {
       .addStringOption(option => option.setName('time').setDescription('Meeting time (e.g., "tomorrow at 3pm")').setRequired(true))
       .addStringOption(option => option.setName('description').setDescription('Meeting description'))
       .addBooleanOption(option => option.setName('remind').setDescription('Send reminder 5 minutes before')),
+      
+    new SlashCommandBuilder().setName('send').setDescription('Manually send a scheduled message')
+      .addStringOption(option => 
+        option.setName('message_type')
+          .setDescription('The type of message to send')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Morning Stand-up', value: 'Morning Stand-up' },
+            { name: 'Deep Work Session 1', value: 'Deep Work Session 1' },
+            { name: 'Lunch Break', value: 'Lunch Break' },
+            { name: 'Team Sync Meeting', value: 'Team Sync Meeting' },
+            { name: 'Deep Work Session 2', value: 'Deep Work Session 2' },
+            { name: 'Client Call', value: 'Client Call' },
+            { name: 'Project Planning', value: 'Project Planning' },
+            { name: 'End of Day', value: 'End of Day' }
+          ))
+      .addBooleanOption(option => option.setName('notification').setDescription('Send as a notification (5 min before) instead of the main message')),
   ],
   
   // New utility commands
