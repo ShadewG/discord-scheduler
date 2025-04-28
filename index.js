@@ -498,6 +498,13 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
+        // Check permissions
+        const permissions = channel.permissionsFor(interaction.client.user);
+        if (!permissions || !permissions.has('ReadMessageHistory')) {
+          await interaction.editReply('❌ I don\'t have permission to read message history in this channel. Please give me the "Read Message History" permission and try again.');
+          return;
+        }
+        
         // Log the command
         logToFile(`/analyze command used in #${channel.name} for ${messageCount} messages by ${interaction.user.tag}`);
         
@@ -692,6 +699,263 @@ client.on('interactionCreate', async interaction => {
           await interaction.editReply(`❌ Error analyzing messages: ${error.message}`);
         } else {
           await interaction.reply({ content: `❌ Error analyzing messages: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /link command
+    else if (commandName === 'link') {
+      try {
+        // Check if ephemeral flag is set
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        
+        // Check if channel is linked to a project
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code (IB##, CL##, BC##)
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Get the Notion URL
+        const notionUrl = getNotionPageUrl(project.page.id);
+        if (!notionUrl) {
+          await interaction.editReply(`❌ Could not generate Notion URL for project "${projectCode}".`);
+          return;
+        }
+        
+        // Create button
+        const linkButton = new ButtonBuilder()
+          .setLabel('Open in Notion')
+          .setStyle(ButtonStyle.Link)
+          .setURL(notionUrl);
+          
+        const row = new ActionRowBuilder().addComponents(linkButton);
+        
+        // Create embed
+        const embed = new EmbedBuilder()
+          .setTitle(`Project: ${projectCode}`)
+          .setDescription(`Here's the Notion link for project **${projectCode}**:`)
+          .setColor(0x0099FF)
+          .addFields({ name: 'Notion Link', value: notionUrl })
+          .setTimestamp();
+        
+        // Send response
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row]
+        });
+        
+      } catch (error) {
+        logToFile(`Error in /link command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error finding Notion link: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error finding Notion link: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /sync command
+    else if (commandName === 'sync') {
+      try {
+        // Get command options
+        const text = interaction.options.getString('text');
+        const dryRun = interaction.options.getBoolean('dry_run') || false;
+        
+        await interaction.deferReply();
+        hasResponded = true;
+        
+        // Check if channel is linked to a project
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Parse the properties from text (simple key-value format)
+        const properties = {};
+        const propertyRegex = /(\w+)\s*[:=]\s*([^,]+)(?:,|$)/g;
+        let match;
+        
+        while ((match = propertyRegex.exec(text)) !== null) {
+          const key = match[1].trim();
+          const value = match[2].trim();
+          properties[key] = value;
+        }
+        
+        if (Object.keys(properties).length === 0) {
+          await interaction.editReply('❌ No valid properties found in the text. Use format "Property: Value, Another: Value"');
+          return;
+        }
+        
+        // Convert to Notion properties format
+        const notionProperties = {};
+        
+        // Map to Notion properties
+        Object.entries(properties).forEach(([key, value]) => {
+          const propertyKey = key.charAt(0).toUpperCase() + key.slice(1);
+          
+          // Handle different property types
+          if (propertyKey === 'Status') {
+            notionProperties[propertyKey] = {
+              select: { name: value }
+            };
+          } 
+          else if (propertyKey === 'Script' || propertyKey === 'Frame.io') {
+            // URL properties
+            if (value.startsWith('http')) {
+              notionProperties[propertyKey] = {
+                url: value
+              };
+            }
+          }
+          else if (propertyKey === 'Date' || propertyKey === 'Due Date') {
+            // Try to parse as date
+            try {
+              const date = new Date(value);
+              if (!isNaN(date.getTime())) {
+                notionProperties['Date'] = {
+                  date: { start: date.toISOString().split('T')[0] }
+                };
+              }
+            } catch (e) {
+              // Not a valid date, ignore
+            }
+          }
+          else if (propertyKey === 'Editor') {
+            // Multi-select property
+            notionProperties[propertyKey] = {
+              multi_select: value.split(',').map(name => ({ name: name.trim() }))
+            };
+          }
+          else if (propertyKey === 'Lead') {
+            // People property
+            notionProperties[propertyKey] = {
+              people: value.split(',').map(name => ({ name: name.trim() }))
+            };
+          }
+          // Add other property types as needed
+        });
+        
+        // Create embed for display
+        const embed = new EmbedBuilder()
+          .setTitle(`Sync Results: ${projectCode}`)
+          .setDescription(dryRun ? '⚠️ DRY RUN - Preview only, no changes made' : '✅ Notion updated successfully')
+          .setColor(dryRun ? 0xFFAA00 : 0x00AAFF)
+          .setTimestamp();
+        
+        // Add fields for each property
+        Object.entries(properties).forEach(([key, value]) => {
+          embed.addFields({ name: key, value: value.substring(0, 1024), inline: true });
+        });
+        
+        // Update Notion if not a dry run
+        if (!dryRun) {
+          try {
+            await notion.pages.update({
+              page_id: project.page.id,
+              properties: notionProperties
+            });
+            
+            logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(notionProperties).join(', ')}`);
+          } catch (notionError) {
+            logToFile(`Notion update error: ${notionError.message}`);
+            embed.setDescription(`❌ Error updating Notion: ${notionError.message}`);
+          }
+        }
+        
+        // Send response
+        await interaction.editReply({ embeds: [embed] });
+        
+      } catch (error) {
+        logToFile(`Error in /sync command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error syncing with Notion: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error syncing with Notion: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /help command
+    else if (commandName === 'help') {
+      try {
+        // Create embed
+        const embed = new EmbedBuilder()
+          .setTitle('Insanity Discord Bot Help')
+          .setDescription('Here are the available commands and how to use them:')
+          .setColor(0x0099FF)
+          .addFields(
+            { name: '/where [query]', value: 'Find project info by code or name. Shows links, status, and people.' },
+            { name: '/availability', value: 'See who is currently working and their remaining time.' },
+            { name: '/link', value: 'Get the Notion link for the current channel\'s project.' },
+            { name: '/analyze [messages]', value: 'Analyze recent messages to extract project info and update Notion.' },
+            { name: '/sync [text]', value: 'Update Notion with properties from your text (format: "Status: Ready, Editor: Name").' },
+            { name: '/schedule [task]', value: 'Schedule a task or reminder for the channel.' },
+            { name: '/help', value: 'Show this help message.' }
+          )
+          .setFooter({ text: 'Use the ephemeral option on commands to make responses only visible to you' })
+          .setTimestamp();
+        
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        hasResponded = true;
+        
+      } catch (error) {
+        logToFile(`Error in /help command: ${error.message}`);
+        if (!hasResponded) {
+          await interaction.reply({ content: `❌ Error displaying help: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /schedule command
+    else if (commandName === 'schedule') {
+      try {
+        await interaction.reply({ content: 'The scheduling feature is currently under development. Please check back soon!', ephemeral: true });
+        hasResponded = true;
+      } catch (error) {
+        logToFile(`Error in /schedule command: ${error.message}`);
+        if (!hasResponded) {
+          await interaction.reply({ content: `❌ Error with schedule command: ${error.message}`, ephemeral: true });
         }
       }
     }
