@@ -17,14 +17,62 @@ const TZ = 'Europe/Berlin';
 // Map of active jobs
 const activeJobs = new Map();
 
-// Store jobs in memory, each with a tag, cron expression, and text
+// Schedule notification channel ID
+const SCHEDULE_CHANNEL_ID = '1364301344508477541'; // Daily Work Schedule channel
+const SCHEDULE_ROLE_ID = '1364657163598823474'; // Role ID to notify for scheduled meetings
+
+// Team mention role ID
+const TEAM_ROLE_ID = '1364657163598823474';
+
+// Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
-  { tag: 'Deep Work Start', cron: '20 12 * * 1-5', text: '🔨 @Schedule Deep Work resumes now — back at it.' },
-  { tag: 'Lunch Break', cron: '0 14 * * 1-5', text: '🍽️ Lunch break @Schedule — enjoy! Back in 45 min.' },
-  { tag: 'Planning Huddle', cron: '35 14 * * 1-5', text: '📋 Reminder @Schedule — Planning Huddle in 10 min (13:45).' },
-  { tag: 'Afternoon Deep Work', cron: '0 15 * * 1-5', text: '🔨 @Schedule Deep Work (PM) starts now — last push of the day.' },
-  { tag: 'Wrap-Up Meeting', cron: '50 17 * * 1-5', text: '✅ Heads-up @Schedule — Wrap-Up Meeting in 10 min (17:00).' }
+  { tag: 'Morning Stand-up', cron: '0 9 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Morning Stand-up** (9:00-9:30) - Daily planning meeting to discuss goals and blockers.`, notify: true },
+  { tag: 'Deep Work Session 1', cron: '30 9 * * 1-5', text: '🧠 **Deep Work Session 1** (9:30-12:00) - Focused work time with minimal interruptions.' },
+  { tag: 'Lunch Break', cron: '0 12 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch Break** (12:00-13:00) - Time to recharge!`, notify: true },
+  { tag: 'Team Sync Meeting', cron: '0 13 * * 1-5', text: `🔄 <@&${TEAM_ROLE_ID}> **Team Sync Meeting** (13:00-14:00) - Weekly progress update and roadmap discussion.`, notify: true },
+  { tag: 'Deep Work Session 2', cron: '0 14 * * 1-5', text: '🧠 **Deep Work Session 2** (14:00-16:00) - Afternoon focus time for project execution.' },
+  { tag: 'Client Call', cron: '0 16 * * 1,3,5', text: `📞 <@&${TEAM_ROLE_ID}> **Client Call** (16:00-17:00) - Scheduled client meeting on Monday, Wednesday, Friday.`, notify: true },
+  { tag: 'Project Planning', cron: '0 16 * * 2,4', text: `📊 <@&${TEAM_ROLE_ID}> **Project Planning** (16:00-17:00) - Internal planning session on Tuesday and Thursday.`, notify: true },
+  { tag: 'End of Day', cron: '0 17 * * 1-5', text: '👋 **End of Day** - That\'s a wrap! Remember to log your hours and update task status.' }
 ];
+
+// Add 5-minute notification jobs for any events that need them
+const notificationJobs = jobs
+  .filter(job => job.notify)
+  .map(job => {
+    // Parse cron to get the time
+    const cronParts = job.cron.split(' ');
+    const hour = parseInt(cronParts[1]);
+    const minute = parseInt(cronParts[0]);
+    
+    // Calculate notification time (5 minutes before)
+    let notifyMinute = minute - 5;
+    let notifyHour = hour;
+    if (notifyMinute < 0) {
+      notifyMinute += 60;
+      notifyHour -= 1;
+      if (notifyHour < 0) {
+        notifyHour = 23;
+      }
+    }
+    
+    // Format as cron
+    const notifyCron = `${notifyMinute} ${notifyHour} * * ${cronParts[4]}`;
+    
+    // Get the meeting name from the original text
+    const meetingNameMatch = job.text.match(/\*\*(.*?)\*\*/);
+    const meetingName = meetingNameMatch ? meetingNameMatch[1] : job.tag;
+    
+    return {
+      tag: `${job.tag} Notification`,
+      cron: notifyCron,
+      text: `🔔 <@&${TEAM_ROLE_ID}> **${meetingName}** starting in 5 minutes!`,
+      isNotification: true
+    };
+  });
+
+// Combine regular jobs and notification jobs
+jobs = [...jobs, ...notificationJobs];
 
 // Helper function to get the next execution time for a cron expression
 function getNextExecution(cronExpression) {
@@ -79,21 +127,20 @@ function getNextExecution(cronExpression) {
 function createScheduleEmbed() {
   const embed = new EmbedBuilder()
     .setColor(0x00AAFF)
-    .setTitle('Schedule Overview')
+    .setTitle('Daily Work Schedule')
     .setDescription(`Current time in ${TZ}: **${moment().tz(TZ).format('dddd, MMM D, HH:mm')}**`)
     .setTimestamp();
 
   // Process jobs for display
   const upcomingJobs = [];
-  const weekdayJobs = [];
-  const weekendJobs = [];
+  const regularJobs = [];
   
-  jobs.forEach(job => {
+  // Only process non-notification jobs for display in the regular schedule
+  const displayJobs = jobs.filter(job => !job.isNotification);
+  
+  displayJobs.forEach(job => {
     const nextExecution = getNextExecution(job.cron);
     if (!nextExecution) return;
-    
-    const isWeekdayOnly = job.cron.includes('1-5') || job.cron.includes('1,2,3,4,5');
-    const isWeekendOnly = job.cron.includes('0,6') || job.cron.includes('6,0');
     
     // Create formatted job info
     const jobInfo = {
@@ -105,27 +152,18 @@ function createScheduleEmbed() {
       formatted: nextExecution.formatted
     };
     
-    // Add to upcoming if it's within the next 24 hours
-    if (nextExecution.timeLeft.hours < 24) {
+    // Add to upcoming if it's within the next 12 hours
+    if (nextExecution.timeLeft.hours < 12) {
       upcomingJobs.push(jobInfo);
-    }
-    // Sort other jobs by weekday/weekend status
-    else if (isWeekdayOnly) {
-      weekdayJobs.push(jobInfo);
-    } 
-    else if (isWeekendOnly) {
-      weekendJobs.push(jobInfo);
-    }
-    else {
-      // Daily jobs
-      weekdayJobs.push(jobInfo);
+    } else {
+      regularJobs.push(jobInfo);
     }
   });
   
   // Sort upcoming jobs by execution time
   upcomingJobs.sort((a, b) => a.next.date.getTime() - b.next.date.getTime());
   
-  // Sort weekday and weekend jobs by time of day
+  // Sort regular jobs by time of day
   const sortByTimeOfDay = (a, b) => {
     const getMinutes = (cronExpr) => {
       const parts = cronExpr.split(' ');
@@ -134,63 +172,45 @@ function createScheduleEmbed() {
     return getMinutes(a.cronExpr) - getMinutes(b.cronExpr);
   };
   
-  weekdayJobs.sort(sortByTimeOfDay);
-  weekendJobs.sort(sortByTimeOfDay);
+  regularJobs.sort(sortByTimeOfDay);
   
   // Add upcoming reminders section if there are any
   if (upcomingJobs.length > 0) {
     embed.addFields({ 
-      name: '⏰ UPCOMING REMINDERS', 
+      name: '⏰ UPCOMING SCHEDULE EVENTS', 
       value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
     });
     
     upcomingJobs.forEach((job, index) => {
+      // Extract time from cron
+      const cronParts = job.cronExpr.split(' ');
+      const hour = cronParts[1].padStart(2, '0');
+      const minute = cronParts[0].padStart(2, '0');
+      
       embed.addFields({ 
-        name: `${index + 1}. ${job.tag}`, 
-        value: `⏱️ In: **${job.timeUntil}**\n🕒 At: ${job.formatted}\n📝 Message: ${job.text}`
+        name: `${index + 1}. ${job.tag} (${hour}:${minute})`, 
+        value: `⏱️ In: **${job.timeUntil}**\n🕒 At: ${job.formatted}\n📝 ${job.text.replace('@Schedule', '').trim()}`
       });
     });
   }
   
-  // Add weekday reminders section
-  if (weekdayJobs.length > 0) {
-    embed.addFields({ 
-      name: '📅 WEEKDAY SCHEDULE (Mon-Fri)', 
-      value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-    });
-    
-    weekdayJobs.forEach((job) => {
-      // Extract hour and minute from cron for readability
-      const cronParts = job.cronExpr.split(' ');
-      const minute = cronParts[0].padStart(2, '0');
-      const hour = cronParts[1].padStart(2, '0');
-      
-      embed.addFields({ 
-        name: `${hour}:${minute} — ${job.tag}`, 
-        value: `📝 Message: ${job.text}`
-      });
-    });
-  }
+  // Add full day schedule
+  embed.addFields({ 
+    name: '📅 DAILY SCHEDULE (Mon-Fri)', 
+    value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  });
   
-  // Add weekend reminders section if there are any
-  if (weekendJobs.length > 0) {
-    embed.addFields({ 
-      name: '🏖️ WEEKEND SCHEDULE (Sat-Sun)', 
-      value: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-    });
+  regularJobs.forEach((job) => {
+    // Extract hour and minute from cron for readability
+    const cronParts = job.cronExpr.split(' ');
+    const hour = cronParts[1].padStart(2, '0');
+    const minute = cronParts[0].padStart(2, '0');
     
-    weekendJobs.forEach((job) => {
-      // Extract hour and minute from cron for readability
-      const cronParts = job.cronExpr.split(' ');
-      const minute = cronParts[0].padStart(2, '0');
-      const hour = cronParts[1].padStart(2, '0');
-      
-      embed.addFields({ 
-        name: `${hour}:${minute} — ${job.tag}`, 
-        value: `📝 Message: ${job.text}`
-      });
+    embed.addFields({ 
+      name: `${hour}:${minute} — ${job.tag}`, 
+      value: job.text.replace('@Schedule', '').trim()
     });
-  }
+  });
   
   embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
   
@@ -223,18 +243,20 @@ const client = new Client({
 
 // Function to send a message to the specified channel
 function ping(message) {
-  // Find the Schedule channel
-  const guilds = client.guilds.cache;
-  for (const guild of guilds.values()) {
-    const channel = guild.channels.cache.find(ch => 
-      ch.name.toLowerCase().includes('schedule'));
+  try {
+    // Find the Schedule channel by ID
+    const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
     
     if (channel) {
       // Send the message
       channel.send(message)
-        .then(() => logToFile(`Sent message to ${channel.name}: ${message}`))
+        .then(() => logToFile(`Sent schedule message to #${channel.name}: ${message}`))
         .catch(err => logToFile(`Error sending message: ${err.message}`));
+    } else {
+      logToFile(`Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
     }
+  } catch (error) {
+    logToFile(`Error in ping function: ${error.message}`);
   }
 }
 
@@ -356,6 +378,9 @@ client.once('ready', () => {
     console.error('Error registering commands:', error);
     logToFile(`Error registering commands: ${error.message}`);
   }
+  
+  // Schedule all jobs
+  scheduleAllJobs();
 });
 
 // Handle slash command interactions
@@ -1487,3 +1512,42 @@ client.login(TOKEN).catch(error => {
 
 // Export the client for testing
 module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
+
+// Function to schedule all jobs
+function scheduleAllJobs() {
+  // Clear any existing jobs
+  for (const job of activeJobs.values()) {
+    job.stop();
+  }
+  activeJobs.clear();
+  
+  // Schedule each job
+  jobs.forEach(job => {
+    // Ensure timezone is properly set
+    const options = {
+      timezone: TZ,
+      scheduled: true
+    };
+    
+    // Schedule the new job
+    const scheduledJob = cron.schedule(job.cron, () => {
+      // Log the execution with timestamp
+      const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
+      logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
+      
+      // Send the message
+      ping(job.text);
+    }, options);
+    
+    activeJobs.set(job.tag, scheduledJob);
+    logToFile(`Scheduled job: ${job.tag} (${job.cron} in ${TZ} timezone)`);
+    
+    // Log next execution time
+    const nextExecution = getNextExecution(job.cron);
+    if (nextExecution) {
+      logToFile(`   → Next execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+    }
+  });
+  
+  logToFile(`Total jobs scheduled: ${activeJobs.size}`);
+}

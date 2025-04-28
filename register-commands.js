@@ -1,87 +1,81 @@
-// Force register Discord commands
+// register-commands.js - Script to register commands manually
+// This script can be run manually to register commands
 
-// Load environment variables
-const path = require('path');
-const { SlashCommandBuilder, REST, Routes } = require('discord.js');
-const dotenv = require('dotenv');
+require('dotenv').config();
+const { REST, Routes } = require('discord.js');
+const { getAllCommands, getCommandsByCategory, commandsToJSON } = require('./commands');
 
-// Try to load from .env file
-dotenv.config({ path: path.resolve(__dirname, '.env') });
+// Get environment variables
+const { DISCORD_TOKEN, CLIENT_ID } = process.env;
 
-const { DISCORD_TOKEN } = process.env;
-const clientId = process.env.CLIENT_ID || ''; // Add your client ID to .env or provide it here
-
-if (!DISCORD_TOKEN || !clientId) {
-  console.error('Missing DISCORD_TOKEN or CLIENT_ID in environment variables');
+// Check if token and client ID are provided
+if (!DISCORD_TOKEN || !CLIENT_ID) {
+  console.error('Error: Missing required environment variables (DISCORD_TOKEN, CLIENT_ID)');
+  console.log('Please check your .env file or environment variables');
   process.exit(1);
 }
 
-// Define commands to register
-const commands = [
-  new SlashCommandBuilder().setName('link').setDescription('Get the Notion link for the current project')
-    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
-  new SlashCommandBuilder().setName('availability').setDescription('Show a live time board of who is currently working')
-    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
-  new SlashCommandBuilder().setName('sync').setDescription('Update Notion with properties from your message')
-    .addStringOption(option => option.setName('text').setDescription('The properties to update').setRequired(true))
-    .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion')),
-  new SlashCommandBuilder().setName('analyze').setDescription('Analyze channel messages and update Notion')
-    .addIntegerOption(option => option.setName('messages').setDescription('Number of messages to analyze (default: 100)'))
-    .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion'))
-    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make response only visible to you')),
-  new SlashCommandBuilder().setName('set').setDescription('Set a property on the Notion page for this channel')
-    .addSubcommand(subcommand => subcommand.setName('status').setDescription('Set the Status property')
-      .addStringOption(option => option.setName('value').setDescription('Status value').setRequired(true)
-        .addChoices({ name: 'Writing', value: 'Writing' }, { name: 'Writing Review', value: 'Writing Review' },
-                    { name: 'VA Render', value: 'VA Render' }, { name: 'Ready for Editing', value: 'Ready for Editing' },
-                    { name: 'Clip Selection', value: 'Clip Selection' }, { name: 'MGX', value: 'MGX' },
-                    { name: 'Pause', value: 'Pause' }))),
-  // New test command to verify command registration
-  new SlashCommandBuilder().setName('test-link').setDescription('Test command to verify registration is working')
-    .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
-  // Add other commands here...
-];
-
+// Create REST instance
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
-async function registerCommands() {
+// Register commands globally (takes up to 1 hour to update)
+async function registerGlobalCommands() {
   try {
-    console.log('Started refreshing application (/) commands.');
-
-    const commandsData = commands.map(command => command.toJSON());
+    console.log('Started refreshing application (/) commands...');
     
-    // For global commands (works across all servers, but takes up to an hour to update)
-    console.log(`Registering ${commandsData.length} commands globally for application ID: ${clientId}`);
-    console.log(`Command names being registered: ${commandsData.map(cmd => cmd.name).join(', ')}`);
+    // Get all commands and convert to JSON
+    const commandsData = commandsToJSON(getAllCommands());
     
+    // Register commands globally
     await rest.put(
-      Routes.applicationCommands(clientId),
+      Routes.applicationCommands(CLIENT_ID),
       { body: commandsData },
     );
-
-    console.log('Successfully registered application commands. They should show up in Discord within an hour.');
-    console.log('If you want to update commands for a specific server immediately, use the guildId parameter.');
     
-    // Optional: You can also register to a specific guild for immediate testing
-    // To get your server ID: 
-    // 1. Enable Developer Mode in Discord (Settings > Advanced > Developer Mode)
-    // 2. Right-click on your server icon and select "Copy ID"
-    
-    const testGuildId = ''; // Replace with your Discord server ID
-    console.log(`Also registering commands to test guild: ${testGuildId} for immediate availability`);
-    await rest.put(
-      Routes.applicationGuildCommands(clientId, testGuildId),
-      { body: commandsData },
-    );
-    console.log('Successfully registered application commands to test guild (immediate availability).');
-    
+    console.log('✅ Successfully registered application commands globally!');
+    console.log('Note: Global commands can take up to 1 hour to update in Discord');
   } catch (error) {
     console.error('Error registering commands:', error);
-    console.error('Error details:', error.message);
     if (error.rawError) {
       console.error('API Error details:', JSON.stringify(error.rawError, null, 2));
     }
   }
 }
 
-registerCommands();
+// Register commands to a specific guild (updates immediately)
+async function registerGuildCommands(guildId) {
+  try {
+    console.log(`Started registering commands to guild ID: ${guildId}`);
+    
+    // Get all commands and convert to JSON
+    const commandsData = commandsToJSON(getAllCommands());
+    
+    // Register commands to the guild
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, guildId),
+      { body: commandsData },
+    );
+    
+    console.log(`✅ Successfully registered commands to guild ID: ${guildId}`);
+    console.log('Guild commands update immediately in Discord');
+  } catch (error) {
+    console.error(`Error registering commands to guild ${guildId}:`, error);
+    if (error.rawError) {
+      console.error('API Error details:', JSON.stringify(error.rawError, null, 2));
+    }
+  }
+}
+
+// Run the registration
+(async () => {
+  // To register to a specific guild, uncomment and add your guild ID:
+  // You can get your guild ID by right-clicking on your server name and selecting "Copy ID"
+  // This requires Developer Mode to be enabled in Discord (Settings > Advanced)
+  const GUILD_ID = '1097551512912187432'; // Replace with your guild ID
+  
+  if (GUILD_ID) {
+    await registerGuildCommands(GUILD_ID);
+  } else {
+    await registerGlobalCommands();
+  }
+})();
