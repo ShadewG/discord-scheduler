@@ -2544,12 +2544,12 @@ Example Output: {
     
     // Handle the /changelog command
     else if (commandName === 'changelog') {
-  try {
-    // Get command options
-    const projectCode = interaction.options.getString('project');
-    const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
-    
-    await interaction.deferReply({ flags: ephemeral ? [1 << 6] : []}
+      try {
+        // Get command options
+        const projectCode = interaction.options.getString('project');
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+    await interaction.deferReply({ flags: ephemeral ? [1 << 6] : []})
 
 
     
@@ -2600,9 +2600,9 @@ Example Output: {
         
         if (!permissions.has('SendMessages')) {
           await interaction.editReply(`❌ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
-          return;
-        }
-        
+            return;
+          }
+          
         // Create message text, with option to remove @Schedule tag
         let messageText = job.text;
         if (removeTag) {
@@ -3177,4 +3177,4 @@ async function checkStatusAndNotify(projectCode, newStatus, channelId) {
           await interaction.reply({ content: `❌ Error setting property: ${error.message}`, ephemeral: true });
         }
       }
-    }
+}
