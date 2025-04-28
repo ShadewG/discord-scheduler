@@ -387,9 +387,16 @@ function createScheduleEmbed() {
 // Load environment variables
 const TOKEN = process.env.DISCORD_TOKEN;
 const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
-const DB = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID; // Support both naming conventions
+const DB = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID; // Support both naming conventions
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
+
+// Log environment variables for debugging (without showing full values)
+console.log('Environment variables check:');
+console.log(`- DISCORD_TOKEN: ${TOKEN ? '✅ Set' : '❌ Missing'}`);
+console.log(`- NOTION_KEY: ${NOTION_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`- NOTION_DATABASE_ID: ${DB ? `✅ Set (${DB.substring(0, 6)}...)` : '❌ Missing'}`);
+console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
 
 // Validate required environment variables
 if (!TOKEN) {
@@ -435,8 +442,13 @@ try {
       auth: NOTION_KEY
     });
     console.log('✅ Notion client initialized successfully');
+    console.log(`  - Using database ID: ${DB.substring(0, 8)}...`);
+    
+    // Store the database ID in global scope for access in functions
+    global.NOTION_DATABASE_ID = DB;
   } else {
-    console.warn('⚠️ NOTION_KEY or NOTION_DATABASE_ID not provided. Notion features will be disabled.');
+    if (!NOTION_KEY) console.warn('⚠️ NOTION_KEY not provided. Notion features will be disabled.');
+    if (!DB) console.warn('⚠️ NOTION_DATABASE_ID not provided. Notion features will be disabled.');
   }
 } catch (error) {
   console.warn('⚠️ Failed to initialize Notion client: ' + error.message + '. Notion features will be disabled.');
@@ -483,6 +495,15 @@ async function findProjectByQuery(query) {
       return null;
     }
     
+    // Get database ID from environment variable or global variable - ensure it's defined
+    const databaseId = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID || global.NOTION_DATABASE_ID || DB;
+    
+    if (!databaseId) {
+      logToFile('ERROR: Notion database ID is undefined. Check your environment variables.');
+      console.error('❌ ERROR: Notion database ID is undefined. Check your environment variables.');
+      return null;
+    }
+    
     // Trim the query
     query = query.trim();
     
@@ -507,62 +528,114 @@ async function findProjectByQuery(query) {
       }
     }
     
-    // Get database ID from environment variable
-    const databaseId = process.env.NOTION_DATABASE_ID;
-    
-    // Query the database
-    logToFile(`Querying Notion database for: "${query}"`);
-    
     // Extract code pattern if it exists (e.g., IB23, CL45)
     const codeMatch = query.match(/(ib|cl|bc)\d{2}/i);
     const queryCode = codeMatch ? codeMatch[0].toUpperCase() : null;
     
-    // Prepare filters based on query
-    let filter;
+    logToFile(`Querying Notion database for: "${query}" with database ID: ${databaseId.substring(0, 8)}...`);
     
+    // Try different approaches to find the project
+    let filter;
+    let responsePages = [];
+    
+    // First try: exact code match if we have a code pattern
     if (queryCode) {
       logToFile(`Found code pattern in query: ${queryCode}`);
-      // Search by code
+      
+      // 1. Try to match by Code property
       filter = {
         property: "Code",
         rich_text: {
           equals: queryCode
         }
       };
+      
+      let response = await notion.databases.query({
+        database_id: databaseId,
+        filter: filter
+      });
+      
+      responsePages = response.results;
+      logToFile(`Found ${responsePages.length} results by Code property`);
+      
+      // 2. If no results, try with Name property containing the code
+      if (responsePages.length === 0) {
+        filter = {
+          property: "Name",
+          title: {
+            contains: queryCode
+          }
+        };
+        
+        response = await notion.databases.query({
+          database_id: databaseId,
+          filter: filter
+        });
+        
+        responsePages = response.results;
+        logToFile(`Found ${responsePages.length} results by Name property containing code`);
+      }
+      
+      // 3. If still no results, try a more flexible approach with just the prefix
+      if (responsePages.length === 0) {
+        // Get just the prefix (IB, CL, BC)
+        const prefix = queryCode.substring(0, 2);
+        
+        filter = {
+          property: "Name",
+          title: {
+            contains: prefix
+          }
+        };
+        
+        response = await notion.databases.query({
+          database_id: databaseId,
+          filter: filter
+        });
+        
+        responsePages = response.results;
+        logToFile(`Found ${responsePages.length} results by Name property containing prefix ${prefix}`);
+      }
     } else {
-      // Search by name
+      // If no code pattern, just search by name containing the query
       filter = {
         property: "Name",
         title: {
           contains: query
         }
       };
+      
+      const response = await notion.databases.query({
+        database_id: databaseId,
+        filter: filter
+      });
+      
+      responsePages = response.results;
+      logToFile(`Found ${responsePages.length} results by general query`);
     }
     
-    // Execute the query
-    const response = await notion.databases.query({
-      database_id: databaseId,
-      filter: filter
-    });
-    
-    // Log results count
-    logToFile(`Found ${response.results.length} results`);
-    
     // If no results, return null
-    if (response.results.length === 0) {
+    if (responsePages.length === 0) {
+      logToFile(`No projects found for query: "${query}"`);
       return null;
     }
     
     // Get the first result
-    const page = response.results[0];
+    const page = responsePages[0];
     
     // Extract name and code from the page properties
     const name = page.properties.Name?.title?.[0]?.plain_text || "Unknown";
     
-    // Extract code from rich text
+    // Extract code from rich text or from the name if not found
     let code = "";
     if (page.properties.Code && page.properties.Code.rich_text && page.properties.Code.rich_text.length > 0) {
       code = page.properties.Code.rich_text[0].plain_text;
+    } else if (name) {
+      // Try to extract code from the name
+      const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
+      if (codeFromName) {
+        code = codeFromName[0].toUpperCase();
+      }
     }
     
     // Log available properties
