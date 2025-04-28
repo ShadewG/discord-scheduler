@@ -2533,7 +2533,7 @@ Example Output: {
             },
             sorts: [
               {
-                property: "created_time",
+                property: "Changed At",
                 direction: "ascending"
               }
             ],
@@ -2568,7 +2568,7 @@ Example Output: {
               if (pageStatus) {
                 statusChanges.push({
                   status: pageStatus,
-                  date: new Date(relatedPage.created_time),
+                  date: new Date(relatedPage.properties["Changed At"]?.date?.start || relatedPage.created_time),
                   page: relatedPage,
                   id: relatedPage.id
                 });
@@ -2647,7 +2647,7 @@ Example Output: {
           if (statusChanges.length === 0) {
             statusChanges.push({
               status: 'Created',
-              date: new Date(page.created_time),
+              date: new Date(page.properties["Changed At"]?.date?.start || page.created_time),
               by: 'System'
             });
             
