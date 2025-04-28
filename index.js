@@ -520,7 +520,7 @@ async function findProjectByQuery(query) {
         const page = await notion.pages.retrieve({ page_id: query });
         
         // Extract name and code from title
-        const name = page.properties["Project Name"]?.title?.[0]?.plain_text || "Unknown";
+        const name = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
         const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
         const code = codeFromName ? codeFromName[0].toUpperCase() : "";
         
@@ -539,15 +539,15 @@ async function findProjectByQuery(query) {
     // Try different approaches to find the project
     let response;
     
-    // IMPORTANT: Use "Project Name" as the property name, not "Name"
+    // IMPORTANT: Use "Project name" as the property name, not "Name"
     if (queryCode) {
-      logToFile(`Found code pattern in query: ${queryCode}, searching by Project Name property`);
+      logToFile(`Found code pattern in query: ${queryCode}, searching by Project name property`);
       
-      // Search by Project Name property containing the code
+      // Search by Project name property containing the code
       response = await notion.databases.query({
         database_id: databaseId,
         filter: {
-          property: "Project Name",
+          property: "Project name",
           title: {
             contains: queryCode
           }
@@ -555,18 +555,18 @@ async function findProjectByQuery(query) {
         page_size: 10
       });
       
-      logToFile(`Found ${response.results.length} results with Project Name containing "${queryCode}"`);
+      logToFile(`Found ${response.results.length} results with Project name containing "${queryCode}"`);
       
       // If no results, try with just the prefix (IB, CL, BC)
       if (response.results.length === 0) {
         const prefix = queryCode.substring(0, 2); // Get just the prefix (IB, CL, BC)
         
-        logToFile(`No results with exact code, trying prefix "${prefix}" in Project Name property`);
+        logToFile(`No results with exact code, trying prefix "${prefix}" in Project name property`);
         
         response = await notion.databases.query({
           database_id: databaseId,
           filter: {
-            property: "Project Name",
+            property: "Project name",
             title: {
               contains: prefix
             }
@@ -574,14 +574,14 @@ async function findProjectByQuery(query) {
           page_size: 20
         });
         
-        logToFile(`Found ${response.results.length} results with Project Name containing prefix "${prefix}"`);
+        logToFile(`Found ${response.results.length} results with Project name containing prefix "${prefix}"`);
       }
     } else {
       // If no code pattern, just search by name containing the query
       response = await notion.databases.query({
         database_id: databaseId,
         filter: {
-          property: "Project Name",
+          property: "Project name",
           title: {
             contains: query
           }
@@ -589,7 +589,7 @@ async function findProjectByQuery(query) {
         page_size: 10
       });
       
-      logToFile(`Found ${response.results.length} results with Project Name containing general query "${query}"`);
+      logToFile(`Found ${response.results.length} results with Project name containing general query "${query}"`);
     }
     
     // If no results, return null
@@ -601,8 +601,8 @@ async function findProjectByQuery(query) {
     // Get the first result
     const page = response.results[0];
     
-    // Extract name from the page properties - use "Project Name" not "Name"
-    const name = page.properties["Project Name"]?.title?.[0]?.plain_text || "Unknown";
+    // Extract name from the page properties - use "Project name" not "Name"
+    const name = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
     
     // Extract code from the name
     const codeFromName = name.match(/(ib|cl|bc)\d{2}/i);
@@ -810,7 +810,7 @@ client.on('interactionCreate', async interaction => {
         
         // Get project properties
         const properties = project.properties;
-        const projectName = properties["Project Name"]?.title?.[0]?.plain_text || 'Unnamed Project';
+        const projectName = properties["Project name"]?.title?.[0]?.plain_text || 'Unnamed Project';
         // Get code from the result or extract from project name
         const code = result.code || projectName.match(/^([A-Z]{2}\d{2})/)?.['0'] || 'Unknown';
         
