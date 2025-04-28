@@ -123,7 +123,12 @@ async function findProjectByQuery(query) {
     });
     
     if (response.results.length > 0) {
-      return response.results[0];
+      // Return both the page and the code for reference
+      const page = response.results[0];
+      const code = page.properties.Code?.rich_text?.[0]?.plain_text || 
+                  page.properties.Name?.title?.[0]?.plain_text || 
+                  query;
+      return { page, code };
     }
     
     return null;
@@ -182,16 +187,19 @@ client.on('interactionCreate', async interaction => {
           return;
         }
         
-        const project = await findProjectByQuery(query);
-        if (!project) {
+        const result = await findProjectByQuery(query);
+        if (!result) {
           await interaction.editReply(`❌ Could not find a project matching "${query}"`);
           return;
         }
         
+        // Get the page details from the result
+        const project = result.page;
+        
         // Get project properties
         const properties = project.properties;
         const name = properties.Name?.title?.[0]?.plain_text || 'Unnamed Project';
-        const code = properties.Code?.rich_text?.[0]?.plain_text || 'No Code';
+        const code = properties.Code?.rich_text?.[0]?.plain_text || result.code || 'No Code';
         const status = properties.Status?.select?.name || 'No Status';
         const dueDate = properties['Due Date']?.date?.start || 'No Due Date';
         const lead = properties.Lead?.select?.name || 'No Lead';
