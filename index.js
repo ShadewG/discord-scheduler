@@ -144,17 +144,78 @@ function getNextExecution(cronExpression) {
     // Get current time
     const now = new Date();
     
-    // Schedule a one-time job to get the next date
-    const scheduler = cron.schedule(cronExpression, () => {}, { 
-      timezone: TZ,
-      scheduled: false
-    });
+    // Parse the cron expression
+    const parts = cronExpression.split(' ');
+    if (parts.length !== 5) {
+      throw new Error('Invalid cron expression format');
+    }
     
-    // Get the next execution date
-    const nextDate = scheduler.nextDate().toDate();
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
     
-    // Stop the job
-    scheduler.stop();
+    // Calculate the next execution time using a simple approach
+    // For our scheduled workday jobs, we can make some simplifying assumptions
+    
+    // Create a future date starting from today
+    let nextDate = new Date();
+    nextDate.setSeconds(0); // Reset seconds
+    nextDate.setMilliseconds(0); // Reset milliseconds
+    
+    // For most workday schedules, we're dealing with specific hour/minute
+    // combinations on certain days of the week
+    
+    // Set the hour and minute
+    let targetHour = parseInt(hour);
+    let targetMinute = parseInt(minute);
+    
+    // Handle wildcards and ranges
+    if (hour === '*') targetHour = now.getHours();
+    if (minute === '*') targetMinute = now.getMinutes() + 1; // Next minute if current is wildcard
+    
+    nextDate.setHours(targetHour);
+    nextDate.setMinutes(targetMinute);
+    
+    // If this time has already passed today, move to tomorrow
+    if (nextDate <= now) {
+      nextDate.setDate(nextDate.getDate() + 1);
+    }
+    
+    // Check if the day of week matches
+    const currentDayOfWeek = nextDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    
+    // For day of week patterns like "1-5" (weekdays)
+    let validDays = [];
+    if (dayOfWeek === '*') {
+      validDays = [0, 1, 2, 3, 4, 5, 6]; // All days are valid
+    } else if (dayOfWeek.includes('-')) {
+      // Handle ranges like 1-5
+      const [start, end] = dayOfWeek.split('-').map(Number);
+      for (let i = start; i <= end; i++) {
+        validDays.push(i);
+      }
+    } else if (dayOfWeek.includes(',')) {
+      // Handle lists like 1,3,5
+      validDays = dayOfWeek.split(',').map(Number);
+    } else {
+      // Single day
+      validDays = [parseInt(dayOfWeek)];
+    }
+    
+    // If current day isn't valid, find the next valid day
+    if (!validDays.includes(currentDayOfWeek)) {
+      let daysToAdd = 1;
+      let nextDayOfWeek = (currentDayOfWeek + 1) % 7;
+      
+      while (!validDays.includes(nextDayOfWeek) && daysToAdd < 7) {
+        daysToAdd++;
+        nextDayOfWeek = (nextDayOfWeek + 1) % 7;
+      }
+      
+      nextDate.setDate(nextDate.getDate() + daysToAdd);
+      
+      // Reset time to the target hour/minute
+      nextDate.setHours(targetHour);
+      nextDate.setMinutes(targetMinute);
+    }
     
     // Calculate the time difference
     const diffMs = nextDate - now;
