@@ -2299,7 +2299,7 @@ Example Output: {
         const projectCode = interaction.options.getString('project');
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral });
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -2333,285 +2333,108 @@ Example Output: {
         
         logToFile(`Fetching changelog for project ${targetProjectCode}`);
         
-        // Get the page ID
-        const pageId = project.page.id;
-        
         try {
-          // Fetch page content including comments history
-          const pageContent = await notion.pages.retrieve({
-            page_id: pageId
-          });
+          // Basic information about the project
+          let statusChanges = [];
+          const page = project.page;
           
-          // Use Notion's paginated comments API to get all comments
-          let hasMore = true;
-          let startCursor = undefined;
-          let allComments = [];
+          // Get the current status if available
+          if (page.properties.Status && page.properties.Status.status && page.properties.Status.status.name) {
+            const currentStatus = page.properties.Status.status.name;
+            statusChanges.push({
+              status: currentStatus,
+              date: new Date(page.last_edited_time),
+              by: 'Current'
+            });
+          }
           
-          while (hasMore) {
-            const commentsResponse = await notion.comments.list({
-              block_id: pageId,
-              start_cursor: startCursor,
-              page_size: 100
+          // Go through properties to find potential status dates
+          for (const [key, value] of Object.entries(page.properties)) {
+            // Look for date properties that might indicate status changes
+            if (value.type === 'date' && value.date) {
+              if (key.toLowerCase().includes('date') || 
+                  key.toLowerCase().includes('time') || 
+                  key.toLowerCase().includes('changed') || 
+                  key.toLowerCase().includes('updated')) {
+                
+                // Try to extract a status from the property name
+                const statusMatch = key.match(/^(.*?)\s*(?:date|time|changed|updated)/i);
+                if (statusMatch && statusMatch[1].trim()) {
+                  statusChanges.push({
+                    status: statusMatch[1].trim(),
+                    date: new Date(value.date.start),
+                    by: 'From Property'
+                  });
+                  continue;
+                }
+              }
+            }
+            
+            // Check for rich text properties that may contain changelog info
+            if (value.type === 'rich_text' && value.rich_text.length > 0 &&
+               (key.toLowerCase().includes('history') || 
+                key.toLowerCase().includes('changelog') || 
+                key.toLowerCase().includes('log'))) {
+              
+              const text = value.rich_text.map(t => t.plain_text).join('');
+              // Split into separate entries (by newline or semicolon)
+              const entries = text.split(/[\n;]/);
+              
+              for (const entry of entries) {
+                if (!entry.trim()) continue;
+                
+                // Try to find date-status or status-date patterns
+                const dateStatusMatch = entry.match(/(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})[\s:]+([A-Za-z\s/]+)/i);
+                const statusDateMatch = entry.match(/([A-Za-z\s/]+)[\s:\(]+(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})/i);
+                
+                if (dateStatusMatch) {
+                  try {
+                    statusChanges.push({
+                      status: dateStatusMatch[2].trim(),
+                      date: new Date(dateStatusMatch[1]),
+                      by: 'From Text'
+                    });
+                  } catch (e) {
+                    logToFile(`Error parsing date: ${dateStatusMatch[1]}`);
+                  }
+                } else if (statusDateMatch) {
+                  try {
+                    statusChanges.push({
+                      status: statusDateMatch[1].trim(),
+                      date: new Date(statusDateMatch[2]),
+                      by: 'From Text'
+                    });
+                  } catch (e) {
+                    logToFile(`Error parsing date: ${statusDateMatch[2]}`);
+                  }
+                }
+              }
+            }
+          }
+          
+          // If we still have no status changes, create a basic history
+          if (statusChanges.length === 0) {
+            statusChanges.push({
+              status: 'Created',
+              date: new Date(page.created_time),
+              by: 'System'
             });
             
-            allComments = [...allComments, ...commentsResponse.results];
-            hasMore = commentsResponse.has_more;
-            startCursor = commentsResponse.next_cursor;
-          }
-          
-          logToFile(`Retrieved ${allComments.length} comments for project ${targetProjectCode}`);
-          
-          // Try to get the page properties which might have status change history
-          let statusChanges = [];
-          
-          // Fetch page history if available
-          try {
-            // This is a partial implementation as Notion API doesn't directly expose page history
-            // We'll look for comments that mention status changes
-            const statusComments = allComments.filter(comment => 
-              comment.rich_text && 
-              comment.rich_text.some(text => 
-                text.plain_text && 
-                (text.plain_text.includes('status') || 
-                 text.plain_text.includes('Status') ||
-                 text.plain_text.toLowerCase().includes('changed to'))
-              )
-            );
-            
-            logToFile(`Found ${statusComments.length} status-related comments`);
-            
-            // Extract status changes from comments
-            for (const comment of statusComments) {
-              const text = comment.rich_text.map(t => t.plain_text).join('');
-              const date = new Date(comment.created_time);
-              
-              // Try to extract status from text
-              const statusMatch = text.match(/(?:status|changed to)[:\s]+([A-Za-z\s/]+)/i);
-              if (statusMatch) {
-                statusChanges.push({
-                  status: statusMatch[1].trim(),
-                  date: date,
-                  by: comment.created_by.id
-                });
-              }
-            }
-          } catch (historyError) {
-            logToFile(`Error fetching history: ${historyError.message}`);
-          }
-          
-          // Create a simpler API approach - retrieve pages from the database with this project code
-          // and look for status-related properties
-          const response = await notion.databases.query({
-            database_id: process.env.NOTION_DATABASE_ID || DB,
-            filter: {
-              property: "Project name",
-              title: {
-                contains: targetProjectCode
-              }
-            }
-          });
-          
-          if (response.results && response.results.length > 0) {
-            // Check if there's a property that tracks status changes
-            const page = response.results[0];
-            
-            // Look for properties that might contain status history
-            const props = page.properties;
-            
-            // Check specifically for a 'Change Log' or 'History' object
-            // which is what appears to be in the screenshot with "New Status" and "Changed At" fields
-            try {
-              // First try to check if there's a page-level history API (this is experimental)
-              const pageHistory = await notion.pages.retrievePageProperties({
-                page_id: pageId
+            // If we have an update time different from create time, add that
+            if (page.last_edited_time !== page.created_time) {
+              const currentStatus = page.properties.Status?.status?.name || 'Updated';
+              statusChanges.push({
+                status: currentStatus,
+                date: new Date(page.last_edited_time),
+                by: 'Current'
               });
-              
-              logToFile(`Retrieved page history properties: ${JSON.stringify(Object.keys(pageHistory))}`);
-              
-              // Look for history-related properties
-              if (pageHistory && pageHistory.results) {
-                const historyItems = pageHistory.results.filter(item => 
-                  item.property?.name?.toLowerCase().includes('status')
-                );
-                
-                for (const historyItem of historyItems) {
-                  if (historyItem.edited_time && historyItem.value) {
-                    statusChanges.push({
-                      status: historyItem.value.toString(),
-                      date: new Date(historyItem.edited_time),
-                      by: historyItem.created_by?.name || 'Unknown'
-                    });
-                  }
-                }
-              }
-            } catch (historyApiError) {
-              logToFile(`Could not use history API: ${historyApiError.message}`);
-              // This is expected as this API might not be available
-            }
-            
-            // Try to get change history through page block children
-            try {
-              const blockResponse = await notion.blocks.children.list({
-                block_id: pageId,
-                page_size: 100
-              });
-              
-              // Look for table blocks that might contain history
-              const tableBlocks = blockResponse.results.filter(block => 
-                block.type === 'table' || 
-                block.type === 'child_database'
-              );
-              
-              for (const tableBlock of tableBlocks) {
-                if (tableBlock.type === 'table') {
-                  // Try to get the table rows
-                  const tableRows = await notion.blocks.children.list({
-                    block_id: tableBlock.id,
-                    page_size: 100
-                  });
-                  
-                  // Check if this looks like a changelog table (has columns for status, date, etc.)
-                  // This is a simplified check and may need enhancement
-                  const firstRow = tableRows.results[0];
-                  if (firstRow && firstRow.type === 'table_row') {
-                    const cells = firstRow.table_row.cells;
-                    const hasStatusColumn = cells.some(cell => 
-                      cell.some(text => 
-                        text.plain_text && 
-                        text.plain_text.toLowerCase().includes('status')
-                      )
-                    );
-                    
-                    const hasDateColumn = cells.some(cell => 
-                      cell.some(text => 
-                        text.plain_text && 
-                        (text.plain_text.toLowerCase().includes('date') || 
-                         text.plain_text.toLowerCase().includes('time') ||
-                         text.plain_text.toLowerCase().includes('changed'))
-                      )
-                    );
-                    
-                    if (hasStatusColumn && hasDateColumn) {
-                      // This looks like a changelog table
-                      logToFile('Found a table that appears to be a changelog');
-                      
-                      // Process all rows in the table (skip the header)
-                      for (let i = 1; i < tableRows.results.length; i++) {
-                        const row = tableRows.results[i];
-                        if (row.type === 'table_row') {
-                          const cells = row.table_row.cells;
-                          
-                          // Try to find status and date in the cells
-                          let status = '';
-                          let dateStr = '';
-                          
-                          for (const cell of cells) {
-                            const text = cell.map(t => t.plain_text).join('');
-                            
-                            if (text.match(/^(backlog|writing|review|ready|clip selection|mgx|va render|paused)/i)) {
-                              status = text;
-                            } else if (text.match(/\d{4}-\d{2}-\d{2}|[a-z]+ \d{1,2}, \d{4}/i)) {
-                              dateStr = text;
-                            }
-                          }
-                          
-                          if (status && dateStr) {
-                            statusChanges.push({
-                              status,
-                              date: new Date(dateStr),
-                              by: 'From Table'
-                            });
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (blockError) {
-              logToFile(`Error fetching blocks: ${blockError.message}`);
-            }
-            
-            // Try specific methods based on your second screenshot
-            // Look for the "New Status" and "Changed At" fields within page content
-            // Check for a Change Log property that might contain change history items
-            for (const [key, value] of Object.entries(props)) {
-              if (key.toLowerCase().includes('history') ||
-                  key.toLowerCase().includes('change log') ||
-                  key.toLowerCase().includes('changelog')) {
-                  
-                logToFile(`Found key that might contain changelog data: ${key}`);
-                
-                if (value.type === 'relation' && Array.isArray(value.relation)) {
-                  // If it's a relation to changelog pages
-                  for (const relatedId of value.relation) {
-                    try {
-                      // Try to fetch the related page which might be a change log entry
-                      const relatedPage = await notion.pages.retrieve({
-                        page_id: relatedId.id
-                      });
-                      
-                      const relatedProps = relatedPage.properties;
-                      
-                      // Extract status and date from the related page
-                      let status = '';
-                      let date = null;
-                      
-                      // Check for properties like "New Status" and "Changed At"
-                      for (const [relatedKey, relatedValue] of Object.entries(relatedProps)) {
-                        if (relatedKey.toLowerCase().includes('status') && 
-                            (relatedValue.type === 'select' || relatedValue.type === 'status')) {
-                          status = relatedValue.select?.name || relatedValue.status?.name || '';
-                        } else if (relatedKey.toLowerCase().includes('change') || 
-                                  relatedKey.toLowerCase().includes('date') || 
-                                  relatedKey.toLowerCase().includes('at')) {
-                          if (relatedValue.type === 'date' && relatedValue.date) {
-                            date = new Date(relatedValue.date.start);
-                          }
-                        }
-                      }
-                      
-                      if (status && date) {
-                        statusChanges.push({
-                          status,
-                          date,
-                          by: 'From Relation'
-                        });
-                      }
-                    } catch (relatedError) {
-                      logToFile(`Error fetching related page: ${relatedError.message}`);
-                    }
-                  }
-                }
-              }
-            }
-            
-            // Check for the current status
-            if (props.Status && props.Status.status && props.Status.status.name) {
-              // Add current status if not already in the list
-              const currentStatus = props.Status.status.name;
-              const lastModified = page.last_edited_time;
-              
-              // Check if this status is already in our list
-              const hasStatus = statusChanges.some(change => 
-                change.status.toLowerCase() === currentStatus.toLowerCase()
-              );
-              
-              if (!hasStatus) {
-                statusChanges.push({
-                  status: currentStatus,
-                  date: new Date(lastModified),
-                  by: 'Current'
-                });
-              }
             }
           }
           
           // Sort changes by date
           statusChanges.sort((a, b) => a.date - b.date);
           
-          logToFile(`Found ${statusChanges.length} total status changes`);
-          
+          // If we still have no status changes, inform the user
           if (statusChanges.length === 0) {
             await interaction.editReply(`No status change history found for project ${targetProjectCode}.`);
             return;
@@ -2667,7 +2490,7 @@ Example Output: {
           }
           
           // Get Notion URL for button
-          const notionUrl = getNotionPageUrl(pageId);
+          const notionUrl = getNotionPageUrl(page.id);
           
           // Create button component if there's a Notion URL
           const components = [];
