@@ -527,6 +527,53 @@ async function findProjectByQuery(query) {
   }
 }
 
+// Function to fetch Notion database schema details
+async function fetchDatabaseSchema() {
+  if (!notion || !DB) {
+    logToFile('Cannot fetch database schema: Notion client or database ID not initialized');
+    return null;
+  }
+  
+  try {
+    logToFile(`Fetching database schema for database ID: ${DB}`);
+    const response = await notion.databases.retrieve({ database_id: DB });
+    
+    if (!response || !response.properties) {
+      logToFile('Invalid response or no properties found in database schema');
+      return null;
+    }
+    
+    // Extract property information
+    const properties = {};
+    
+    for (const [propName, propDetails] of Object.entries(response.properties)) {
+      properties[propName] = {
+        type: propDetails.type,
+        name: propName
+      };
+      
+      // For select properties, extract the options
+      if (propDetails.type === 'select' && propDetails.select?.options) {
+        properties[propName].options = propDetails.select.options.map(opt => opt.name);
+      }
+      
+      // For multi-select properties, extract the options
+      if (propDetails.type === 'multi_select' && propDetails.multi_select?.options) {
+        properties[propName].options = propDetails.multi_select.options.map(opt => opt.name);
+      }
+    }
+    
+    logToFile(`Successfully fetched database schema with ${Object.keys(properties).length} properties`);
+    return properties;
+  } catch (error) {
+    logToFile(`Error fetching database schema: ${error.message}`);
+    return null;
+  }
+}
+
+// Call this function once at startup to cache the schema
+let notionSchema = null;
+
 // When the client is ready, run this code
 client.once('ready', () => {
   console.log('Bot is ready!');
@@ -540,6 +587,23 @@ client.once('ready', () => {
   
   // Validate cron expressions
   validateCronExpressions();
+  
+  // Fetch Notion database schema if Notion is configured
+  if (notion && DB) {
+    fetchDatabaseSchema().then(schema => {
+      notionSchema = schema;
+      if (schema) {
+        logToFile('Notion database schema loaded successfully');
+        
+        // Log available properties and their types
+        Object.entries(schema).forEach(([name, details]) => {
+          const optionsInfo = details.options ? 
+            ` with ${details.options.length} options: ${details.options.join(', ')}` : '';
+          logToFile(`- Property "${name}" (${details.type})${optionsInfo}`);
+        });
+      }
+    });
+  }
   
   // Register commands on startup
   try {
@@ -1091,11 +1155,35 @@ client.on('interactionCreate', async interaction => {
               properties: propertiesToUpdate
             });
             
+            // Get Notion URL for button
+            const notionUrl = getNotionPageUrl(page.id);
+            
             embed.setFooter({ text: '✅ Notion updated successfully' });
+            
+            // Create button component if there's a Notion URL
+            const components = [];
+            if (notionUrl) {
+              const row = new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setLabel('View in Notion')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(notionUrl)
+                );
+              components.push(row);
+            }
+            
+            // Send the response with the button
+            await interaction.editReply({ 
+              embeds: [embed],
+              components: components.length > 0 ? components : undefined
+            });
+            
             logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(propertiesToUpdate).join(', ')}`);
           } catch (notionError) {
             logToFile(`Notion update error: ${notionError.message}`);
             embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
+            await interaction.editReply({ embeds: [embed] });
           }
         }
         
@@ -1432,14 +1520,39 @@ Example Output: {
               properties: notionProperties
             });
             
+            // Get Notion URL for page
+            const notionUrl = getNotionPageUrl(project.page.id);
+            
             logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(notionProperties).join(', ')}`);
             embed.setFooter({ text: '✅ Notion updated successfully' });
+            
+            // Create button component if there's a Notion URL
+            const components = [];
+            if (notionUrl) {
+              const row = new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setLabel('View in Notion')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(notionUrl)
+                );
+              components.push(row);
+            }
+            
+            // Send the response with button
+            await interaction.editReply({ 
+              embeds: [embed],
+              components: components.length > 0 ? components : undefined
+            });
+            
           } catch (notionError) {
             logToFile(`Notion update error: ${notionError.message}`);
             embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
+            await interaction.editReply({ embeds: [embed] });
           }
         } else {
           embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
+          await interaction.editReply({ embeds: [embed] });
         }
         
         // Send response
@@ -1499,15 +1612,63 @@ Example Output: {
         // Set the appropriate property based on the subcommand
         switch (subcommand) {
           case 'status':
-            notionProperties['Status'] = { select: { name: value } };
+            // Use schema information if available
+            if (notionSchema) {
+              // Find the right property name from schema
+              const statusProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'status' && 
+                notionSchema[propName].type === 'select'
+              );
+              
+              if (statusProperty) {
+                logToFile(`Using exact property name from schema: "${statusProperty}"`);
+                notionProperties[statusProperty] = { select: { name: value } };
+              } else {
+                // Fallback to lowercase as that's what the API seems to expect
+                logToFile('Status property not found in schema, using lowercase "status"');
+                notionProperties['status'] = { select: { name: value } };
+              }
+            } else {
+              // Fallback to lowercase if schema not available
+              notionProperties['status'] = { select: { name: value } };
+            }
             break;
             
           case 'caption_status':
-            notionProperties['Caption Status'] = { select: { name: value } };
+            // Similar approach for caption_status
+            if (notionSchema) {
+              const captionStatusProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'caption status' && 
+                notionSchema[propName].type === 'select'
+              );
+              
+              if (captionStatusProperty) {
+                logToFile(`Using exact property name from schema: "${captionStatusProperty}"`);
+                notionProperties[captionStatusProperty] = { select: { name: value } };
+              } else {
+                notionProperties['Caption Status'] = { select: { name: value } };
+              }
+            } else {
+              notionProperties['Caption Status'] = { select: { name: value } };
+            }
             break;
             
           case 'category':
-            notionProperties['Category'] = { select: { name: value } };
+            if (notionSchema) {
+              const categoryProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'category' && 
+                notionSchema[propName].type === 'select'
+              );
+              
+              if (categoryProperty) {
+                logToFile(`Using exact property name from schema: "${categoryProperty}"`);
+                notionProperties[categoryProperty] = { select: { name: value } };
+              } else {
+                notionProperties['Category'] = { select: { name: value } };
+              }
+            } else {
+              notionProperties['Category'] = { select: { name: value } };
+            }
             break;
             
           case 'date':
