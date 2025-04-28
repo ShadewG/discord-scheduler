@@ -157,6 +157,24 @@ const commands = {
             { name: 'Wrap-Up Meeting', value: 'Wrap-Up Meeting' }
           ))
       .addBooleanOption(option => option.setName('notification').setDescription('Send as a notification (5 min before) instead of the main message')),
+      
+    // Add the test_schedule command for debugging
+    new SlashCommandBuilder().setName('test_schedule').setDescription('Test sending a scheduled message (admin only)')
+      .addStringOption(option => 
+        option.setName('message_type')
+          .setDescription('The type of message to test')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Social Fika', value: 'Social Fika' },
+            { name: 'Deep Work AM', value: 'Deep Work AM' },
+            { name: 'Fika Break', value: 'Fika Break' },
+            { name: 'Deep Work Continue', value: 'Deep Work Continue' },
+            { name: 'Lunch Break', value: 'Lunch Break' },
+            { name: 'Planning Huddle', value: 'Planning Huddle' },
+            { name: 'Deep Work PM', value: 'Deep Work PM' },
+            { name: 'Wrap-Up Meeting', value: 'Wrap-Up Meeting' }
+          ))
+      .addBooleanOption(option => option.setName('remove_tag').setDescription('Remove @Schedule tag from message')),
   ],
   
   // New utility commands

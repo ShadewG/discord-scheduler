@@ -26,14 +26,14 @@ const TEAM_ROLE_ID = '1364657163598823474';
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
-  { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☕ <@&${TEAM_ROLE_ID}> **Social Fika** @Schedule - Casual check-in + daily sync (9:00-9:20).`, notify: true },
-  { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: '🧠 @Schedule **Deep Work** starts now — focus mode ON (9:20-11:00).' },
-  { tag: 'Fika Break', cron: '0 11 * * 1-5', text: '🍪 @Schedule **Fika Break** - Short break time! (11:00-11:20)', notify: true },
-  { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: '🧠 @Schedule **Deep Work** continues — back to focused mode (11:20-13:00).' },
-  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** @Schedule — enjoy! Back at 13:45.`, notify: true },
-  { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** @Schedule - Quick team sync (13:45-14:00).`, notify: true },
-  { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: '🧠 @Schedule **Deep Work PM** - Project execution and reviews (14:00-17:00).' },
-  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: '👋 @Schedule **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).', notify: true }
+  { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☕ <@&${TEAM_ROLE_ID}> **Social Fika** - Casual check-in + daily sync (9:00-9:20).`, notify: true },
+  { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: '🧠 **Deep Work** starts now — focus mode ON (9:20-11:00).' },
+  { tag: 'Fika Break', cron: '0 11 * * 1-5', text: '🍪 **Fika Break** - Short break time! (11:00-11:20)', notify: true },
+  { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: '🧠 **Deep Work** continues — back to focused mode (11:20-13:00).' },
+  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** — enjoy! Back at 13:45.`, notify: true },
+  { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
+  { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: '🧠 **Deep Work PM** - Project execution and reviews (14:00-17:00).' },
+  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: '👋 **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).', notify: true }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -70,7 +70,7 @@ const notificationJobs = jobs
     return {
       tag: `${job.tag} Notification`,
       cron: notifyCron,
-      text: `🔔 <@&${TEAM_ROLE_ID}> Heads-up @Schedule — **${meetingName}** in 5 minutes (${formattedHour}:${formattedMinute}).`,
+      text: `🔔 <@&${TEAM_ROLE_ID}> Heads-up — **${meetingName}** in 5 minutes (${formattedHour}:${formattedMinute}).`,
       isNotification: true
     };
   });
@@ -416,21 +416,53 @@ const client = new Client({
 });
 
 // Function to send a message to the specified channel
-function ping(message) {
+async function ping(message) {
   try {
+    // Log that we're attempting to send a message
+    logToFile(`Attempting to send schedule message: ${message}`);
+    
     // Find the Schedule channel by ID
     const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
     
     if (channel) {
-      // Send the message
-      channel.send(message)
-        .then(() => logToFile(`Sent schedule message to #${channel.name}: ${message}`))
-        .catch(err => logToFile(`Error sending message: ${err.message}`));
+      // Log channel details
+      logToFile(`Found channel #${channel.name} (${channel.id})`);
+      
+      // Check permissions
+      const permissions = channel.permissionsFor(client.user);
+      if (!permissions) {
+        logToFile(`ERROR: Cannot check permissions for channel #${channel.name}`);
+        return null;
+      } else if (!permissions.has('SendMessages')) {
+        logToFile(`ERROR: Bot doesn't have 'Send Messages' permission in #${channel.name}`);
+        return null;
+      }
+      
+      // Fix: Use await to properly wait for the message to be sent
+      try {
+        const sentMessage = await channel.send(message);
+        logToFile(`✅ Successfully sent schedule message to #${channel.name}: ${message}`);
+        return sentMessage;
+      } catch (err) {
+        logToFile(`❌ Error sending message to #${channel.name}: ${err.message}`);
+        console.error(`Failed to send message to #${channel.name}:`, err);
+        throw err; // Re-throw to handle it in the calling function
+      }
     } else {
-      logToFile(`Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
+      logToFile(`❌ ERROR: Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
+      console.error(`Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
+      
+      // Log all available channels for debugging
+      logToFile('Available channels:');
+      client.channels.cache.forEach(ch => {
+        logToFile(`- ${ch.id}: #${ch.name || 'unnamed'} (${ch.type})`);
+      });
+      return null;
     }
   } catch (error) {
-    logToFile(`Error in ping function: ${error.message}`);
+    logToFile(`❌ Critical error in ping function: ${error.message}`);
+    console.error('Critical error in ping function:', error);
+    throw error; // Re-throw to handle it in the calling function
   }
 }
 
@@ -768,7 +800,103 @@ client.once('ready', () => {
   
   // Check next execution times
   checkAllNextExecutionTimes();
+  
+  // Start a health check interval to monitor the schedule system
+  startScheduleHealthCheck();
 });
+
+// Function to perform a regular health check on the schedule
+function startScheduleHealthCheck() {
+  logToFile('Starting schedule health check system');
+  
+  // Run a health check every hour
+  setInterval(() => {
+    try {
+      logToFile('=== SCHEDULE HEALTH CHECK ===');
+      
+      // Check if all jobs are still registered and active
+      const scheduledJobCount = activeJobs.size;
+      const totalJobCount = jobs.length;
+      
+      logToFile(`Active jobs: ${scheduledJobCount}/${totalJobCount}`);
+      
+      if (scheduledJobCount < totalJobCount) {
+        logToFile('⚠️ Warning: Some jobs are missing. Rescheduling all jobs...');
+        scheduleAllJobs();
+      } else {
+        logToFile('✅ All jobs are scheduled');
+      }
+      
+      // Check for upcoming executions
+      const now = new Date();
+      const upcomingJobs = [];
+      
+      for (const [tag, job] of activeJobs.entries()) {
+        try {
+          // Use the job's next execution time
+          const nextDate = job.nextDate().toDate();
+          const diffMs = nextDate - now;
+          const minutes = Math.floor(diffMs / (1000 * 60));
+          
+          if (minutes < 60) { // If less than an hour away
+            upcomingJobs.push({
+              tag,
+              minutes,
+              nextDate: nextDate.toLocaleString('en-US', { timeZone: TZ })
+            });
+          }
+        } catch (err) {
+          logToFile(`Error checking next execution for ${tag}: ${err.message}`);
+        }
+      }
+      
+      if (upcomingJobs.length > 0) {
+        logToFile(`Upcoming jobs in the next hour (${upcomingJobs.length}):`);
+        upcomingJobs.forEach(job => {
+          logToFile(`- ${job.tag}: in ${job.minutes} minutes (${job.nextDate})`);
+        });
+      } else {
+        logToFile('No upcoming jobs in the next hour');
+      }
+      
+      logToFile('=== HEALTH CHECK COMPLETE ===');
+    } catch (error) {
+      logToFile(`Error in schedule health check: ${error.message}`);
+    }
+  }, 60 * 60 * 1000); // Every hour
+  
+  // Also run once immediately
+  setTimeout(() => {
+    logToFile('Running initial health check...');
+    try {
+      // Check if all jobs are scheduled
+      const scheduledJobCount = activeJobs.size;
+      const totalJobCount = jobs.length;
+      
+      logToFile(`Initial job count: ${scheduledJobCount}/${totalJobCount}`);
+      
+      // Check channel accessibility
+      const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
+      if (channel) {
+        logToFile(`✅ Schedule channel found: #${channel.name} (${channel.id})`);
+        
+        // Check permissions
+        const permissions = channel.permissionsFor(client.user);
+        if (!permissions) {
+          logToFile(`⚠️ Cannot check permissions for channel #${channel.name}`);
+        } else if (!permissions.has('SendMessages')) {
+          logToFile(`⚠️ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
+        } else {
+          logToFile(`✅ Bot has 'Send Messages' permission in the schedule channel`);
+        }
+      } else {
+        logToFile(`⚠️ Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+      }
+    } catch (error) {
+      logToFile(`Error in initial health check: ${error.message}`);
+    }
+  }, 5000); // After 5 seconds
+}
 
 // Handle slash command interactions
 client.on('interactionCreate', async interaction => {
@@ -784,7 +912,7 @@ client.on('interactionCreate', async interaction => {
     // Handle the /where command
     if (commandName === 'where') {
       try {
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -1028,7 +1156,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral });
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Current Berlin time
@@ -1108,7 +1236,7 @@ client.on('interactionCreate', async interaction => {
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral });
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Check if channel is linked to a Notion page
@@ -1355,7 +1483,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral });
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Check if channel is linked to a project
@@ -1429,7 +1557,7 @@ client.on('interactionCreate', async interaction => {
         const text = interaction.options.getString('text');
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Check if OpenAI is configured
@@ -2116,7 +2244,7 @@ Example Output: {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral });
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
         // Create and send the schedule embed
@@ -2201,7 +2329,7 @@ Example Output: {
         const description = interaction.options.getString('description') || '';
         const usersString = interaction.options.getString('users') || '';
         
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: [1 << 6] });
         hasResponded = true;
         
         // Extract user IDs from the users string
@@ -2526,6 +2654,90 @@ Example Output: {
       }
     }
     
+    // Handle the /test_schedule command
+    else if (commandName === 'test_schedule') {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        const messageType = interaction.options.getString('message_type') || 'Social Fika';
+        const removeTag = interaction.options.getBoolean('remove_tag') || false;
+        
+        // Find the job
+        const job = jobs.find(j => j.tag === messageType);
+        
+        if (!job) {
+          await interaction.editReply(`❌ No job found with tag "${messageType}". Available tags: ${jobs.map(j => j.tag).join(', ')}`);
+          return;
+        }
+        
+        logToFile(`=== TEST SCHEDULE EXECUTION ===`);
+        logToFile(`Manually testing schedule message for "${messageType}"`);
+        logToFile(`Channel ID: ${SCHEDULE_CHANNEL_ID}`);
+        
+        // Check if the channel exists
+        const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
+        if (!channel) {
+          logToFile(`❌ Channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+          await interaction.editReply(`❌ Channel with ID ${SCHEDULE_CHANNEL_ID} not found! Please check your .env configuration.`);
+          
+          // Log all available channels
+          logToFile('Available text channels:');
+          const availableChannels = client.channels.cache
+            .filter(ch => ch.type === 0) // Text channels
+            .map(ch => `${ch.id}: #${ch.name}`);
+          
+          logToFile(availableChannels.join('\n'));
+          await interaction.editReply(`❌ Channel not found. Available text channels:\n${availableChannels.join('\n')}`);
+          return;
+        }
+        
+        // Test permissions
+        const permissions = channel.permissionsFor(client.user);
+        if (!permissions) {
+          await interaction.editReply(`❌ Cannot check permissions for channel #${channel.name}`);
+          return;
+        }
+        
+        if (!permissions.has('SendMessages')) {
+          await interaction.editReply(`❌ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
+          return;
+        }
+        
+        // Create message text, with option to remove @Schedule tag
+        let messageText = job.text;
+        if (removeTag) {
+          messageText = job.text.replace('@Schedule', '').trim();
+          logToFile(`Testing with @Schedule tag removed: "${messageText}"`);
+        }
+        
+        // First, let's also try without any formatting to see if that's the issue
+        try {
+          // Try sending a plain, simple message first
+          const plainMessage = `Testing schedule system: ${messageType}`;
+          logToFile(`First sending a plain test message: "${plainMessage}"`);
+          
+          const plainResult = await channel.send(plainMessage);
+          logToFile(`✅ Plain test message sent successfully, ID: ${plainResult.id}`);
+          
+          // Now try the actual schedule message
+          logToFile(`Now sending the actual schedule message: "${messageText}"`);
+          const result = await ping(messageText);
+          
+          await interaction.editReply(`✅ Test messages sent successfully to #${channel.name}. Check the channel and logs.`);
+        } catch (sendError) {
+          await interaction.editReply(`❌ Error sending message: ${sendError.message}`);
+        }
+      } catch (error) {
+        logToFile(`Error in /test_schedule command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
     // Handle other commands here
     // ...
     
@@ -2624,13 +2836,23 @@ function scheduleAllJobs() {
     try {
       logToFile(`Scheduling job: ${job.tag} (${job.cron})`);
       
-      const scheduledJob = cron.schedule(job.cron, () => {
+      const scheduledJob = cron.schedule(job.cron, async () => {
         // Log the execution with timestamp
         const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
         logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
+        logToFile(`Message to send: ${job.text}`);
         
-        // Send the message
-        ping(job.text);
+        // Send the message with better error handling
+        try {
+          const sentMessage = await ping(job.text);
+          if (sentMessage) {
+            logToFile(`✅ Job ${job.tag} executed successfully, message ID: ${sentMessage.id}`);
+          } else {
+            logToFile(`⚠️ Job ${job.tag} did not return a sent message - likely failed`);
+          }
+        } catch (error) {
+          logToFile(`❌ Error executing job ${job.tag}: ${error.message}`);
+        }
       }, options);
       
       activeJobs.set(job.tag, scheduledJob);
