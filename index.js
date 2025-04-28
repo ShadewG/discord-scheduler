@@ -871,97 +871,16 @@ client.once('ready', () => {
 
 // Function to perform a regular health check on the schedule
 function startScheduleHealthCheck() {
-  logToFile('Starting schedule health check system');
-  
-  // Run a health check every hour
-  setInterval(() => {
-    try {
-      logToFile('=== SCHEDULE HEALTH CHECK ===');
-      
-      // Check if all jobs are still registered and active
-      const scheduledJobCount = activeJobs.size;
-      const totalJobCount = jobs.length;
-      
-      logToFile(`Active jobs: ${scheduledJobCount}/${totalJobCount}`);
-      
-      if (scheduledJobCount < totalJobCount) {
-        logToFile('⚠️ Warning: Some jobs are missing. Rescheduling all jobs...');
-        scheduleAllJobs();
-      } else {
-        logToFile('✅ All jobs are scheduled');
-      }
-      
-      // Check for upcoming executions
-      const now = new Date();
-      const upcomingJobs = [];
-      
-      for (const [tag, job] of activeJobs.entries()) {
-        try {
-          // Use the job's next execution time
-          const nextDate = job.nextDate().toDate();
-          const diffMs = nextDate - now;
-          const minutes = Math.floor(diffMs / (1000 * 60));
-          
-          if (minutes < 60) { // If less than an hour away
-            upcomingJobs.push({
-              tag,
-              minutes,
-              nextDate: nextDate.toLocaleString('en-US', { timeZone: TZ })
-            });
-          }
-        } catch (err) {
-          logToFile(`Error checking next execution for ${tag}: ${err.message}`);
-        }
-      }
-      
-      if (upcomingJobs.length > 0) {
-        logToFile(`Upcoming jobs in the next hour (${upcomingJobs.length}):`);
-        upcomingJobs.forEach(job => {
-          logToFile(`- ${job.tag}: in ${job.minutes} minutes (${job.nextDate})`);
-        });
-      } else {
-        logToFile('No upcoming jobs in the next hour');
-      }
-      
-      logToFile('=== HEALTH CHECK COMPLETE ===');
-    } catch (error) {
-      logToFile(`Error in schedule health check: ${error.message}`);
-    }
-  }, 60 * 60 * 1000); // Every hour
-  
-  // Also run once immediately
   setTimeout(() => {
-    logToFile('Running initial health check...');
-    try {
-      // Check if all jobs are scheduled
-      const scheduledJobCount = activeJobs.size;
-      const totalJobCount = jobs.length;
-      
-      logToFile(`Initial job count: ${scheduledJobCount}/${totalJobCount}`);
-      
-      // Check channel accessibility
-      const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
-      if (channel) {
-        logToFile(`✅ Schedule channel found: #${channel.name} (${channel.id})`);
-        
-        // Check permissions
-        const permissions = channel.permissionsFor(client.user);
-        if (!permissions) {
-          logToFile(`⚠️ Cannot check permissions for channel #${channel.name}`);
-        } else if (!permissions.has('SendMessages')) {
-          logToFile(`⚠️ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
-        } else {
-          logToFile(`✅ Bot has 'Send Messages' permission in the schedule channel`);
-        }
-      } else {
-        logToFile(`⚠️ Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
-      }
-    } catch (error) {
-      logToFile(`Error in initial health check: ${error.message}`);
+    // Verify that all jobs are scheduled
+    logToFile(`Schedule health check: activeJobs.size=${activeJobs.size}, expected=${jobs.length}`);
+    
+    if (activeJobs.size < jobs.length) {
+      logToFile(`⚠️ Schedule health check: ${jobs.length - activeJobs.size} jobs not scheduled. Re-scheduling all jobs.`);
+      scheduleAllJobs();
     }
   }, 5000); // After 5 seconds
 }
-
 
 // Function to check status and trigger notifications
 async function checkStatusAndNotify(projectCode, newStatus, channelId) {
@@ -1902,9 +1821,9 @@ Example Output: {
             
             // If setting status, log detailed information
             if (subcommand === 'status') {
-      // Check status watchers and send notifications if needed
-      checkStatusAndNotify(projectCode, value, channel.id);
-      
+              // Check status watchers and send notifications if needed
+              checkStatusAndNotify(projectCode, value, channel.id);
+              
               // Try multiple variations of the property name
               const possibleNames = ['Status', 'status', 'STATUS'];
               
@@ -2549,9 +2468,348 @@ Example Output: {
         const projectCode = interaction.options.getString('project');
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-    await interaction.deferReply({ flags: ephemeral ? [1 << 6] : []})
-
-
+        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        hasResponded = true;
+        
+        // Check if Notion is configured
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
+        
+        // Determine which project to look up
+        let targetProjectCode = projectCode;
+        
+        // If no project specified, try to get from channel name
+        if (!targetProjectCode) {
+          const channelName = interaction.channel.name.toLowerCase();
+          const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+          
+          if (codeMatch) {
+            targetProjectCode = codeMatch[0].toUpperCase();
+          } else {
+            await interaction.editReply('❌ Please specify a project code or use this command in a project-specific channel.');
+            return;
+          }
+        }
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(targetProjectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${targetProjectCode}" in Notion database.`);
+          return;
+        }
+        
+        logToFile(`Fetching changelog for project ${targetProjectCode}`);
+        
+        try {
+          // Basic information about the project
+          let statusChanges = [];
+          const page = project.page;
+          
+          // Get the current status if available
+          let currentStatus = "Unknown";
+          if (page.properties.Status && page.properties.Status.status && page.properties.Status.status.name) {
+            currentStatus = page.properties.Status.status.name;
+            statusChanges.push({
+              status: currentStatus,
+              date: new Date(page.last_edited_time),
+              by: 'Current'
+            });
+          }
+          
+          // Query for all pages related to this project that have status changes
+          // We'll search for pages with the project code in their title
+          const databaseId = process.env.NOTION_DATABASE_ID || global.NOTION_DATABASE_ID;
+          logToFile(`Searching for status changes in database ${databaseId} for project ${targetProjectCode}`);
+          
+          const response = await notion.databases.query({
+            database_id: databaseId,
+            filter: {
+              property: "Project name",
+              title: {
+                contains: targetProjectCode
+              }
+            },
+            sorts: [
+              {
+                property: "created_time",
+                direction: "ascending"
+              }
+            ],
+            page_size: 100
+          });
+          
+          logToFile(`Found ${response.results.length} pages matching project ${targetProjectCode}`);
+          
+          // Extract status changes from all pages
+          for (const relatedPage of response.results) {
+            if (relatedPage.id === page.id) {
+              // Skip the main page as we already processed it
+              continue;
+            }
+            
+            try {
+              // Try to extract status from properties
+              let pageStatus = null;
+              // Try different property names for Status
+              const statusProps = ["Status", "status", "Stage", "Pipeline Stage"];
+              
+              for (const propName of statusProps) {
+                if (relatedPage.properties[propName] && 
+                   (relatedPage.properties[propName].status?.name || 
+                    relatedPage.properties[propName].select?.name)) {
+                  pageStatus = relatedPage.properties[propName].status?.name || 
+                              relatedPage.properties[propName].select?.name;
+                  break;
+                }
+              }
+              
+              if (pageStatus) {
+                statusChanges.push({
+                  status: pageStatus,
+                  date: new Date(relatedPage.created_time),
+                  page: relatedPage,
+                  id: relatedPage.id
+                });
+              }
+            } catch (error) {
+              logToFile(`Error processing related page: ${error.message}`);
+              // Continue with other pages
+            }
+          }
+          
+          // Go through properties to find potential status dates
+          for (const [key, value] of Object.entries(page.properties)) {
+            // Look for date properties that might indicate status changes
+            if (value.type === 'date' && value.date) {
+              if (key.toLowerCase().includes('date') || 
+                  key.toLowerCase().includes('time') || 
+                  key.toLowerCase().includes('changed') || 
+                  key.toLowerCase().includes('updated')) {
+                
+                // Try to extract a status from the property name
+                const statusMatch = key.match(/^(.*?)\s*(?:date|time|changed|updated)/i);
+                if (statusMatch && statusMatch[1].trim()) {
+                  statusChanges.push({
+                    status: statusMatch[1].trim(),
+                    date: new Date(value.date.start),
+                    by: 'From Property'
+                  });
+                  continue;
+                }
+              }
+            }
+            
+            // Check for rich text properties that may contain changelog info
+            if (value.type === 'rich_text' && value.rich_text.length > 0 &&
+               (key.toLowerCase().includes('history') || 
+                key.toLowerCase().includes('changelog') || 
+                key.toLowerCase().includes('log'))) {
+              
+              const text = value.rich_text.map(t => t.plain_text).join('');
+              // Split into separate entries (by newline or semicolon)
+              const entries = text.split(/[\n;]/);
+              
+              for (const entry of entries) {
+                if (!entry.trim()) continue;
+                
+                // Try to find date-status or status-date patterns
+                const dateStatusMatch = entry.match(/(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})[\s:]+([A-Za-z\s/]+)/i);
+                const statusDateMatch = entry.match(/([A-Za-z\s/]+)[\s:\(]+(\d{4}-\d{2}-\d{2}|\w+ \d{1,2},?\s+\d{4})/i);
+                
+                if (dateStatusMatch) {
+                  try {
+                    statusChanges.push({
+                      status: dateStatusMatch[2].trim(),
+                      date: new Date(dateStatusMatch[1]),
+                      by: 'From Text'
+                    });
+                  } catch (e) {
+                    logToFile(`Error parsing date: ${dateStatusMatch[1]}`);
+                  }
+                } else if (statusDateMatch) {
+                  try {
+                    statusChanges.push({
+                      status: statusDateMatch[1].trim(),
+                      date: new Date(statusDateMatch[2]),
+                      by: 'From Text'
+                    });
+                  } catch (e) {
+                    logToFile(`Error parsing date: ${statusDateMatch[2]}`);
+                  }
+                }
+              }
+            }
+          }
+          
+          // If we still have no status changes, create a basic history
+          if (statusChanges.length === 0) {
+            statusChanges.push({
+              status: 'Created',
+              date: new Date(page.created_time),
+              by: 'System'
+            });
+            
+            // If we have an update time different from create time, add that
+            if (page.last_edited_time !== page.created_time) {
+              const currentStatus = page.properties.Status?.status?.name || 'Updated';
+              statusChanges.push({
+                status: currentStatus,
+                date: new Date(page.last_edited_time),
+                by: 'Current'
+              });
+            }
+          }
+          
+          // Sort changes by date
+          statusChanges.sort((a, b) => a.date - b.date);
+          
+          // Remove duplicates (same status in sequence)
+          const uniqueChanges = [];
+          let lastStatus = null;
+          
+          for (const change of statusChanges) {
+            if (change.status !== lastStatus) {
+              uniqueChanges.push(change);
+              lastStatus = change.status;
+            }
+          }
+          
+          statusChanges = uniqueChanges;
+          
+          // If we still have no status changes, inform the user
+          if (statusChanges.length === 0) {
+            await interaction.editReply(`No status change history found for project ${targetProjectCode}.`);
+            return;
+          }
+          
+          // Calculate days between changes
+          for (let i = 1; i < statusChanges.length; i++) {
+            const prevDate = statusChanges[i-1].date;
+            const currDate = statusChanges[i].date;
+            const diffDays = Math.round((currDate - prevDate) / (1000 * 60 * 60 * 24));
+            statusChanges[i].daysSincePrevious = diffDays;
+          }
+          
+          // Get project name
+          const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || targetProjectCode;
+          
+          // Create an embed to display the changelog
+          const embed = new EmbedBuilder()
+            .setTitle(`📋 Changelog for ${targetProjectCode}`)
+            .setColor(0x0099FF)
+            .setDescription(`Status history for **${projectName}**\n\n**Current Status:** ${currentStatus}`)
+            .setTimestamp();
+          
+          // Format dates
+          const formatDate = (date) => {
+            return date.toLocaleDateString('en-US', { 
+              month: 'short', 
+              day: 'numeric',
+              year: 'numeric'
+            });
+          };
+          
+          // Create a detailed timeline view
+          let timelineText = '';
+          
+          // Add fields for each status change
+          statusChanges.forEach((change, index) => {
+            const formattedDate = formatDate(change.date);
+            const daysInfo = change.daysSincePrevious ? 
+              ` (${change.daysSincePrevious} day${change.daysSincePrevious !== 1 ? 's' : ''})` : 
+              '';
+            
+            const statusBar = index > 0 ? '↓ ' + '─'.repeat(5) + daysInfo + '\n' : '';
+            timelineText += `${statusBar}**${index + 1}. ${change.status}** - ${formattedDate}\n`;
+            
+            // Add additional details if available (limit to first 8 changes to avoid hitting character limits)
+            if (index < 8) {
+              embed.addFields({
+                name: `${index + 1}. ${change.status}`,
+                value: `📅 ${formattedDate}${daysInfo}`
+              });
+            }
+          });
+          
+          // If there are more than 8 changes, add a note
+          if (statusChanges.length > 8) {
+            embed.addFields({
+              name: `+${statusChanges.length - 8} more changes`,
+              value: `See timeline for complete history`
+            });
+          }
+          
+          // Add the timeline as a separate field
+          if (statusChanges.length > 1) {
+            embed.addFields({
+              name: '⏳ Complete Timeline',
+              value: timelineText.substring(0, 1024) // Discord field value limit
+            });
+          }
+          
+          // Calculate total days in pipeline
+          if (statusChanges.length >= 2) {
+            const firstDate = statusChanges[0].date;
+            const lastDate = statusChanges[statusChanges.length - 1].date;
+            const totalDays = Math.round((lastDate - firstDate) / (1000 * 60 * 60 * 24));
+            
+            embed.addFields({
+              name: '⏱️ Total Time in Pipeline',
+              value: `${totalDays} day${totalDays !== 1 ? 's' : ''}`
+            });
+          }
+          
+          // Calculate average days per stage
+          if (statusChanges.length > 2) {
+            const totalDaysTracked = statusChanges.reduce((sum, change) => 
+              sum + (change.daysSincePrevious || 0), 0);
+            const stages = statusChanges.length - 1; // Number of transitions
+            const avgDays = (totalDaysTracked / stages).toFixed(1);
+            
+            embed.addFields({
+              name: '📊 Average Time Per Stage',
+              value: `${avgDays} days`
+            });
+          }
+          
+          // Get Notion URL for button
+          const notionUrl = getNotionPageUrl(page.id);
+          
+          // Create button component if there's a Notion URL
+          const components = [];
+          if (notionUrl) {
+            const row = new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setLabel('View in Notion')
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(notionUrl)
+              );
+            components.push(row);
+          }
+          
+          // Send the response
+          await interaction.editReply({
+            embeds: [embed],
+            components: components.length > 0 ? components : undefined
+          });
+          
+        } catch (notionError) {
+          logToFile(`Error fetching changelog: ${notionError.message}`);
+          await interaction.editReply(`❌ Error fetching changelog: ${notionError.message}`);
+        }
+        
+      } catch (error) {
+        logToFile(`Error in /changelog command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error displaying changelog: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error displaying changelog: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
     
     // Handle the /test_schedule command
     else if (commandName === 'test_schedule') {
@@ -2600,9 +2858,9 @@ Example Output: {
         
         if (!permissions.has('SendMessages')) {
           await interaction.editReply(`❌ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
-            return;
-          }
-          
+          return;
+        }
+        
         // Create message text, with option to remove @Schedule tag
         let messageText = job.text;
         if (removeTag) {
@@ -3169,6 +3427,289 @@ async function checkStatusAndNotify(projectCode, newStatus, channelId) {
         }
         
         // Continue with the existing code...
+        
+        // For any property update, try to find the best property name match
+        if (subcommand === 'status' || subcommand === 'caption_status' || subcommand === 'category') {
+          // Get the page properties
+          const pageProperties = project.page.properties;
+          
+          // Normalize expected property name based on subcommand
+          let propertyNameToFind = '';
+          if (subcommand === 'status') {
+            propertyNameToFind = 'Status';
+          } else if (subcommand === 'caption_status') {
+            propertyNameToFind = 'Caption Status';
+          } else if (subcommand === 'category') {
+            propertyNameToFind = 'Category';
+          }
+          
+          // Find the best property match - log all property names for debugging
+          logToFile(`Available property names: ${Object.keys(pageProperties).join(', ')}`);
+          
+          const bestMatch = findBestPropertyMatch(pageProperties, propertyNameToFind);
+          
+          if (bestMatch) {
+            logToFile(`Using best match property name: "${bestMatch}" for "${propertyNameToFind}"`);
+            notionProperties[bestMatch] = { select: { name: value } };
+            
+            // Log extra debugging info about the property
+            logToFile(`Property details: ${JSON.stringify(pageProperties[bestMatch])}`);
+            
+            try {
+              // Update the Notion page
+              await notion.pages.update({
+                page_id: project.page.id, // Use the actual page ID from the page object
+                properties: notionProperties
+              });
+              
+              // Get the Notion URL for the page
+              const notionUrl = getNotionPageUrl(project.page.id);
+              
+              // Create components with button if there's a Notion URL
+              const components = [];
+              if (notionUrl) {
+                const row = new ActionRowBuilder()
+                  .addComponents(
+                    new ButtonBuilder()
+                      .setLabel('View in Notion')
+                      .setStyle(ButtonStyle.Link)
+                      .setURL(notionUrl)
+                  );
+                components.push(row);
+              }
+              
+              // Success message
+              await interaction.editReply({
+                content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
+                components: components.length > 0 ? components : undefined
+              });
+              
+              // Also send a non-ephemeral message to channel for visibility
+              await interaction.channel.send(
+                `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+              );
+              
+              // Skip the rest of the function since we've handled it
+              return;
+            } catch (updateError) {
+              logToFile(`Error updating property using best match: ${updateError.message}`);
+              // Continue to switch statement as fallback
+            }
+          } else {
+            logToFile(`No matching property found for "${propertyNameToFind}"`);
+          }
+        }
+        
+        // Set the appropriate property based on the subcommand
+        switch (subcommand) {
+          case 'status':
+            // Use schema information if available
+            if (notionSchema) {
+              // Find the right property name from schema
+              const statusProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'status' && 
+                (notionSchema[propName].type === 'status' || notionSchema[propName].type === 'select')
+              );
+              
+              if (statusProperty) {
+                logToFile(`Using exact property name from schema: "${statusProperty}" (type: ${notionSchema[statusProperty].type})`);
+                // Check if it's a status type or select type
+                if (notionSchema[statusProperty].type === 'status') {
+                  notionProperties[statusProperty] = { status: { name: value } };
+                } else {
+                  notionProperties[statusProperty] = { select: { name: value } };
+                }
+              } else {
+                // Default to "Status" with status type
+                logToFile('Status property not found in schema, using "Status" with status type');
+                notionProperties['Status'] = { status: { name: value } };
+              }
+            } else {
+              // Default to "Status" with status type
+              notionProperties['Status'] = { status: { name: value } };
+            }
+            break;
+            
+          case 'caption_status':
+            // Similar approach for caption_status
+            if (notionSchema) {
+              const captionStatusProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'caption status' && 
+                notionSchema[propName].type === 'select'
+              );
+              
+              if (captionStatusProperty) {
+                logToFile(`Using exact property name from schema: "${captionStatusProperty}"`);
+                notionProperties[captionStatusProperty] = { select: { name: value } };
+              } else {
+                notionProperties['Caption Status'] = { select: { name: value } };
+              }
+            } else {
+              notionProperties['Caption Status'] = { select: { name: value } };
+            }
+            break;
+            
+          case 'category':
+            if (notionSchema) {
+              const categoryProperty = Object.keys(notionSchema).find(propName =>
+                propName.toLowerCase() === 'category' && 
+                notionSchema[propName].type === 'select'
+              );
+              
+              if (categoryProperty) {
+                logToFile(`Using exact property name from schema: "${categoryProperty}"`);
+                notionProperties[categoryProperty] = { select: { name: value } };
+              } else {
+                notionProperties['Category'] = { select: { name: value } };
+              }
+            } else {
+              notionProperties['Category'] = { select: { name: value } };
+            }
+            break;
+            
+          case 'date':
+            try {
+              // Try to parse the date
+              const date = new Date(value);
+              if (isNaN(date.getTime())) {
+                throw new Error('Invalid date format');
+              }
+              notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
+            } catch (e) {
+              await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
+              return;
+            }
+            break;
+            
+          case 'script':
+            if (!value.startsWith('http')) {
+              await interaction.editReply('❌ Script value must be a valid URL starting with http:// or https://');
+              return;
+            }
+            notionProperties['Script'] = { url: value };
+            break;
+            
+          case 'frameio':
+            if (!value.startsWith('http')) {
+              await interaction.editReply('❌ Frame.io value must be a valid URL starting with http:// or https://');
+              return;
+            }
+            notionProperties['Frame.io'] = { url: value };
+            break;
+            
+          case 'lead':
+            notionProperties['Lead'] = { people: [{ name: value }] };
+            break;
+            
+          case 'editor':
+            notionProperties['Editor'] = { people: [{ name: value }] };
+            break;
+            
+          case 'writer':
+            notionProperties['Writer'] = { people: [{ name: value }] };
+            break;
+            
+          case '3d_status':
+            notionProperties['3D Status'] = { select: { name: value } };
+            break;
+            
+          case 'language':
+            // Handle language subcommand with additional parameter
+            const language = interaction.options.getString('language');
+            const languageStatus = value;
+            
+            if (!['Portuguese', 'Spanish', 'Russian', 'Indonesian'].includes(language)) {
+              await interaction.editReply('❌ Invalid language. Must be one of: Portuguese, Spanish, Russian, Indonesian');
+              return;
+            }
+            
+            notionProperties[language] = { select: { name: languageStatus } };
+            break;
+            
+          default:
+            await interaction.editReply(`❌ Unknown subcommand: ${subcommand}`);
+            return;
+        }
+        
+        try {
+          // Log the properties object for debugging
+          logToFile(`Updating Notion page with properties: ${JSON.stringify(notionProperties)}`);
+          logToFile(`Page ID: ${project.page.id}`);
+          
+          // Log the available properties on the page for debugging
+          const pageProperties = project.page.properties;
+          const availableProps = Object.keys(pageProperties);
+          logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
+          
+          // If setting status, log detailed information
+          if (subcommand === 'status') {
+            // Try multiple variations of the property name
+            const possibleNames = ['Status', 'status', 'STATUS'];
+            
+            possibleNames.forEach(propName => {
+              if (pageProperties[propName]) {
+                logToFile(`Found Status property as "${propName}": ${JSON.stringify(pageProperties[propName])}`);
+              } else {
+                logToFile(`Property "${propName}" does not exist on the page`);
+              }
+            });
+            
+            // Find any property that looks like a status property
+            const statusLikeProps = availableProps.filter(prop => 
+              prop.toLowerCase().includes('status')
+            );
+            
+            if (statusLikeProps.length > 0) {
+              logToFile(`Found status-like properties: ${statusLikeProps.join(', ')}`);
+              statusLikeProps.forEach(prop => {
+                logToFile(`Details for "${prop}": ${JSON.stringify(pageProperties[prop])}`);
+              });
+            }
+          }
+          
+          // Update the Notion page
+          logToFile(`Sending update to Notion API: ${JSON.stringify({
+            page_id: project.page.id, // Use the actual page ID
+            properties: notionProperties
+          })}`);
+          
+          await notion.pages.update({
+            page_id: project.page.id, // Use the actual page ID
+            properties: notionProperties
+          });
+          
+          // Get the Notion URL for the page
+          const notionUrl = getNotionPageUrl(project.page.id);
+          
+          // Create components with button if there's a Notion URL
+          const components = [];
+          if (notionUrl) {
+            const row = new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setLabel('View in Notion')
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(notionUrl)
+              );
+            components.push(row);
+          }
+          
+          // Success message
+          await interaction.editReply({
+            content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`,
+            components: components.length > 0 ? components : undefined
+          });
+          
+          // Also send a non-ephemeral message to channel for visibility
+          await interaction.channel.send(
+            `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+          );
+          
+        } catch (updateError) {
+          logToFile(`Error updating property in /set command: ${updateError.message}`);
+          await interaction.editReply(`❌ Error updating property: ${updateError.message}`);
+        }
+        
       } catch (error) {
         logToFile(`Error in /set command: ${error.message}`);
         if (hasResponded) {
@@ -3177,4 +3718,4 @@ async function checkStatusAndNotify(projectCode, newStatus, channelId) {
           await interaction.reply({ content: `❌ Error setting property: ${error.message}`, ephemeral: true });
         }
       }
-}
+    }
