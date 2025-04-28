@@ -105,29 +105,22 @@ async function findProjectByQuery(query) {
     const response = await notion.databases.query({
       database_id: DB,
       filter: {
-        or: [
-          {
-            property: "Project name",
-            title: {
-              contains: query
-            }
-          },
-          {
-            property: "Code",
-            rich_text: {
-              contains: query
-            }
-          }
-        ]
+        property: "Project name",
+        title: {
+          contains: query
+        }
       }
     });
     
     if (response.results.length > 0) {
       // Return both the page and the code for reference
       const page = response.results[0];
-      const code = page.properties.Code?.rich_text?.[0]?.plain_text || 
-                  page.properties["Project name"]?.title?.[0]?.plain_text || 
-                  query;
+      
+      // Extract code from the beginning of the project name (usually something like IB23, CL45, etc.)
+      const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || '';
+      const codeMatch = projectName.match(/^([A-Z]{2}\d{2})/);
+      const code = codeMatch ? codeMatch[0] : query;
+      
       return { page, code };
     }
     
@@ -198,8 +191,9 @@ client.on('interactionCreate', async interaction => {
         
         // Get project properties
         const properties = project.properties;
-        const name = properties["Project name"]?.title?.[0]?.plain_text || 'Unnamed Project';
-        const code = properties.Code?.rich_text?.[0]?.plain_text || result.code || 'No Code';
+        const projectName = properties["Project name"]?.title?.[0]?.plain_text || 'Unnamed Project';
+        // Get code from the result or extract from project name
+        const code = result.code || projectName.match(/^([A-Z]{2}\d{2})/)?.['0'] || 'Unknown';
         const status = properties.Status?.select?.name || 'No Status';
         const dueDate = properties.Date?.date?.start || 'No Due Date';
         const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
@@ -207,7 +201,7 @@ client.on('interactionCreate', async interaction => {
         
         // Create embed
         const embed = new EmbedBuilder()
-          .setTitle(`Project: ${name} (${code})`)
+          .setTitle(`Project: ${projectName} (${code})`)
           .setColor(0x0099FF)
           .addFields(
             { name: 'Status', value: status, inline: true },
