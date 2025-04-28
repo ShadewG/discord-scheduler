@@ -1,6 +1,6 @@
 // Discord Bot for Insanity
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
@@ -198,21 +198,107 @@ client.on('interactionCreate', async interaction => {
         const dueDate = properties.Date?.date?.start || 'No Due Date';
         const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
         const editors = properties.Editor?.multi_select?.map(e => e.name).join(', ') || 'None';
+        const frameioUrl = properties["Frame.io"]?.url || '';
+        const scriptUrl = properties.Script?.url || '';
+        
+        // Get Notion URL
+        const notionUrl = getNotionPageUrl(project.id);
+        
+        // Look for Discord channels with this code
+        const codePattern = code.toLowerCase();
+        const guild = interaction.guild;
+        const discordChannels = guild.channels.cache
+          .filter(channel => channel.type === 0 && channel.name.includes(codePattern))
+          .map(channel => `<#${channel.id}>`);
         
         // Create embed
         const embed = new EmbedBuilder()
-          .setTitle(`Project: ${projectName} (${code})`)
+          .setTitle(`Project: ${code}`)
           .setColor(0x0099FF)
-          .addFields(
-            { name: 'Status', value: status, inline: true },
-            { name: 'Due Date', value: dueDate, inline: true },
-            { name: 'Lead', value: lead, inline: true },
-            { name: 'Editors', value: editors, inline: true }
-          )
-          .setURL(getNotionPageUrl(project.id))
-          .setFooter({ text: 'Notion Database' });
+          .setDescription(`Here's everything you need for project **${code}**:`)
+          .setTimestamp();
         
-        await interaction.editReply({ embeds: [embed] });
+        // Add Notion Card
+        if (notionUrl) {
+          embed.addFields({ name: '📋 Notion Card', value: notionUrl });
+        }
+        
+        // Add Discord Channels if found
+        if (discordChannels.length > 0) {
+          embed.addFields({ name: '💬 Discord Channel', value: discordChannels.join('\n') });
+        }
+        
+        // Add Frame.io link
+        if (frameioUrl) {
+          embed.addFields({ name: '🎬 Frame.io', value: frameioUrl });
+        }
+        
+        // Add Status
+        embed.addFields({ name: '📊 Status', value: status });
+        
+        // Add Due Date if present
+        if (dueDate && dueDate !== 'No Due Date') {
+          const formattedDate = new Date(dueDate).toLocaleDateString('en-US', {
+            month: 'short', day: 'numeric', year: 'numeric'
+          });
+          embed.addFields({ name: '📅 Due Date', value: formattedDate, inline: true });
+        }
+        
+        // Add Script URL if present
+        if (scriptUrl) {
+          embed.addFields({ name: '📝 Script', value: scriptUrl });
+        }
+        
+        // Add People info
+        if (lead !== 'No Lead') {
+          embed.addFields({ name: '🎬 Lead', value: lead, inline: true });
+        }
+        
+        if (editors !== 'None') {
+          embed.addFields({ name: '✂️ Editors', value: editors, inline: true });
+        }
+        
+        // Create buttons for links
+        const buttons = [];
+        
+        if (notionUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open in Notion')
+              .setStyle(ButtonStyle.Link)
+              .setURL(notionUrl)
+          );
+        }
+        
+        if (frameioUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open Frame.io')
+              .setStyle(ButtonStyle.Link)
+              .setURL(frameioUrl)
+          );
+        }
+        
+        if (scriptUrl) {
+          buttons.push(
+            new ButtonBuilder()
+              .setLabel('Open Script')
+              .setStyle(ButtonStyle.Link)
+              .setURL(scriptUrl)
+          );
+        }
+        
+        // Add buttons if we have any
+        const components = [];
+        if (buttons.length > 0) {
+          const row = new ActionRowBuilder().addComponents(...buttons);
+          components.push(row);
+        }
+        
+        await interaction.editReply({ 
+          embeds: [embed],
+          components: components.length > 0 ? components : undefined
+        });
       } catch (error) {
         logToFile(`Error in /where command: ${error.message}`);
         if (hasResponded) {
