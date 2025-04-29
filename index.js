@@ -942,6 +942,9 @@ client.on('interactionCreate', async interaction => {
     // Handle the /where command
     if (commandName === 'where') {
       try {
+        // Check if ephemeral flag is set
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
         await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
         
@@ -1586,6 +1589,7 @@ client.on('interactionCreate', async interaction => {
         // Get command options
         const text = interaction.options.getString('text');
         const dryRun = interaction.options.getBoolean('dry_run') || false;
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
         await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
         hasResponded = true;
