@@ -945,7 +945,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: !!ephemeral });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -1189,7 +1189,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Current Berlin time
@@ -1269,7 +1269,7 @@ client.on('interactionCreate', async interaction => {
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Check if channel is linked to a Notion page
@@ -1516,7 +1516,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Check if channel is linked to a project
@@ -1591,7 +1591,7 @@ client.on('interactionCreate', async interaction => {
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Check if OpenAI is configured
@@ -2289,7 +2289,7 @@ Example Output: {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Create and send the schedule embed
@@ -2373,15 +2373,43 @@ Example Output: {
         const time = interaction.options.getString('time');
         const description = interaction.options.getString('description') || '';
         const usersString = interaction.options.getString('users') || '';
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: [1 << 6] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
+        
+        // Check permissions
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check for required permissions
+        const permissions = channel.permissionsFor(client.user);
+        if (!permissions) {
+          await interaction.editReply('❌ Cannot check channel permissions. Please make sure I have the "View Channel" permission.');
+          return;
+        }
+        
+        if (!permissions.has('SendMessages')) {
+          await interaction.editReply('❌ I don\'t have permission to send messages in this channel. Please grant me the "Send Messages" permission.');
+          return;
+        }
+        
+        if (!permissions.has('ViewChannel')) {
+          await interaction.editReply('❌ I don\'t have permission to view this channel. Please grant me the "View Channel" permission.');
+          return;
+        }
         
         // Extract user IDs from the users string
         const mentionedUserIds = [];
-        const userMatches = usersString.matchAll(/<@!?(\d+)>/g);
-        for (const match of userMatches) {
-          mentionedUserIds.push(match[1]);
+        
+        if (usersString) {
+          const userMatches = usersString.matchAll(/<@!?(\d+)>/g);
+          for (const match of userMatches) {
+            mentionedUserIds.push(match[1]);
+          }
         }
         
         // If no users were mentioned, mention the person who created the meeting
@@ -2420,20 +2448,42 @@ Example Output: {
         }
         
         // Generate a meeting ID
-        const meetingId = nextMeetingId++;
+        const meetingId = Math.floor(Math.random() * 10000) + 1;
         
-        // Schedule the meeting
-        const { formattedDate } = scheduleMeeting(
-          meetingId,
-          interaction.channel.id,
-          meetingDate,
-          mentionedUserIds,
-          title,
-          description
-        );
+        // Format date for display
+        const formattedDate = meetingDate.toLocaleString('en-US', { 
+          timeZone: TZ,
+          weekday: 'short',
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit', 
+          minute: '2-digit'
+        });
         
         // Create the user mentions string for the response
         const mentionsString = mentionedUserIds.map(userId => `<@${userId}>`).join(' ');
+        
+        // Create message for the meeting time
+        const reminderMessage = `🔔 Reminder: **${title}** starts in 5 minutes!\n${description ? description + '\n' : ''}${mentionsString}`;
+        const meetingMessage = `🗓️ **${title}** - It's meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
+        
+        // Schedule the meeting timestamp (Unix time in ms)
+        const meetingTime = meetingDate.getTime();
+        const reminderTime = meetingTime - (5 * 60 * 1000); // 5 min before
+        
+        // Schedule the reminder
+        setTimeout(() => {
+          channel.send(reminderMessage)
+            .then(() => logToFile(`Sent reminder for meeting "${title}"`))
+            .catch(err => logToFile(`Error sending reminder: ${err.message}`));
+        }, reminderTime - now.getTime());
+        
+        // Schedule the meeting
+        setTimeout(() => {
+          channel.send(meetingMessage)
+            .then(() => logToFile(`Sent meeting notification for "${title}"`))
+            .catch(err => logToFile(`Error sending meeting notification: ${err.message}`));
+        }, meetingTime - now.getTime());
         
         // Send confirmation message
         const embed = new EmbedBuilder()
@@ -2451,9 +2501,11 @@ Example Output: {
         await interaction.editReply({ embeds: [embed] });
         
         // Send notification to channel
-        await interaction.channel.send(
+        await channel.send(
           `🆕 <@${interaction.user.id}> scheduled a meeting **${title}** for ${formattedDate} with ${mentionsString}`
         );
+        
+        logToFile(`Meeting "${title}" scheduled for ${formattedDate} with ${mentionedUserIds.length} participants`);
         
       } catch (error) {
         logToFile(`Error in /meeting command: ${error.message}`);
@@ -2472,7 +2524,7 @@ Example Output: {
         const projectCode = interaction.options.getString('project');
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ flags: ephemeral ? [1 << 6] : [] });
+        await interaction.deferReply({ ephemeral: ephemeral });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -2898,6 +2950,182 @@ Example Output: {
           await interaction.editReply(`❌ Error: ${error.message}`);
         } else {
           await interaction.reply({ content: `❌ Error: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Handle the /summary command
+    else if (commandName === 'summary') {
+      try {
+        // Get command options
+        const days = interaction.options.getInteger('days') || 7;
+        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        
+        await interaction.deferReply({ ephemeral: ephemeral });
+        hasResponded = true;
+        
+        // Check if OpenAI is configured
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          return;
+        }
+        
+        // Check if channel is linked to a project
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+        
+        // Check if the channel name contains a project code
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+        
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+        
+        const projectCode = codeMatch[0].toUpperCase();
+        
+        // Find the project in Notion
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+        
+        // Fetch messages from the past X days
+        const now = new Date();
+        const pastDate = new Date(now);
+        pastDate.setDate(pastDate.getDate() - days);
+        
+        logToFile(`Fetching messages for project ${projectCode} since ${pastDate.toISOString()}`);
+        
+        try {
+          // Start with a small batch of messages
+          let messages = await channel.messages.fetch({ limit: 100 });
+          let allMessages = [...messages.values()];
+          let oldestMessage = allMessages[allMessages.length - 1];
+          
+          // Keep fetching until we reach messages from 'days' ago or hit API limits
+          while (oldestMessage && oldestMessage.createdAt > pastDate && allMessages.length < 500) {
+            const nextBatch = await channel.messages.fetch({ 
+              limit: 100,
+              before: oldestMessage.id
+            });
+            
+            if (nextBatch.size === 0) break;
+            
+            const nextMessages = [...nextBatch.values()];
+            allMessages = [...allMessages, ...nextMessages];
+            oldestMessage = nextMessages[nextMessages.length - 1];
+            
+            logToFile(`Fetched ${allMessages.length} messages so far, oldest from ${oldestMessage.createdAt.toISOString()}`);
+          }
+          
+          // Filter messages by date
+          const filteredMessages = allMessages.filter(msg => msg.createdAt > pastDate);
+          
+          logToFile(`Found ${filteredMessages.length} messages in the last ${days} days for project ${projectCode}`);
+          
+          // If no messages found in the specified timeframe
+          if (filteredMessages.length === 0) {
+            await interaction.editReply(`No messages found in the last ${days} days for project ${projectCode}.`);
+            return;
+          }
+          
+          // Prepare messages for analysis - sort chronologically
+          const messageTexts = filteredMessages
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+            .map(msg => `${msg.author.tag} (${msg.createdAt.toISOString()}): ${msg.content}`)
+            .join('\n');
+          
+          // Create system prompt for GPT to summarize the conversation
+          const systemPrompt = `
+            You are a helpful assistant that summarizes Discord conversations.
+            
+            Your task is to create a concise summary of messages from a project's Discord channel.
+            Focus on the following aspects:
+            
+            1. Key decisions made
+            2. Important updates about the project status
+            3. Action items or tasks assigned
+            4. Questions that need answers
+            5. Progress updates
+            6. Timeline/schedule changes
+            
+            Format your response as a clear, organized summary with bullet points grouped into categories.
+            Use headers to separate different topics.
+            Keep your summary professional and concise, highlighting only the most relevant information.
+          `;
+          
+          // Send to GPT-4 for processing
+          logToFile(`Sending ${filteredMessages.length} messages to OpenAI for summarization`);
+          
+          const gptResponse = await openai.chat.completions.create({
+            model: 'gpt-4',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: messageTexts }
+            ],
+            max_tokens: 1500
+          });
+          
+          // Extract completion
+          const summary = gptResponse.choices[0]?.message?.content;
+          if (!summary) {
+            await interaction.editReply('❌ Error: No summary received from OpenAI.');
+            return;
+          }
+          
+          logToFile(`Generated summary for project ${projectCode}`);
+          
+          // Create embed for response
+          const embed = new EmbedBuilder()
+            .setTitle(`📋 Summary for ${projectCode} - Last ${days} Days`)
+            .setColor(0x00AAFF)
+            .setDescription(summary.length > 4000 ? summary.substring(0, 4000) + '...' : summary)
+            .setTimestamp();
+          
+          // Add footer with message count and timeframe
+          embed.setFooter({ 
+            text: `Based on ${filteredMessages.length} messages from the past ${days} days` 
+          });
+          
+          // Create button to view project in Notion
+          const notionUrl = getNotionPageUrl(project.page.id);
+          const components = [];
+          
+          if (notionUrl) {
+            const row = new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setLabel('View in Notion')
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(notionUrl)
+              );
+            components.push(row);
+          }
+          
+          // Send the response
+          await interaction.editReply({ 
+            embeds: [embed],
+            components: components.length > 0 ? components : undefined
+          });
+          
+        } catch (fetchError) {
+          logToFile(`Error fetching messages: ${fetchError.message}`);
+          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}`);
+          return;
+        }
+        
+      } catch (error) {
+        logToFile(`Error in /summary command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error generating summary: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error generating summary: ${error.message}`, ephemeral: true });
         }
       }
     }
