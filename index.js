@@ -1823,11 +1823,12 @@ Example Output: {
             const availableProps = Object.keys(pageProperties);
             logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
             
+            // Ensure we're using the main database ID, not the changelog database
+            const mainDbId = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID || global.NOTION_DATABASE_ID || DB;
+            logToFile(`Using main database ID for update: ${mainDbId}`);
+            
             // If setting status, log detailed information
             if (subcommand === 'status') {
-              // Check status watchers and send notifications if needed
-              checkStatusAndNotify(projectCode, value, channel.id);
-              
               // Try multiple variations of the property name
               const possibleNames = ['Status', 'status', 'STATUS'];
               
@@ -1854,14 +1855,26 @@ Example Output: {
             
             // Update the Notion page
             logToFile(`Sending update to Notion API: ${JSON.stringify({
-              page_id: project.page.id,
+              page_id: project.page.id, // Use the actual page ID
               properties: notionProperties
             })}`);
             
-            await notion.pages.update({
-              page_id: project.page.id,
-              properties: notionProperties
-            });
+            // Add explicit error handling for permission issues
+            try {
+              await notion.pages.update({
+                page_id: project.page.id,
+                properties: notionProperties
+              });
+              logToFile(`Successfully updated page ${project.page.id}`);
+            } catch (updateError) {
+              if (updateError.message.includes('Missing access')) {
+                logToFile(`Permission error: Missing access to page ${project.page.id}`);
+                await interaction.editReply(`❌ Missing access to update this page. Please check the bot's Notion permissions or contact the administrator.`);
+                return;
+              } else {
+                throw updateError; // Re-throw to be caught by outer catch
+              }
+            }
             
             // Get Notion URL for page
             const notionUrl = getNotionPageUrl(project.page.id);
