@@ -388,6 +388,7 @@ function createScheduleEmbed() {
 const TOKEN = process.env.DISCORD_TOKEN;
 const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
 const DB = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID; // Support both naming conventions
+const CHANGELOG_DB = process.env.NOTION_CHANGELOG_DB_ID || "1d987c20070a80b9aacce39262b5da60"; // Dedicated constant for changelog DB
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
 
@@ -406,6 +407,7 @@ console.log('Environment variables check:');
 console.log(`- DISCORD_TOKEN: ${TOKEN ? '✅ Set' : '❌ Missing'}`);
 console.log(`- NOTION_KEY: ${NOTION_KEY ? '✅ Set' : '❌ Missing'}`);
 console.log(`- NOTION_DATABASE_ID: ${DB ? `✅ Set (${DB.substring(0, 6)}...)` : '❌ Missing'}`);
+console.log(`- NOTION_CHANGELOG_DB_ID: ${CHANGELOG_DB ? `✅ Set (${CHANGELOG_DB.substring(0, 6)}...)` : '❌ Missing'}`);
 console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
 
 // Validate required environment variables
@@ -488,10 +490,18 @@ try {
       auth: NOTION_KEY
     });
     console.log('✅ Notion client initialized successfully');
-    console.log(`  - Using database ID: ${DB.substring(0, 8)}...`);
+    console.log(`  - Using MAIN database ID: ${DB.substring(0, 8)}...`);
+    console.log(`  - Using CHANGELOG database ID: ${CHANGELOG_DB.substring(0, 8)}...`);
+    
+    // Verify databases are different
+    if (DB === CHANGELOG_DB) {
+      console.error('❌ ERROR: Main database and changelog database have the same ID!');
+      logToFile('❌ CRITICAL ERROR: Main database and changelog database have the same ID!');
+    }
     
     // Store the database ID in global scope for access in functions
     global.NOTION_DATABASE_ID = DB;
+    global.NOTION_CHANGELOG_DB_ID = CHANGELOG_DB;
   } else {
     if (!NOTION_KEY) console.warn('⚠️ NOTION_KEY not provided. Notion features will be disabled.');
     if (!DB) console.warn('⚠️ NOTION_DATABASE_ID not provided. Notion features will be disabled.');
@@ -541,8 +551,18 @@ async function findProjectByQuery(query) {
       return null;
     }
     
+    // IMPORTANT: ONLY use the main database ID here, never the changelog database
     // Get database ID from environment variable or global variable - ensure it's defined
-    const databaseId = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID || global.NOTION_DATABASE_ID || DB;
+    const databaseId = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID || DB;
+    
+    // Explicitly avoid using the changelog database
+    if (databaseId === CHANGELOG_DB) {
+      logToFile('ERROR: Attempted to search for projects in the changelog database instead of the main database!');
+      console.error('❌ ERROR: Using changelog database instead of main project database.');
+      return null;
+    }
+    
+    logToFile(`Finding project "${query}" using MAIN database ID: ${databaseId}`);
     
     if (!databaseId) {
       logToFile('ERROR: Notion database ID is undefined. Check your environment variables.');
@@ -1830,9 +1850,17 @@ Example Output: {
             const availableProps = Object.keys(pageProperties);
             logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
             
-            // Ensure we're using the main database ID, not the changelog database
-            const mainDbId = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID || global.NOTION_DATABASE_ID || DB;
-            logToFile(`Using main database ID for update: ${mainDbId}`);
+            // CRITICAL: Ensure we're using the main database
+            // This is the main source of "Missing Access" errors
+            const mainDbId = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID || DB;
+            
+            if (mainDbId === CHANGELOG_DB) {
+              logToFile(`❌ ERROR: Attempting to update using changelog database instead of main database!`);
+              await interaction.editReply(`❌ Error: Bot configuration issue. Please contact the administrator.`);
+              return;
+            }
+            
+            logToFile(`Using MAIN database ID for update: ${mainDbId.substring(0, 8)}...`);
             
             // If setting status, log detailed information
             if (subcommand === 'status') {
@@ -2649,11 +2677,10 @@ Example Output: {
           // Query for all pages related to this project that have status changes
           // We'll search for pages with the project code in their title
           // Use specific database ID for changelog
-          const changelogDbId = "1d987c20070a80b9aacce39262b5da60";
-          logToFile(`Searching for status changes in changelog database ${changelogDbId} for project ${targetProjectCode}`);
+          logToFile(`Searching for status changes in changelog database ${CHANGELOG_DB} for project ${targetProjectCode}`);
           
           const response = await notion.databases.query({
-            database_id: changelogDbId,
+            database_id: CHANGELOG_DB,
             filter: {
               property: "Title",
               title: {
