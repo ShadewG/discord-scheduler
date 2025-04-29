@@ -1733,8 +1733,15 @@ Example Output: {
           // Handle different property types
           switch (key) {
             case 'Status':
-              // Status is a status type property, not a select
-              notionProperties[propertyKey] = { status: { name: value } };
+              // Try both status property formats since Notion databases may use either
+              try {
+                // First attempt with status format
+                logToFile(`Setting Status with format: status: { name: "${value}" }`);
+                notionProperties[propertyKey] = { status: { name: value } };
+              } catch (statusError) {
+                // If that errors, we'll try the select format in the update section
+                logToFile(`Will try alternative Status format if first attempt fails`);
+              }
               break;
               
             case 'Caption Status':
@@ -1871,6 +1878,24 @@ Example Output: {
                 logToFile(`Permission error: Missing access to page ${project.page.id}`);
                 await interaction.editReply(`❌ Missing access to update this page. Please check the bot's Notion permissions or contact the administrator.`);
                 return;
+              } else if (updateError.message.includes('validation_error') && 
+                       updateError.message.includes('Status is expected to be')) {
+                // Try with select format for Status property if it exists
+                logToFile(`Status validation error: ${updateError.message}. Retrying with select format.`);
+                
+                // Convert status property to select format
+                if (notionProperties['Status']) {
+                  notionProperties['Status'] = { select: { name: notionProperties['Status'].status.name } };
+                  
+                  logToFile(`Retrying with Status in select format: ${JSON.stringify(notionProperties['Status'])}`);
+                  await notion.pages.update({
+                    page_id: project.page.id,
+                    properties: notionProperties
+                  });
+                  logToFile(`Successfully updated page after retry`);
+                } else {
+                  throw updateError;
+                }
               } else {
                 throw updateError; // Re-throw to be caught by outer catch
               }
@@ -2048,30 +2073,64 @@ Example Output: {
         // Set the appropriate property based on the subcommand
         switch (subcommand) {
           case 'status':
-            // Use schema information if available
-            if (notionSchema) {
-              // Find the right property name from schema
-              const statusProperty = Object.keys(notionSchema).find(propName =>
-                propName.toLowerCase() === 'status' && 
-                (notionSchema[propName].type === 'status' || notionSchema[propName].type === 'select')
-              );
+            try {
+              // First try with status format
+              notionProperties['Status'] = { status: { name: value } };
+              logToFile(`Attempting to update status with format 1: { status: { name: "${value}" } }`);
               
-              if (statusProperty) {
-                logToFile(`Using exact property name from schema: "${statusProperty}" (type: ${notionSchema[statusProperty].type})`);
-                // Check if it's a status type or select type
-                if (notionSchema[statusProperty].type === 'status') {
-                  notionProperties[statusProperty] = { status: { name: value } };
-                } else {
-                  notionProperties[statusProperty] = { select: { name: value } };
+              await notion.pages.update({
+                page_id: project.page.id,
+                properties: notionProperties
+              });
+              
+              logToFile(`✅ Successfully updated status to "${value}" using status format`);
+            } catch (statusError) {
+              // If status format fails, try with select format
+              if (statusError.message.includes('validation_error') || 
+                  statusError.message.includes('Status is expected to be')) {
+                
+                logToFile(`First attempt failed with error: ${statusError.message}`);
+                logToFile(`Attempting to update status with format 2: { select: { name: "${value}" } }`);
+                
+                notionProperties['Status'] = { select: { name: value } };
+                
+                try {
+                  await notion.pages.update({
+                    page_id: project.page.id,
+                    properties: notionProperties
+                  });
+                  
+                  logToFile(`✅ Successfully updated status to "${value}" using select format`);
+                } catch (selectError) {
+                  logToFile(`Second attempt failed with error: ${selectError.message}`);
+                  // Try a third option - look for "type" in properties
+                  try {
+                    const pageProperties = project.page.properties;
+                    if (pageProperties.Status?.type === 'status') {
+                      notionProperties['Status'] = { status: { name: value } };
+                    } else if (pageProperties.Status?.type === 'select') {
+                      notionProperties['Status'] = { select: { name: value } };
+                    } else {
+                      // Try with a rich_text fallback
+                      notionProperties['Status'] = { rich_text: [{ text: { content: value } }] };
+                    }
+                    
+                    logToFile(`Attempting final format based on detected type: ${JSON.stringify(notionProperties)}`);
+                    await notion.pages.update({
+                      page_id: project.page.id,
+                      properties: notionProperties
+                    });
+                    
+                    logToFile(`✅ Successfully updated status to "${value}" using detected format`);
+                  } catch (finalError) {
+                    // If all attempts fail, throw the original error
+                    throw statusError;
+                  }
                 }
               } else {
-                // Default to "Status" with status type
-                logToFile('Status property not found in schema, using "Status" with status type');
-                notionProperties['Status'] = { status: { name: value } };
+                // If the error isn't a validation error, rethrow it
+                throw statusError;
               }
-            } else {
-              // Default to "Status" with status type
-              notionProperties['Status'] = { status: { name: value } };
             }
             break;
             
