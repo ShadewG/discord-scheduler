@@ -874,6 +874,32 @@ client.once('ready', () => {
         console.error('Error registering commands:', error);
         logToFile(`Error registering commands: ${error.message}`);
       });
+      
+    // Register specific commands to BODYCAM server
+    const { registerCommandsToGuild } = require('./auto-register-commands');
+    const BODYCAM_SERVER_ID = '1290489132522672182';
+    const CATEGORIES_TO_INCLUDE = ['basic', 'notion', 'utility'];
+    
+    // Check if the BODYCAM server exists in the bot's guilds
+    const bodycamGuild = client.guilds.cache.get(BODYCAM_SERVER_ID);
+    if (bodycamGuild) {
+      logToFile(`Found BODYCAM server: ${bodycamGuild.name} (${bodycamGuild.id})`);
+      
+      // Register specific command categories to BODYCAM server
+      registerCommandsToGuild(client, TOKEN, BODYCAM_SERVER_ID, CATEGORIES_TO_INCLUDE)
+        .then(success => {
+          if (success) {
+            logToFile(`✅ Successfully registered specific commands to BODYCAM server`);
+          } else {
+            logToFile(`❌ Failed to register specific commands to BODYCAM server`);
+          }
+        })
+        .catch(error => {
+          logToFile(`Error registering specific commands to BODYCAM server: ${error.message}`);
+        });
+    } else {
+      logToFile(`⚠️ BODYCAM server with ID ${BODYCAM_SERVER_ID} not found in bot's guilds`);
+    }
   } catch (error) {
     console.error('Error registering commands:', error);
     logToFile(`Error registering commands: ${error.message}`);

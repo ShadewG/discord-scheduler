@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "check-env": "node check-env.js",
+    "prestart": "npm run check-env",
+    "deploy-bodycam": "node register-bodycam-specific.js"
   },
   "keywords": [
     "discord",
