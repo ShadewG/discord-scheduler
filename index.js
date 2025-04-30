@@ -1754,6 +1754,10 @@ Example Output: {
           return;
         }
         
+        // Track status updates separately
+        let hasStatusUpdate = false;
+        let statusValue = null;
+        
         // Convert extracted properties to Notion format
         const notionProperties = {};
         
@@ -1765,19 +1769,17 @@ Example Output: {
           const bestMatch = findBestPropertyMatch(project.page.properties, key);
           const propertyKey = bestMatch || key;
           
+          // Special handling for Status property
+          if (key === 'Status') {
+            // Don't add to notionProperties, we'll handle it separately
+            logToFile(`Found Status property with value: ${value} - will update separately`);
+            hasStatusUpdate = true;
+            statusValue = value;
+            continue;
+          }
+          
           // Handle different property types
           switch (key) {
-            case 'Status':
-              // Use the exact required format as per Notion API requirements
-              logToFile(`Setting Status with exact required format for value: "${value}"`);
-              notionProperties[propertyKey] = {
-                type: "status",
-                status: {
-                  name: value
-                }
-              };
-              break;
-              
             case 'Caption Status':
             case 'Category':
             case '3D Status':
@@ -1855,110 +1857,37 @@ Example Output: {
         // Update Notion if not a dry run
         if (!dryRun) {
           try {
-            // Log the properties object for debugging
-            logToFile(`Updating Notion page with properties: ${JSON.stringify(notionProperties)}`);
-            logToFile(`Page ID: ${project.page.id}`);
-            
-            // Log the available properties on the page for debugging
-            const pageProperties = project.page.properties;
-            const availableProps = Object.keys(pageProperties);
-            logToFile(`Available properties on the page: ${availableProps.join(', ')}`);
-            
-            // CRITICAL: Ensure we're using the main database
-            // This is the main source of "Missing Access" errors
-            const mainDbId = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID || DB;
-            
-            if (mainDbId === CHANGELOG_DB) {
-              logToFile(`❌ ERROR: Attempting to update using changelog database instead of main database!`);
-              await interaction.editReply(`❌ Error: Bot configuration issue. Please contact the administrator.`);
-              return;
-            }
-            
-            logToFile(`Using MAIN database ID for update: ${mainDbId.substring(0, 8)}...`);
-            
-            // If setting status, log detailed information
-            if (subcommand === 'status') {
-              // Try multiple variations of the property name
-              const possibleNames = ['Status', 'status', 'STATUS'];
+            // First, handle regular properties
+            if (Object.keys(notionProperties).length > 0) {
+              logToFile(`Updating regular properties: ${JSON.stringify(notionProperties)}`);
               
-              possibleNames.forEach(propName => {
-                if (pageProperties[propName]) {
-                  logToFile(`Found Status property as "${propName}": ${JSON.stringify(pageProperties[propName])}`);
-                } else {
-                  logToFile(`Property "${propName}" does not exist on the page`);
-                }
-              });
-              
-              // Find any property that looks like a status property
-              const statusLikeProps = availableProps.filter(prop => 
-                prop.toLowerCase().includes('status')
-              );
-              
-              if (statusLikeProps.length > 0) {
-                logToFile(`Found status-like properties: ${statusLikeProps.join(', ')}`);
-                statusLikeProps.forEach(prop => {
-                  logToFile(`Details for "${prop}": ${JSON.stringify(pageProperties[prop])}`);
-                });
-              }
-            }
-            
-            // Update the Notion page
-            logToFile(`Sending update to Notion API: ${JSON.stringify({
-              page_id: project.page.id, // Use the actual page ID
-              properties: notionProperties
-            })}`);
-            
-            // Add explicit error handling for permission issues
-            try {
+              // Update the Notion page with non-status properties
               await notion.pages.update({
                 page_id: project.page.id,
                 properties: notionProperties
               });
-              logToFile(`Successfully updated page ${project.page.id}`);
-            } catch (updateError) {
-              if (updateError.message.includes('Missing access')) {
-                logToFile(`Permission error: Missing access to page ${project.page.id}`);
-                await interaction.editReply(`❌ Missing access to update this page. Please check the bot's Notion permissions or contact the administrator.`);
-                return;
-              } else if (updateError.message.includes('validation_error') && 
-                       updateError.message.includes('Status is expected to be')) {
-                // Handle Status validation errors based on Notion API requirements
-                logToFile(`Status validation error: ${updateError.message}. Attempting to fix the format.`);
-                
-                // Check each property in notionProperties for Status fields
-                for (const [propKey, propValue] of Object.entries(notionProperties)) {
-                  if (propKey === 'Status' || propKey.toLowerCase() === 'status') {
-                    // Always use the exact Notion format for status
-                    notionProperties[propKey] = {
-                      type: "status",
-                      status: {
-                        name: propValue.status?.name || value
-                      }
-                    };
-                    logToFile(`Applied exact required format for Status: ${JSON.stringify(notionProperties[propKey])}`);
-                  }
-                }
-                
-                try {
-                  logToFile(`Retrying with updated format: ${JSON.stringify(notionProperties)}`);
-                  await notion.pages.update({
-                    page_id: project.page.id,
-                    properties: notionProperties
-                  });
-                  logToFile(`Successfully updated page after retry`);
-                } catch (finalError) {
-                  logToFile(`Final error after retry: ${finalError.message}`);
-                  throw finalError;
-                }
+              
+              logToFile(`Successfully updated regular properties`);
+            }
+            
+            // Then, handle Status property separately if present
+            if (hasStatusUpdate && statusValue) {
+              logToFile(`Updating Status separately to: "${statusValue}"`);
+              
+              const statusResult = await updateNotionStatus(project.page.id, statusValue);
+              
+              if (statusResult.success) {
+                logToFile(`Successfully updated Status to "${statusValue}"`);
               } else {
-                throw updateError; // Re-throw to be caught by outer catch
+                logToFile(`Failed to update Status: ${statusResult.error?.message || "Unknown error"}`);
+                throw statusResult.error || new Error("Failed to update Status");
               }
             }
             
             // Get Notion URL for page
             const notionUrl = getNotionPageUrl(project.page.id);
             
-            logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(notionProperties).join(', ')}`);
+            logToFile(`Notion updated for ${projectCode}`);
             embed.setFooter({ text: '✅ Notion updated successfully' });
             
             // Create button component if there's a Notion URL
@@ -1989,10 +1918,6 @@ Example Output: {
           embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
           await interaction.editReply({ embeds: [embed] });
         }
-        
-        // Send response
-        await interaction.editReply({ embeds: [embed] });
-        
       } catch (error) {
         logToFile(`Error in /sync command: ${error.message}`);
         if (hasResponded) {
@@ -2128,26 +2053,97 @@ Example Output: {
         switch (subcommand) {
           case 'status':
             try {
-              // Use the exact required format with type field
-              notionProperties['Status'] = {
-                type: "status",
-                status: {
-                  name: value
-                }
-              };
+              // APPROACH: First retrieve the page to understand its structure
+              const pageData = await notion.pages.retrieve({ page_id: project.page.id });
               
-              logToFile(`Using EXACT Notion format for Status: ${JSON.stringify(notionProperties['Status'])}`);
+              // Examine the actual Status property
+              const statusProperty = pageData.properties.Status;
+              logToFile(`DIRECT INSPECTION: Status property = ${JSON.stringify(statusProperty)}`);
               
+              // Check if Status exists and determine its type
+              if (!statusProperty) {
+                throw new Error("Status property not found in the page");
+              }
+              
+              // Create update object using exact same structure but with new value
+              let updateObj = {};
+              
+              // For status-type properties (Notion's new Status property type)
+              if (statusProperty.type === 'status') {
+                updateObj = {
+                  properties: {
+                    Status: {
+                      status: {
+                        name: value
+                      }
+                    }
+                  }
+                };
+                logToFile(`Using status-type format: ${JSON.stringify(updateObj.properties.Status)}`);
+              } 
+              // For select-type properties (older Notion property type)
+              else if (statusProperty.type === 'select') {
+                updateObj = {
+                  properties: {
+                    Status: {
+                      select: {
+                        name: value
+                      }
+                    }
+                  }
+                };
+                logToFile(`Using select-type format: ${JSON.stringify(updateObj.properties.Status)}`);
+              } 
+              else {
+                throw new Error(`Unsupported Status property type: ${statusProperty.type}`);
+              }
+              
+              // Update using the precise structure determined from the page itself
+              logToFile(`Sending update with structure: ${JSON.stringify(updateObj)}`);
               await notion.pages.update({
                 page_id: project.page.id,
-                properties: notionProperties
+                ...updateObj
               });
               
-              logToFile(`✅ Successfully updated status to "${value}" using correct format`);
+              logToFile(`✅ Successfully updated status to "${value}" using exact match approach`);
+              
+              // Get the Notion URL for the page
+              const notionUrl = getNotionPageUrl(project.page.id);
+              
+              // Create components with button if there's a Notion URL
+              const components = [];
+              if (notionUrl) {
+                const row = new ActionRowBuilder()
+                  .addComponents(
+                    new ButtonBuilder()
+                      .setLabel('View in Notion')
+                      .setStyle(ButtonStyle.Link)
+                      .setURL(notionUrl)
+                  );
+                components.push(row);
+              }
+              
+              // Success message
+              await interaction.editReply({
+                content: `✅ Updated status to "${value}" for project ${projectCode}`,
+                components: components.length > 0 ? components : undefined
+              });
+              
+              // Also send a non-ephemeral message to channel for visibility
+              await interaction.channel.send(
+                `✅ <@${interaction.user.id}> set status to "${value}" for project ${projectCode}`
+              );
+              
+              // Return early to bypass the rest of the switch statement
+              return;
+              
             } catch (statusError) {
               // Log the exact error
               logToFile(`Detailed Status update error: ${statusError.message}`);
-              logToFile(`Error response: ${JSON.stringify(statusError.response?.data || {})}`);
+              if (statusError.response?.data) {
+                logToFile(`Error response data: ${JSON.stringify(statusError.response.data)}`);
+              }
+              
               throw statusError;
             }
             break;
@@ -3657,4 +3653,63 @@ function getStatusPropertyFormat(pageProperties) {
   
   // Default to status format based on error message "Status is expected to be status"
   return 'status';
+}
+
+// Create a helper function to properly update Status property
+async function updateNotionStatus(pageId, statusValue) {
+  try {
+    // First retrieve the page to understand its structure
+    const pageData = await notion.pages.retrieve({ page_id: pageId });
+    
+    // Examine the actual Status property
+    const statusProperty = pageData.properties.Status;
+    logToFile(`Status property inspection: ${JSON.stringify(statusProperty)}`);
+    
+    // Check if Status exists and determine its type
+    if (!statusProperty) {
+      throw new Error("Status property not found in the page");
+    }
+    
+    // Create update object using exact same structure but with new value
+    let updateObj = {};
+    
+    // For status-type properties (Notion's new Status property type)
+    if (statusProperty.type === 'status') {
+      updateObj = {
+        properties: {
+          Status: {
+            status: {
+              name: statusValue
+            }
+          }
+        }
+      };
+    } 
+    // For select-type properties (older Notion property type)
+    else if (statusProperty.type === 'select') {
+      updateObj = {
+        properties: {
+          Status: {
+            select: {
+              name: statusValue
+            }
+          }
+        }
+      };
+    } 
+    else {
+      throw new Error(`Unsupported Status property type: ${statusProperty.type}`);
+    }
+    
+    // Perform the update with the correct structure
+    const response = await notion.pages.update({
+      page_id: pageId,
+      ...updateObj
+    });
+    
+    return { success: true, data: response };
+  } catch (error) {
+    logToFile(`Error updating status: ${error.message}`);
+    return { success: false, error };
+  }
 }
