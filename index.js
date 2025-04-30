@@ -2272,10 +2272,26 @@ Example Output: {
           );
           
         } catch (updateError) {
+          // Improved error logging with detailed message
           logToFile(`Error updating property in /set command: ${updateError.message}`);
-          await interaction.editReply(`❌ Error updating property: ${updateError.message}`);
+          if (updateError.code) {
+            logToFile(`Error code: ${updateError.code}`);
+          }
+          if (updateError.body) {
+            logToFile(`Error body: ${updateError.body}`);
+          }
+          
+          // Provide better error message to the user based on error type
+          let errorMessage = `❌ Error updating property: ${updateError.message}`;
+          
+          if (updateError.message.includes('permission')) {
+            errorMessage = `❌ Notion permission error: The bot doesn't have permission to update this property. Please make sure the Notion integration has been added to the database (via "Add connections" menu) and has "Update content" capabilities.`;
+          } else if (updateError.message.includes('status is expected to be')) {
+            errorMessage = `❌ Property type mismatch: This property has a different type than expected. Try using the /sync command instead which can handle different property types.`;
+          }
+          
+          await interaction.editReply(errorMessage);
         }
-        
       } catch (error) {
         logToFile(`Error in /set command: ${error.message}`);
         if (hasResponded) {
@@ -3163,6 +3179,134 @@ Example Output: {
       }
     }
     
+    // Handle the /remind command
+    else if (commandName === 'remind') {
+      try {
+        // Get command options
+        const user = interaction.options.getUser('user');
+        const message = interaction.options.getString('message');
+        const time = interaction.options.getString('time');
+        const ephemeral = interaction.options.getBoolean('ephemeral') || true;
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        
+        // Validate inputs
+        if (!user) {
+          await interaction.editReply('❌ Please specify a user to remind.');
+          return;
+        }
+        
+        if (!message) {
+          await interaction.editReply('❌ Please specify a reminder message.');
+          return;
+        }
+        
+        if (!time) {
+          await interaction.editReply('❌ Please specify when to send the reminder.');
+          return;
+        }
+        
+        // Parse the time expression
+        logToFile(`Parsing reminder time: "${time}" for user ${user.tag}`);
+        let reminderDate = null;
+        
+        // Try GPT first if available
+        if (openai) {
+          logToFile(`Trying to parse date with GPT: "${time}"`);
+          reminderDate = await parseDate(time);
+          logToFile(`GPT parsed date: ${reminderDate}`);
+        }
+        
+        // Fall back to manual parsing if GPT fails
+        if (!reminderDate) {
+          logToFile(`Trying to parse date manually: "${time}"`);
+          reminderDate = manualDateParse(time);
+          logToFile(`Manually parsed date: ${reminderDate}`);
+        }
+        
+        // If date parsing failed, return an error
+        if (!reminderDate) {
+          await interaction.editReply(`❌ Could not parse the time: "${time}". Please use a more standard format like "30m", "1h", or "tomorrow at 3pm".`);
+          return;
+        }
+        
+        // Check if the date is in the past
+        const now = new Date();
+        if (reminderDate < now) {
+          await interaction.editReply(`❌ The reminder time is in the past. Please choose a future time.`);
+          return;
+        }
+        
+        // Format date for display
+        const formattedDate = reminderDate.toLocaleString('en-US', { 
+          timeZone: TZ,
+          weekday: 'short',
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit', 
+          minute: '2-digit'
+        });
+        
+        // Calculate time until reminder
+        const msUntilReminder = reminderDate.getTime() - now.getTime();
+        const secondsUntil = Math.floor(msUntilReminder / 1000);
+        const minutesUntil = Math.floor(secondsUntil / 60);
+        const hoursUntil = Math.floor(minutesUntil / 60);
+        
+        let timeUntilText = '';
+        if (hoursUntil > 0) {
+          timeUntilText = `${hoursUntil}h ${minutesUntil % 60}m`;
+        } else {
+          timeUntilText = `${minutesUntil}m ${secondsUntil % 60}s`;
+        }
+        
+        // Generate reminder ID
+        const reminderId = Math.floor(Math.random() * 10000) + 1;
+        
+        // Create the reminder message
+        const reminderMessage = `⏰ **Reminder** for <@${user.id}>: ${message}\n(Set by <@${interaction.user.id}>)`;
+        
+        // Schedule the reminder
+        setTimeout(() => {
+          interaction.channel.send(reminderMessage)
+            .then(() => logToFile(`Sent reminder #${reminderId} to ${user.tag}: "${message}"`))
+            .catch(err => logToFile(`Error sending reminder: ${err.message}`));
+        }, msUntilReminder);
+        
+        // Send confirmation message
+        const embed = new EmbedBuilder()
+          .setTitle('⏰ Reminder Scheduled')
+          .setColor(0x00AAFF)
+          .setDescription(`I'll remind <@${user.id}> with your message at the specified time.`)
+          .addFields(
+            { name: 'Message', value: message, inline: false },
+            { name: 'When', value: formattedDate, inline: true },
+            { name: 'Time until reminder', value: timeUntilText, inline: true },
+            { name: 'Reminder ID', value: `#${reminderId}`, inline: true }
+          )
+          .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+        
+        // Send non-ephemeral confirmation in the channel if ephemeral is false
+        if (!ephemeral) {
+          await interaction.channel.send(
+            `✅ <@${interaction.user.id}> set a reminder for <@${user.id}> at ${formattedDate} (in ${timeUntilText})`
+          );
+        }
+        
+        logToFile(`Reminder #${reminderId} scheduled for ${user.tag} at ${formattedDate} (in ${timeUntilText}): "${message}"`);
+      } catch (error) {
+        logToFile(`Error in /remind command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error scheduling reminder: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error scheduling reminder: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
     // Handle other commands here
     // ...
     
@@ -3628,7 +3772,32 @@ async function updateNotionStatus(pageId, statusValue) {
     logToFile(`Successfully updated status to "${statusValue}"`);
     return { success: true, data: response };
   } catch (error) {
-    logToFile(`Error updating status: ${error.message}`);
-    return { success: false, error };
+    logToFile(`❌ ERROR updating status: ${error.message}`);
+    logToFile(`❌ ERROR details: ${JSON.stringify(error, null, 2)}`);
+    
+    // Try alternative format (select instead of status)
+    try {
+      logToFile(`Trying alternative select format for status...`);
+      const alternativeFormat = {
+        properties: {
+          Status: {
+            select: {
+              name: statusValue
+            }
+          }
+        }
+      };
+      
+      const response = await notion.pages.update({
+        page_id: pageId,
+        ...alternativeFormat
+      });
+      
+      logToFile(`✅ Successfully updated status using select format`);
+      return { success: true, data: response };
+    } catch (retryError) {
+      logToFile(`❌ Both status formats failed. Second error: ${retryError.message}`);
+      return { success: false, error };
+    }
   }
 }

@@ -4,7 +4,7 @@
 const { REST, Routes } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { getAllCommands, commandsToJSON } = require('./commands');
+const { getAllCommands, commandsToJSON, getCommandsByCategory } = require('./commands');
 
 // Function to log to file
 function logToFile(message) {
@@ -36,6 +36,55 @@ async function registerToGuild(rest, clientId, guild) {
     return true;
   } catch (error) {
     logToFile(`❌ Error registering commands to guild ${guild.name}: ${error.message}`);
+    if (error.rawError) {
+      logToFile(`API Error details: ${JSON.stringify(error.rawError, null, 2)}`);
+    }
+    return false;
+  }
+}
+
+// Function to register specific command categories to a specific guild
+async function registerCommandsToGuild(client, token, guildId, categoriesToInclude) {
+  try {
+    logToFile(`🔄 Registering specific command categories to guild ID: ${guildId}...`);
+    
+    // Initialize REST API client
+    const rest = new REST({ version: '10' }).setToken(token);
+    const clientId = client.user.id;
+    
+    // Find the guild
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) {
+      logToFile(`❌ Guild with ID ${guildId} not found`);
+      return false;
+    }
+    
+    // Get commands from specified categories
+    let commandsToRegister = [];
+    for (const category of categoriesToInclude) {
+      const categoryCommands = getCommandsByCategory(category);
+      logToFile(`Found ${categoryCommands.length} commands in category "${category}"`);
+      commandsToRegister = [...commandsToRegister, ...categoryCommands];
+    }
+    
+    // Convert to JSON format
+    const commandsData = commandsToJSON(commandsToRegister);
+    
+    logToFile(`Registering ${commandsToRegister.length} commands to guild ${guild.name} (${guild.id})`);
+    commandsToRegister.forEach(cmd => {
+      logToFile(`- ${cmd.name}`);
+    });
+    
+    // Register commands to the guild
+    await rest.put(
+      Routes.applicationGuildCommands(clientId, guild.id),
+      { body: commandsData },
+    );
+    
+    logToFile(`✅ Successfully registered ${commandsToRegister.length} commands to guild: ${guild.name} (${guild.id})`);
+    return true;
+  } catch (error) {
+    logToFile(`❌ Error registering commands to guild ${guildId}: ${error.message}`);
     if (error.rawError) {
       logToFile(`API Error details: ${JSON.stringify(error.rawError, null, 2)}`);
     }
@@ -75,5 +124,6 @@ async function registerCommandsOnStartup(client, token) {
 }
 
 module.exports = {
-  registerCommandsOnStartup
+  registerCommandsOnStartup,
+  registerCommandsToGuild
 };

@@ -195,6 +195,12 @@ const commands = {
     new SlashCommandBuilder().setName('summary').setDescription('Generate an AI summary of recent project activity')
       .addIntegerOption(option => option.setName('days').setDescription('Number of days to summarize (default: 7)'))
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+      
+    new SlashCommandBuilder().setName('remind').setDescription('Set a reminder for a user')
+      .addUserOption(option => option.setName('user').setDescription('User to remind').setRequired(true))
+      .addStringOption(option => option.setName('message').setDescription('Reminder message').setRequired(true))
+      .addStringOption(option => option.setName('time').setDescription('When to send the reminder (e.g., "30m", "1h", "tomorrow 2pm")').setRequired(true))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the confirmation only visible to you')),
   ],
 };
 
