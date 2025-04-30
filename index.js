@@ -388,7 +388,7 @@ function createScheduleEmbed() {
 const TOKEN = process.env.DISCORD_TOKEN;
 const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
 const DB = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID; // Support both naming conventions
-const CHANGELOG_DB = process.env.NOTION_CHANGELOG_DB_ID || "1d987c20070a80b9aacce39262b5da60"; // Dedicated constant for changelog DB
+const CHANGELOG_DB = process.env.NOTION_CHANGELOG_DB_ID; // No hardcoded fallback - rely on environment variable
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
 
@@ -963,8 +963,7 @@ client.on('interactionCreate', async interaction => {
     if (commandName === 'where') {
       try {
         // Check if ephemeral flag is set
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
-        
+        const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
@@ -1221,8 +1220,7 @@ client.on('interactionCreate', async interaction => {
     else if (commandName === 'availability') {
       try {
         // Check if ephemeral flag is set
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
-        
+        const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
@@ -1301,7 +1299,7 @@ client.on('interactionCreate', async interaction => {
         // Get command options with defaults
         const messageCount = interaction.options.getInteger('messages') || 100;
         const dryRun = interaction.options.getBoolean('dry_run') || false;
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -1549,8 +1547,7 @@ client.on('interactionCreate', async interaction => {
     else if (commandName === 'link') {
       try {
         // Check if ephemeral flag is set
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
-        
+        const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
@@ -1624,7 +1621,7 @@ client.on('interactionCreate', async interaction => {
         // Get command options
         const text = interaction.options.getString('text');
         const dryRun = interaction.options.getBoolean('dry_run') || false;
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -2053,59 +2050,12 @@ Example Output: {
         switch (subcommand) {
           case 'status':
             try {
-              // APPROACH: First retrieve the page to understand its structure
-              const pageData = await notion.pages.retrieve({ page_id: project.page.id });
+              // Use our helper function to update status
+              const statusResult = await updateNotionStatus(project.page.id, value);
               
-              // Examine the actual Status property
-              const statusProperty = pageData.properties.Status;
-              logToFile(`DIRECT INSPECTION: Status property = ${JSON.stringify(statusProperty)}`);
-              
-              // Check if Status exists and determine its type
-              if (!statusProperty) {
-                throw new Error("Status property not found in the page");
+              if (!statusResult.success) {
+                throw statusResult.error || new Error("Failed to update status");
               }
-              
-              // Create update object using exact same structure but with new value
-              let updateObj = {};
-              
-              // For status-type properties (Notion's new Status property type)
-              if (statusProperty.type === 'status') {
-                updateObj = {
-                  properties: {
-                    Status: {
-                      status: {
-                        name: value
-                      }
-                    }
-                  }
-                };
-                logToFile(`Using status-type format: ${JSON.stringify(updateObj.properties.Status)}`);
-              } 
-              // For select-type properties (older Notion property type)
-              else if (statusProperty.type === 'select') {
-                updateObj = {
-                  properties: {
-                    Status: {
-                      select: {
-                        name: value
-                      }
-                    }
-                  }
-                };
-                logToFile(`Using select-type format: ${JSON.stringify(updateObj.properties.Status)}`);
-              } 
-              else {
-                throw new Error(`Unsupported Status property type: ${statusProperty.type}`);
-              }
-              
-              // Update using the precise structure determined from the page itself
-              logToFile(`Sending update with structure: ${JSON.stringify(updateObj)}`);
-              await notion.pages.update({
-                page_id: project.page.id,
-                ...updateObj
-              });
-              
-              logToFile(`✅ Successfully updated status to "${value}" using exact match approach`);
               
               // Get the Notion URL for the page
               const notionUrl = getNotionPageUrl(project.page.id);
@@ -2130,20 +2080,18 @@ Example Output: {
               });
               
               // Also send a non-ephemeral message to channel for visibility
-              await interaction.channel.send(
+              await channel.send(
                 `✅ <@${interaction.user.id}> set status to "${value}" for project ${projectCode}`
               );
               
+              // Notify any relevant users of status change
+              checkStatusAndNotify(projectCode, value, channel.id);
+              
               // Return early to bypass the rest of the switch statement
               return;
-              
             } catch (statusError) {
               // Log the exact error
-              logToFile(`Detailed Status update error: ${statusError.message}`);
-              if (statusError.response?.data) {
-                logToFile(`Error response data: ${JSON.stringify(statusError.response.data)}`);
-              }
-              
+              logToFile(`Error updating status: ${statusError.message}`);
               throw statusError;
             }
             break;
@@ -2373,7 +2321,7 @@ Example Output: {
     else if (commandName === 'schedule') {
       try {
         // Check if ephemeral flag is set
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -2459,7 +2407,7 @@ Example Output: {
         const time = interaction.options.getString('time');
         const description = interaction.options.getString('description') || '';
         const usersString = interaction.options.getString('users') || '';
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -2608,7 +2556,7 @@ Example Output: {
       try {
         // Get command options
         const projectCode = interaction.options.getString('project');
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -3044,7 +2992,7 @@ Example Output: {
       try {
         // Get command options
         const days = interaction.options.getInteger('days') || 7;
-        const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
+        const ephemeral = true;
         
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
@@ -3658,55 +3606,26 @@ function getStatusPropertyFormat(pageProperties) {
 // Create a helper function to properly update Status property
 async function updateNotionStatus(pageId, statusValue) {
   try {
-    // First retrieve the page to understand its structure
-    const pageData = await notion.pages.retrieve({ page_id: pageId });
-    
-    // Examine the actual Status property
-    const statusProperty = pageData.properties.Status;
-    logToFile(`Status property inspection: ${JSON.stringify(statusProperty)}`);
-    
-    // Check if Status exists and determine its type
-    if (!statusProperty) {
-      throw new Error("Status property not found in the page");
-    }
-    
-    // Create update object using exact same structure but with new value
-    let updateObj = {};
-    
-    // For status-type properties (Notion's new Status property type)
-    if (statusProperty.type === 'status') {
-      updateObj = {
-        properties: {
-          Status: {
-            status: {
-              name: statusValue
-            }
+    // Using the direct format that Notion expects
+    const updateObj = {
+      properties: {
+        Status: {
+          status: {
+            name: statusValue
           }
         }
-      };
-    } 
-    // For select-type properties (older Notion property type)
-    else if (statusProperty.type === 'select') {
-      updateObj = {
-        properties: {
-          Status: {
-            select: {
-              name: statusValue
-            }
-          }
-        }
-      };
-    } 
-    else {
-      throw new Error(`Unsupported Status property type: ${statusProperty.type}`);
-    }
+      }
+    };
     
-    // Perform the update with the correct structure
+    // Perform the update with simple status format
+    logToFile(`Updating status for page ${pageId} with value "${statusValue}" using direct format`);
+    
     const response = await notion.pages.update({
       page_id: pageId,
       ...updateObj
     });
     
+    logToFile(`Successfully updated status to "${statusValue}"`);
     return { success: true, data: response };
   } catch (error) {
     logToFile(`Error updating status: ${error.message}`);
