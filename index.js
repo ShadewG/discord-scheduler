@@ -965,7 +965,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: !!ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -998,13 +998,27 @@ client.on('interactionCreate', async interaction => {
         // Find the status property using the best match function
         let status = 'No Status';
         const statusPropertyName = findBestPropertyMatch(properties, 'Status');
-        if (statusPropertyName && properties[statusPropertyName]?.select?.name) {
-          status = properties[statusPropertyName].select.name;
-          logToFile(`Found status using property name: "${statusPropertyName}"`);
+        if (statusPropertyName) {
+          // Check for status type properties first
+          if (properties[statusPropertyName]?.status?.name) {
+            status = properties[statusPropertyName].status.name;
+            logToFile(`Found status (status type) using property name: "${statusPropertyName}"`);
+          } 
+          // Then try select type
+          else if (properties[statusPropertyName]?.select?.name) {
+            status = properties[statusPropertyName].select.name;
+            logToFile(`Found status (select type) using property name: "${statusPropertyName}"`);
+          } else {
+            logToFile(`Status property found but couldn't extract value from "${statusPropertyName}"`);
+          }
         } else {
-          // Fallback to old method for backwards compatibility
-          if (properties.Status?.select?.name) {
+          // Fallback to direct property checks
+          if (properties.Status?.status?.name) {
+            status = properties.Status.status.name;
+          } else if (properties.Status?.select?.name) {
             status = properties.Status.select.name;
+          } else if (properties.status?.status?.name) {
+            status = properties.status.status.name;
           } else if (properties.status?.select?.name) {
             status = properties.status.select.name;
           } else {
@@ -1209,7 +1223,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Current Berlin time
@@ -1289,7 +1303,7 @@ client.on('interactionCreate', async interaction => {
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if channel is linked to a Notion page
@@ -1536,7 +1550,7 @@ client.on('interactionCreate', async interaction => {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if channel is linked to a project
@@ -1611,7 +1625,7 @@ client.on('interactionCreate', async interaction => {
         const dryRun = interaction.options.getBoolean('dry_run') || false;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if OpenAI is configured
@@ -2111,26 +2125,61 @@ Example Output: {
         switch (subcommand) {
           case 'status':
             try {
-              // Explicitly use the status format (not select) based on the error message
-              // "Status is expected to be status" means we need to use status type
-              notionProperties['Status'] = { 
-                status: { name: value } 
-              };
+              // Get the page properties to determine correct status format
+              const pageProperties = project.page.properties;
+              const statusFormat = getStatusPropertyFormat(pageProperties);
               
-              logToFile(`Attempting to update status with exact format required by Notion: { "status": { "name": "${value}" } }`);
+              // Use the correct format based on the property type
+              if (statusFormat === 'status') {
+                notionProperties['Status'] = { 
+                  status: { name: value } 
+                };
+                logToFile(`Using status format for Status property: { status: { name: "${value}" } }`);
+              } else {
+                notionProperties['Status'] = { 
+                  select: { name: value } 
+                };
+                logToFile(`Using select format for Status property: { select: { name: "${value}" } }`);
+              }
               
               await notion.pages.update({
                 page_id: project.page.id,
                 properties: notionProperties
               });
               
-              logToFile(`✅ Successfully updated status to "${value}"`);
+              logToFile(`✅ Successfully updated status to "${value}" using ${statusFormat} format`);
             } catch (statusError) {
               // Log the exact error
               logToFile(`Detailed Status update error: ${statusError.message}`);
               logToFile(`Error response: ${JSON.stringify(statusError.response?.data || {})}`);
               
-              throw statusError;
+              // If we get a validation error, try the opposite format as a fallback
+              if (statusError.message.includes('validation_error')) {
+                try {
+                  logToFile(`Trying alternative format after validation error`);
+                  
+                  // Try the opposite format
+                  if (notionProperties['Status']?.status) {
+                    notionProperties['Status'] = { select: { name: value } };
+                    logToFile(`Switched to select format: ${JSON.stringify(notionProperties['Status'])}`);
+                  } else {
+                    notionProperties['Status'] = { status: { name: value } };
+                    logToFile(`Switched to status format: ${JSON.stringify(notionProperties['Status'])}`);
+                  }
+                  
+                  await notion.pages.update({
+                    page_id: project.page.id,
+                    properties: notionProperties
+                  });
+                  
+                  logToFile(`✅ Successfully updated status with alternative format`);
+                } catch (fallbackError) {
+                  logToFile(`Fallback format also failed: ${fallbackError.message}`);
+                  throw fallbackError;
+                }
+              } else {
+                throw statusError;
+              }
             }
             break;
             
@@ -2361,7 +2410,7 @@ Example Output: {
         // Check if ephemeral flag is set
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Create and send the schedule embed
@@ -2447,7 +2496,7 @@ Example Output: {
         const usersString = interaction.options.getString('users') || '';
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check permissions
@@ -2596,7 +2645,7 @@ Example Output: {
         const projectCode = interaction.options.getString('project');
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if Notion is configured
@@ -3032,7 +3081,7 @@ Example Output: {
         const days = interaction.options.getInteger('days') || 7;
         const ephemeral = interaction.options.getBoolean('ephemeral') !== false; // Default to true
         
-        await interaction.deferReply({ ephemeral: ephemeral });
+        await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
         // Check if OpenAI is configured
@@ -3621,4 +3670,22 @@ function scheduleMeeting(meetingId, channelId, date, mentionedUsers, title, desc
   meeting.reminderJob = reminderJob;
   
   return { meetingCron, reminderCron, formattedDate };
+}
+
+// Function to determine the correct Status property format for a page
+function getStatusPropertyFormat(pageProperties) {
+  // Check if the Status property exists and what type it is
+  if (pageProperties.Status) {
+    // Look for evidence of being a status-type property
+    if ('status' in pageProperties.Status) {
+      return 'status';
+    } 
+    // Look for evidence of being a select-type property
+    else if ('select' in pageProperties.Status) {
+      return 'select';
+    }
+  }
+  
+  // Default to status format based on error message "Status is expected to be status"
+  return 'status';
 }
