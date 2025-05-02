@@ -793,11 +793,38 @@ client.once('ready', () => {
   console.log('Bot is ready!');
   logToFile('Bot started successfully');
   
-  // Call the function to register our extract-tasks command
-  registerExtractTasksCommand().catch(error => {
-    console.error('Failed to register extract-tasks command:', error);
-    logToFile(`Failed to register extract-tasks command: ${error.message}`);
-  });
+  // Register the extract-tasks command automatically on startup
+  try {
+    console.log('Registering /extract-tasks command...');
+    logToFile('Registering /extract-tasks command on startup...');
+    
+    // Define the command
+    const extractTasksCommand = {
+      name: 'extract-tasks',
+      description: 'Extract tasks from morning messages and create Notion pages'
+    };
+    
+    // Register to all guilds the bot is in
+    const guilds = client.guilds.cache;
+    logToFile(`Bot is in ${guilds.size} guilds`);
+    
+    guilds.forEach(guild => {
+      logToFile(`Registering /extract-tasks command to guild: ${guild.name} (${guild.id})`);
+      
+      guild.commands.create(extractTasksCommand)
+        .then(command => {
+          console.log(`✅ Registered /extract-tasks command to guild: ${guild.name}`);
+          logToFile(`✅ Successfully registered /extract-tasks command to ${guild.name} (${guild.id})`);
+        })
+        .catch(error => {
+          console.error(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
+          logToFile(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
+        });
+    });
+  } catch (error) {
+    console.error('Error registering extract-tasks command:', error);
+    logToFile(`Error registering extract-tasks command: ${error.message}`);
+  }
   
   // Verify schedule channel access
   const scheduleChannel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
@@ -4523,184 +4550,5 @@ try {
   logToFile(`Error registering extract tasks command: ${error.message}`);
 }
 
-// Replace the above code with this enhanced guild-specific registration
-try {
-  // Load the command registration functions
-  const { REST } = require('discord.js');
-  const { Routes } = require('discord-api-types/v9');
-  
-  // Get guild ID from environment variable
-  if (!GUILD_ID) {
-    console.warn('⚠️ GUILD_ID not provided in environment variables. The extract-tasks command may not be visible.');
-    logToFile('⚠️ Warning: GUILD_ID not provided. Guild command registration may fail.');
-  }
-  
-  // Create the command definition
-  const extractTasksCommand = {
-    name: 'extract-tasks',
-    description: 'Extract tasks from morning messages and create Notion pages',
-    options: []
-  };
-  
-  // Register command specifically to the guild
-  const rest = new REST({ version: '9' }).setToken(TOKEN);
-  
-  // First, try to register as a guild command for immediate visibility
-  if (GUILD_ID) {
-    console.log(`Registering /extract-tasks command to guild ID: ${GUILD_ID}`);
-    logToFile(`Registering /extract-tasks command to guild ID: ${GUILD_ID}`);
-    
-    // Register to all guilds the bot is in if GUILD_ID is not specified
-    const guilds = client.guilds.cache;
-    if (guilds.size === 0) {
-      console.warn('⚠️ Bot is not in any guilds yet. Commands will be registered when the bot joins a guild.');
-      logToFile('⚠️ Bot is not in any guilds yet. Commands will be registered when the bot joins a guild.');
-    }
-    
-    // Register to the specific guild
-    rest.put(
-      Routes.applicationGuildCommands(client.user.id, GUILD_ID),
-      { body: [extractTasksCommand] }
-    )
-    .then(() => {
-      console.log('✅ Guild command registered successfully!');
-      logToFile(`✅ /extract-tasks command registered to guild ID: ${GUILD_ID}`);
-    })
-    .catch(error => {
-      console.error('Error registering guild command:', error);
-      logToFile(`Error registering guild command: ${error.message}`);
-      
-      // Fallback to registering in each guild individually
-      console.log('Attempting to register command to all joined guilds as fallback...');
-      let registeredCount = 0;
-      
-      guilds.forEach(guild => {
-        rest.put(
-          Routes.applicationGuildCommands(client.user.id, guild.id),
-          { body: [extractTasksCommand] }
-        )
-        .then(() => {
-          registeredCount++;
-          console.log(`Registered command to guild: ${guild.name} (${guild.id})`);
-          logToFile(`Registered /extract-tasks command to guild: ${guild.name} (${guild.id})`);
-        })
-        .catch(guildError => {
-          console.error(`Failed to register command to guild ${guild.name}:`, guildError);
-          logToFile(`Failed to register command to guild ${guild.name}: ${guildError.message}`);
-        });
-      });
-      
-      console.log(`Attempted to register command to ${guilds.size} guilds.`);
-      logToFile(`Attempted to register command to ${guilds.size} guilds.`);
-    });
-  } else {
-    // If GUILD_ID is not provided, register to all guilds
-    console.log('No GUILD_ID provided, registering command to all joined guilds...');
-    let registeredCount = 0;
-    
-    guilds.forEach(guild => {
-      rest.put(
-        Routes.applicationGuildCommands(client.user.id, guild.id),
-        { body: [extractTasksCommand] }
-      )
-      .then(() => {
-        registeredCount++;
-        console.log(`Registered command to guild: ${guild.name} (${guild.id})`);
-        logToFile(`Registered /extract-tasks command to guild: ${guild.name} (${guild.id})`);
-      })
-      .catch(guildError => {
-        console.error(`Failed to register command to guild ${guild.name}:`, guildError);
-        logToFile(`Failed to register command to guild ${guild.name}: ${guildError.message}`);
-      });
-    });
-    
-    console.log(`Attempted to register command to ${guilds.size} guilds.`);
-    logToFile(`Attempted to register command to ${guilds.size} guilds.`);
-  }
-} catch (error) {
-  console.error('Error setting up command registration:', error);
-  logToFile(`Error setting up command registration: ${error.message}`);
-}
-
-// Replace the above code with a simpler, more direct approach that works correctly
-client.once('ready', async () => {
-  try {
-    // Add this to the existing ready event handler
-    console.log('Registering slash commands...');
-    
-    // Explicitly set the guild ID
-    const SPECIFIC_GUILD_ID = '1275557298307203123';  // Use the specific guild ID
-    
-    // Create the REST API instance
-    const { REST } = require('discord.js');
-    const { Routes } = require('discord-api-types/v9');
-    const rest = new REST({ version: '9' }).setToken(TOKEN);
-    
-    // Define the extract-tasks command
-    const commands = [{
-      name: 'extract-tasks',
-      description: 'Extract tasks from morning messages and create Notion pages'
-    }];
-    
-    // Register the command to the specific guild
-    console.log(`Attempting to register guild command to guild ID: ${SPECIFIC_GUILD_ID}`);
-    
-    try {
-      await rest.put(
-        Routes.applicationGuildCommands(client.user.id, SPECIFIC_GUILD_ID),
-        { body: commands }
-      );
-      
-      console.log('✅ Guild command registered successfully!');
-      logToFile(`✅ /extract-tasks command registered to guild ID: ${SPECIFIC_GUILD_ID}`);
-    } catch (putError) {
-      console.error(`Error registering command to guild: ${putError}`);
-      logToFile(`Error registering command to guild: ${putError.message}`);
-    }
-    
-  } catch (readyError) {
-    console.error('Error in ready event handler:', readyError);
-    logToFile(`Error in ready event handler: ${readyError.message}`);
-  }
-});
-
-// Create a separate function for registering the extract-tasks command
-async function registerExtractTasksCommand() {
-  try {
-    console.log('Registering task extraction slash command...');
-    
-    // Explicitly set the guild ID
-    const SPECIFIC_GUILD_ID = '1275557298307203123';  // Use the specific guild ID
-    
-    // Create the REST API instance
-    const { REST } = require('discord.js');
-    const { Routes } = require('discord-api-types/v9');
-    const rest = new REST({ version: '9' }).setToken(TOKEN);
-    
-    // Define the extract-tasks command
-    const commands = [{
-      name: 'extract-tasks',
-      description: 'Extract tasks from morning messages and create Notion pages'
-    }];
-    
-    // Register the command to the specific guild
-    console.log(`Attempting to register guild command to guild ID: ${SPECIFIC_GUILD_ID}`);
-    
-    try {
-      await rest.put(
-        Routes.applicationGuildCommands(client.user.id, SPECIFIC_GUILD_ID),
-        { body: commands }
-      );
-      
-      console.log('✅ Guild command registered successfully!');
-      logToFile(`✅ /extract-tasks command registered to guild ID: ${SPECIFIC_GUILD_ID}`);
-    } catch (putError) {
-      console.error(`Error registering command to guild: ${putError}`);
-      logToFile(`Error registering command to guild: ${putError.message}`);
-    }
-    
-  } catch (error) {
-    console.error('Error registering extract-tasks command:', error);
-    logToFile(`Error registering extract-tasks command: ${error.message}`);
-  }
-}
+// Remove this problematic code that's causing errors
+// The command is now registered directly in the ready event handler
