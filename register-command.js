@@ -8,6 +8,7 @@ const path = require('path');
 // Load environment variables
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = '1275557298307203123'; // Explicitly set the guild ID
+const CLIENT_ID = process.env.CLIENT_ID; // Get the client ID from environment
 
 // Utility function for logging
 function logToFile(message) {
@@ -43,6 +44,12 @@ async function registerCommand() {
       process.exit(1);
     }
     
+    if (!CLIENT_ID) {
+      console.error('❌ CLIENT_ID is required but not provided in .env file');
+      logToFile('❌ CLIENT_ID is required but not provided in .env file');
+      process.exit(1);
+    }
+    
     console.log(`Registering command to guild: ${GUILD_ID}`);
     logToFile(`Registering command to guild: ${GUILD_ID}`);
     
@@ -50,20 +57,14 @@ async function registerCommand() {
     const rest = new REST({ version: '9' }).setToken(TOKEN);
     
     try {
-      // Get application ID (bot ID)
-      console.log('Fetching application information...');
-      const app = await rest.get(Routes.oauth2CurrentApplication());
-      const applicationId = app.id;
-      
-      console.log(`Application ID: ${applicationId}`);
-      logToFile(`Application ID: ${applicationId}`);
-      
-      // Register commands to the guild
+      // Register commands to the guild using the provided client ID
+      console.log(`Using client ID: ${CLIENT_ID}`);
       console.log(`Registering guild command to guild ID: ${GUILD_ID}`);
+      logToFile(`Using client ID: ${CLIENT_ID}`);
       logToFile(`Registering guild command to guild ID: ${GUILD_ID}`);
       
       await rest.put(
-        Routes.applicationGuildCommands(applicationId, GUILD_ID),
+        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: commands }
       );
       
