@@ -4071,3 +4071,445 @@ Focus only on important content and be concise.`;
   
   return prompt;
 }
+
+// After the function to schedule backup job
+function scheduleBackupJob() {
+  // Schedule at 11 AM every day
+  cron.schedule('0 11 * * *', async () => {
+    try {
+      logToFile(`⏰ Executing daily message backup and task extraction at ${moment().tz(TZ).format('YYYY-MM-DD HH:mm:ss')}`);
+      await backupAndProcessMessages();
+    } catch (error) {
+      logToFile(`❌ Error executing daily backup job: ${error.message}`);
+      console.error('Error in daily backup job:', error);
+    }
+  }, {
+    timezone: TZ,
+    scheduled: true
+  });
+  
+  logToFile(`✅ Scheduled daily message backup job for 11:00 AM ${TZ}`);
+}
+
+// Function to extract tasks from morning messages and create Notion pages
+async function extractTasksFromMorningMessages() {
+  try {
+    logToFile(`=== Starting Manual Task Extraction ===`);
+    
+    // Get the channel
+    const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
+    if (!channel) {
+      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
+      return { success: false, error: "Channel not found" };
+    }
+    
+    logToFile(`Found channel #${channel.name} (${channel.id})`);
+    
+    // Calculate today's 7 AM in the configured timezone
+    const now = new Date();
+    const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
+    today.setHours(7, 0, 0, 0);
+    
+    // Convert to UTC for comparison with Discord timestamps
+    const startTime = new Date(today.toLocaleString('en-US', { timeZone: 'UTC' }));
+    
+    logToFile(`Collecting messages since ${startTime.toISOString()} (7 AM in ${TZ})`);
+    
+    try {
+      // Fetch the last 100 messages from the channel
+      const messages = await channel.messages.fetch({ limit: 100 });
+      
+      // Filter messages sent after 7 AM today
+      const recentMessages = messages.filter(msg => new Date(msg.createdAt) >= startTime);
+      
+      logToFile(`Found ${recentMessages.size} messages sent since 7 AM`);
+      
+      if (recentMessages.size === 0) {
+        logToFile(`No new messages to process.`);
+        return { success: true, messageCount: 0, taskCount: 0, pagesCreated: 0 };
+      }
+      
+      // Extract tasks by author using functions we'll define later
+      const tasksByAuthor = extractTasksByAuthor(recentMessages);
+      
+      // Create Notion pages for each author's tasks
+      let pagesCreated = 0;
+      for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
+        if (authorData.tasks.length > 0) {
+          await createNotionTaskPage(authorData);
+          pagesCreated++;
+        }
+      }
+      
+      // Count total tasks
+      const totalTasks = Object.values(tasksByAuthor).reduce(
+        (sum, user) => sum + user.tasks.length, 0
+      );
+      
+      logToFile(`✅ Task extraction completed: Created ${pagesCreated} Notion pages with ${totalTasks} tasks`);
+      
+      return {
+        success: true,
+        messageCount: recentMessages.size,
+        taskCount: totalTasks,
+        pagesCreated: pagesCreated,
+        authors: Object.keys(tasksByAuthor).length
+      };
+      
+    } catch (fetchError) {
+      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
+      throw fetchError;
+    }
+  } catch (error) {
+    logToFile(`❌ Error in extractTasksFromMorningMessages: ${error.message}`);
+    console.error('Error extracting tasks:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Function to extract tasks from messages grouped by author
+function extractTasksByAuthor(messages) {
+  const tasksByAuthor = {};
+  
+  // Convert messages collection to array and sort by time
+  const sortedMessages = [...messages.values()].sort(
+    (a, b) => a.createdTimestamp - b.createdTimestamp
+  );
+  
+  for (const msg of sortedMessages) {
+    // Skip bot messages
+    if (msg.author.bot) continue;
+    
+    const authorId = msg.author.id;
+    const content = msg.content;
+    
+    // Skip empty messages
+    if (!content.trim()) continue;
+    
+    // Initialize author data if not exists
+    if (!tasksByAuthor[authorId]) {
+      tasksByAuthor[authorId] = {
+        author: {
+          id: authorId,
+          username: msg.author.username,
+          tag: msg.author.tag,
+        },
+        tasks: [],
+        projectCode: null,
+        rawMessages: []
+      };
+    }
+    
+    // Add the raw message for context
+    tasksByAuthor[authorId].rawMessages.push({
+      content,
+      timestamp: msg.createdTimestamp
+    });
+    
+    // Extract project code if present (BC##, IB##, CL##)
+    const projectMatch = content.match(/\b(BC|IB|CL)\s*(\d{2})\b/gi);
+    if (projectMatch && !tasksByAuthor[authorId].projectCode) {
+      tasksByAuthor[authorId].projectCode = projectMatch[0].replace(/\s+/g, '').toUpperCase();
+    }
+    
+    // Extract tasks using various patterns
+    const tasks = extractTasksFromContent(content);
+    
+    // Add extracted tasks
+    if (tasks.length > 0) {
+      tasksByAuthor[authorId].tasks.push(...tasks);
+    }
+  }
+  
+  return tasksByAuthor;
+}
+
+// Function to extract tasks from message content
+function extractTasksFromContent(content) {
+  const tasks = [];
+  
+  // Check for numbered lists (1. Task, 2. Task)
+  const numberedItems = content.match(/\d+\s*[\)\.](.+?)(?=\n\d+\s*[\)\.]\s|\n\s*$|$)/gs);
+  if (numberedItems) {
+    numberedItems.forEach(item => {
+      const taskText = item.replace(/^\d+\s*[\)\.]\s*/, '').trim();
+      if (taskText) tasks.push(taskText);
+    });
+  }
+  
+  // Check for dash or bullet lists (- Task, • Task)
+  const bulletItems = content.match(/[-•*]\s+(.+?)(?=\n[-•*]\s|\n\s*$|$)/gs);
+  if (bulletItems) {
+    bulletItems.forEach(item => {
+      const taskText = item.replace(/^[-•*]\s+/, '').trim();
+      if (taskText) tasks.push(taskText);
+    });
+  }
+  
+  // Look for explicit task markers like "TODO:", "TASK:", etc.
+  const explicitTasks = content.match(/(?:TODO|TASK|GOAL):\s*(.+?)(?=\n|$)/gi);
+  if (explicitTasks) {
+    explicitTasks.forEach(item => {
+      const taskText = item.replace(/^(?:TODO|TASK|GOAL):\s*/i, '').trim();
+      if (taskText) tasks.push(taskText);
+    });
+  }
+  
+  // Look for "goals" format like "Today's goals:"
+  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan")) {
+    // Extract lines that look like tasks after "goals" or "plans" header
+    const goalMatch = content.match(/(?:today'?s?\s+goals?|goals?|plans?|plan for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
+    if (goalMatch && goalMatch[1]) {
+      const goalSection = goalMatch[1].trim();
+      
+      // Split into lines and process each line
+      const lines = goalSection.split('\n');
+      lines.forEach(line => {
+        // Clean up the line
+        let taskText = line.trim()
+          .replace(/^[-•*]\s+/, '') // Remove bullet points
+          .replace(/^\d+\s*[\)\.]\s*/, '') // Remove numbering
+          .replace(/^[✓✔]\s*/, ''); // Remove checkmarks
+        
+        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for)/i)) {
+          tasks.push(taskText);
+        }
+      });
+    }
+  }
+  
+  // Special handling for format like "BC32: MGX DRAFT / Clip Selection Finish all MGX BY EOD"
+  const projectTaskMatch = content.match(/\b(BC|IB|CL)\s*(\d{2})\s*:\s*([\s\S]*?)(?=\n\s*(?:\b(?:BC|IB|CL)|$)|$)/gi);
+  if (projectTaskMatch) {
+    projectTaskMatch.forEach(match => {
+      const projectCode = match.match(/\b(BC|IB|CL)\s*(\d{2})\b/i)[0].replace(/\s+/g, '').toUpperCase();
+      
+      // Get the content after the project code
+      const taskContent = match.replace(/\b(BC|IB|CL)\s*(\d{2})\s*:/i, '').trim();
+      
+      // Split by line breaks, slashes or other common separators
+      const taskParts = taskContent.split(/\n|\/|;/);
+      
+      taskParts.forEach(part => {
+        const taskText = part.trim();
+        if (taskText) {
+          tasks.push(`${projectCode}: ${taskText}`);
+        }
+      });
+    });
+  }
+  
+  return tasks.filter(task => task.length > 0);
+}
+
+// Function to create a Notion page with task checkboxes
+async function createNotionTaskPage(authorData) {
+  try {
+    const { author, tasks, projectCode, rawMessages } = authorData;
+    
+    // Skip if no tasks
+    if (tasks.length === 0) {
+      logToFile(`No tasks found for ${author.tag}, skipping Notion page creation`);
+      return null;
+    }
+    
+    logToFile(`Creating Notion page with ${tasks.length} tasks for ${author.tag}`);
+    
+    // Format today's date
+    const today = moment().tz(TZ).format('MMMM D, YYYY');
+    
+    // Prepare title with project code if available
+    let title = `${author.username}'s Tasks - ${today}`;
+    if (projectCode) {
+      title = `${projectCode} - ${title}`;
+    }
+    
+    // Create the Notion page
+    const response = await notion.pages.create({
+      parent: {
+        database_id: NOTION_DB_ID
+      },
+      properties: {
+        title: {
+          title: [
+            {
+              text: {
+                content: title
+              }
+            }
+          ]
+        }
+      },
+      children: [
+        {
+          object: "block",
+          type: "heading_2",
+          heading_2: {
+            rich_text: [
+              {
+                text: {
+                  content: "Tasks from Morning Messages"
+                }
+              }
+            ]
+          }
+        },
+        {
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [
+              {
+                text: {
+                  content: `Tasks extracted from ${author.username}'s messages on ${today}`
+                }
+              }
+            ]
+          }
+        },
+        ...tasks.map(task => ({
+          object: "block",
+          type: "to_do",
+          to_do: {
+            rich_text: [
+              {
+                text: {
+                  content: task
+                }
+              }
+            ],
+            checked: false
+          }
+        })),
+        {
+          object: "block",
+          type: "divider",
+          divider: {}
+        },
+        {
+          object: "block",
+          type: "heading_3",
+          heading_3: {
+            rich_text: [
+              {
+                text: {
+                  content: "Original Messages"
+                }
+              }
+            ]
+          }
+        },
+        ...rawMessages.map(msg => ({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [
+              {
+                text: {
+                  content: `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`
+                }
+              }
+            ]
+          }
+        }))
+      ]
+    });
+    
+    logToFile(`✅ Successfully created Notion page for ${author.username} with ${tasks.length} tasks. Page ID: ${response.id}`);
+    return response;
+    
+  } catch (error) {
+    logToFile(`❌ Error creating Notion page: ${error.message}`);
+    if (error.body) {
+      logToFile(`Error details: ${JSON.stringify(error.body)}`);
+    }
+    throw error;
+  }
+}
+
+// Find where the registerCommandsOnStartup function is being called
+// Right after this part: "// Register commands on startup"
+// add the following extra command registration:
+
+// Handle additional commands (before or after other slash command handlers)
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName } = interaction;
+  
+  // Handle the /extract-tasks command
+  if (commandName === 'extract-tasks') {
+    try {
+      // Always use ephemeral replies for this command
+      await interaction.deferReply({ ephemeral: true });
+      
+      // Run the task extraction
+      await interaction.editReply('⏳ Extracting tasks from morning messages...');
+      
+      const result = await extractTasksFromMorningMessages();
+      
+      if (!result.success) {
+        return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
+      }
+      
+      if (result.messageCount === 0) {
+        return interaction.editReply('No messages found from this morning (since 7 AM).');
+      }
+      
+      // Create embed for response
+      const embed = new EmbedBuilder()
+        .setTitle('Task Extraction Complete')
+        .setColor(0x00AA00)
+        .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
+        .addFields(
+          { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
+          { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
+          { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
+          { name: 'Team Members', value: `${result.authors}`, inline: true }
+        )
+        .setTimestamp();
+      
+      // Send the response
+      await interaction.editReply({ 
+        content: '✅ Task extraction completed successfully!', 
+        embeds: [embed] 
+      });
+      
+    } catch (error) {
+      logToFile(`Error in /extract-tasks command: ${error.message}`);
+      await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+    }
+  }
+  
+  // Other command handlers continue here...
+});
+
+// Add a new command to the auto-registration system
+// Find the registerCommandsOnStartup function call in the client.once('ready') handler
+// and add the following right after the first registerCommandsOnStartup call:
+
+// In the client.once('ready') handler, after the registerCommandsOnStartup call:
+try {
+  // Load the commands from a file
+  const { registerCommand } = require('./auto-register-commands');
+  
+  // Register the extract-tasks command
+  const extractTasksCommand = {
+    name: 'extract-tasks',
+    description: 'Extract tasks from morning messages and create Notion pages',
+    options: []
+  };
+  
+  registerCommand(client, TOKEN, extractTasksCommand)
+    .then(() => {
+      console.log('Extract tasks command registered successfully');
+      logToFile('Extract tasks command registered successfully');
+    })
+    .catch(error => {
+      console.error('Error registering extract tasks command:', error);
+      logToFile(`Error registering extract tasks command: ${error.message}`);
+    });
+} catch (error) {
+  console.error('Error registering extract tasks command:', error);
+  logToFile(`Error registering extract tasks command: ${error.message}`);
+}
