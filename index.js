@@ -4513,3 +4513,102 @@ try {
   console.error('Error registering extract tasks command:', error);
   logToFile(`Error registering extract tasks command: ${error.message}`);
 }
+
+// Replace the above code with this enhanced guild-specific registration
+try {
+  // Load the command registration functions
+  const { REST } = require('discord.js');
+  const { Routes } = require('discord-api-types/v9');
+  
+  // Get guild ID from environment variable
+  if (!GUILD_ID) {
+    console.warn('⚠️ GUILD_ID not provided in environment variables. The extract-tasks command may not be visible.');
+    logToFile('⚠️ Warning: GUILD_ID not provided. Guild command registration may fail.');
+  }
+  
+  // Create the command definition
+  const extractTasksCommand = {
+    name: 'extract-tasks',
+    description: 'Extract tasks from morning messages and create Notion pages',
+    options: []
+  };
+  
+  // Register command specifically to the guild
+  const rest = new REST({ version: '9' }).setToken(TOKEN);
+  
+  // First, try to register as a guild command for immediate visibility
+  if (GUILD_ID) {
+    console.log(`Registering /extract-tasks command to guild ID: ${GUILD_ID}`);
+    logToFile(`Registering /extract-tasks command to guild ID: ${GUILD_ID}`);
+    
+    // Register to all guilds the bot is in if GUILD_ID is not specified
+    const guilds = client.guilds.cache;
+    if (guilds.size === 0) {
+      console.warn('⚠️ Bot is not in any guilds yet. Commands will be registered when the bot joins a guild.');
+      logToFile('⚠️ Bot is not in any guilds yet. Commands will be registered when the bot joins a guild.');
+    }
+    
+    // Register to the specific guild
+    rest.put(
+      Routes.applicationGuildCommands(client.user.id, GUILD_ID),
+      { body: [extractTasksCommand] }
+    )
+    .then(() => {
+      console.log('✅ Guild command registered successfully!');
+      logToFile(`✅ /extract-tasks command registered to guild ID: ${GUILD_ID}`);
+    })
+    .catch(error => {
+      console.error('Error registering guild command:', error);
+      logToFile(`Error registering guild command: ${error.message}`);
+      
+      // Fallback to registering in each guild individually
+      console.log('Attempting to register command to all joined guilds as fallback...');
+      let registeredCount = 0;
+      
+      guilds.forEach(guild => {
+        rest.put(
+          Routes.applicationGuildCommands(client.user.id, guild.id),
+          { body: [extractTasksCommand] }
+        )
+        .then(() => {
+          registeredCount++;
+          console.log(`Registered command to guild: ${guild.name} (${guild.id})`);
+          logToFile(`Registered /extract-tasks command to guild: ${guild.name} (${guild.id})`);
+        })
+        .catch(guildError => {
+          console.error(`Failed to register command to guild ${guild.name}:`, guildError);
+          logToFile(`Failed to register command to guild ${guild.name}: ${guildError.message}`);
+        });
+      });
+      
+      console.log(`Attempted to register command to ${guilds.size} guilds.`);
+      logToFile(`Attempted to register command to ${guilds.size} guilds.`);
+    });
+  } else {
+    // If GUILD_ID is not provided, register to all guilds
+    console.log('No GUILD_ID provided, registering command to all joined guilds...');
+    let registeredCount = 0;
+    
+    guilds.forEach(guild => {
+      rest.put(
+        Routes.applicationGuildCommands(client.user.id, guild.id),
+        { body: [extractTasksCommand] }
+      )
+      .then(() => {
+        registeredCount++;
+        console.log(`Registered command to guild: ${guild.name} (${guild.id})`);
+        logToFile(`Registered /extract-tasks command to guild: ${guild.name} (${guild.id})`);
+      })
+      .catch(guildError => {
+        console.error(`Failed to register command to guild ${guild.name}:`, guildError);
+        logToFile(`Failed to register command to guild ${guild.name}: ${guildError.message}`);
+      });
+    });
+    
+    console.log(`Attempted to register command to ${guilds.size} guilds.`);
+    logToFile(`Attempted to register command to ${guilds.size} guilds.`);
+  }
+} catch (error) {
+  console.error('Error setting up command registration:', error);
+  logToFile(`Error setting up command registration: ${error.message}`);
+}
