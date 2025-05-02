@@ -21,6 +21,9 @@ const activeJobs = new Map();
 const SCHEDULE_CHANNEL_ID = '1364301344508477541'; // Daily Work Schedule channel
 const SCHEDULE_ROLE_ID = '1364657163598823474'; // Role ID to notify for scheduled meetings
 
+// Daily message backup channel ID
+const MESSAGE_BACKUP_CHANNEL_ID = '1296549507357741086'; // Channel to backup messages from
+
 // Team mention role ID
 const TEAM_ROLE_ID = '1364657163598823474';
 
@@ -33,7 +36,8 @@ let jobs = [
   { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** — enjoy! Back at 13:45.`, notify: true },
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
-  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true }
+  { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
+  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true } // New job to backup messages
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -3435,6 +3439,15 @@ function scheduleAllJobs() {
         // Log the execution with timestamp
         const berlinTime = new Date().toLocaleString('en-US', { timeZone: TZ });
         logToFile(`⏰ Executing job: ${job.tag} at ${berlinTime} (${TZ} time)`);
+        
+        // Special handling for the message backup job
+        if (job.backupMessages) {
+          logToFile(`Starting backup of messages from channel ${MESSAGE_BACKUP_CHANNEL_ID}`);
+          await backupChannelMessages();
+          return;
+        }
+        
+        // Regular job execution for notification messages
         logToFile(`Message to send: ${job.text}`);
         
         // Send the message with better error handling
@@ -3826,4 +3839,235 @@ async function updateNotionStatus(pageId, statusValue) {
       return { success: false, error };
     }
   }
+}
+
+// Add this after the getNotionPageUrl function
+
+// Function to backup messages from a channel between specific times
+async function backupChannelMessages() {
+  try {
+    logToFile(`=== Starting Daily Message Backup ===`);
+    
+    // Get the channel
+    const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
+    if (!channel) {
+      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
+      return;
+    }
+    
+    logToFile(`Found channel #${channel.name} (${channel.id})`);
+    
+    // Calculate today's 7 AM in the configured timezone
+    const now = new Date();
+    const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
+    today.setHours(7, 0, 0, 0);
+    
+    // Convert to UTC for comparison with Discord timestamps
+    const startTime = new Date(today.toLocaleString('en-US', { timeZone: 'UTC' }));
+    
+    logToFile(`Collecting messages since ${startTime.toISOString()} (7 AM in ${TZ})`);
+    
+    try {
+      // Fetch the last 100 messages from the channel
+      const messages = await channel.messages.fetch({ limit: 100 });
+      
+      // Filter messages sent after 7 AM today
+      const recentMessages = messages.filter(msg => new Date(msg.createdAt) >= startTime);
+      
+      logToFile(`Found ${recentMessages.size} messages sent since 7 AM`);
+      
+      if (recentMessages.size === 0) {
+        logToFile(`No new messages to backup.`);
+        return;
+      }
+      
+      // Format messages for saving
+      const formattedMessages = recentMessages.map(msg => ({
+        id: msg.id,
+        author: {
+          id: msg.author.id,
+          username: msg.author.username,
+          tag: msg.author.tag
+        },
+        content: msg.content,
+        attachments: msg.attachments.size > 0 ? [...msg.attachments.values()].map(a => a.url) : [],
+        timestamp: msg.createdAt.toISOString()
+      }));
+      
+      // Group messages by author for summarization
+      const messagesByAuthor = {};
+      formattedMessages.forEach(msg => {
+        const authorId = msg.author.id;
+        if (!messagesByAuthor[authorId]) {
+          messagesByAuthor[authorId] = {
+            author: msg.author,
+            messages: []
+          };
+        }
+        messagesByAuthor[authorId].messages.push({
+          content: msg.content,
+          timestamp: msg.timestamp
+        });
+      });
+      
+      // Create timestamp for the filename
+      const dateStr = now.toISOString().split('T')[0];
+      const backupFileName = `message_backup_${dateStr}.json`;
+      const backupFilePath = path.join(__dirname, 'backups', backupFileName);
+      
+      // Ensure backups directory exists
+      if (!fs.existsSync(path.join(__dirname, 'backups'))) {
+        fs.mkdirSync(path.join(__dirname, 'backups'));
+      }
+      
+      // Write messages to JSON file
+      fs.writeFileSync(
+        backupFilePath, 
+        JSON.stringify({ 
+          channel: {
+            id: channel.id,
+            name: channel.name
+          },
+          backupDate: now.toISOString(),
+          messageCount: formattedMessages.length,
+          messages: formattedMessages 
+        }, null, 2)
+      );
+      
+      logToFile(`✅ Successfully backed up ${formattedMessages.length} messages to ${backupFilePath}`);
+      
+      // Also write a plaintext version for easy reading
+      const textContent = formattedMessages
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        .map(msg => `[${new Date(msg.timestamp).toLocaleString()}] ${msg.author.tag}: ${msg.content}`)
+        .join('\n\n');
+      
+      const textFilePath = path.join(__dirname, 'backups', `message_backup_${dateStr}.txt`);
+      fs.writeFileSync(textFilePath, textContent);
+      
+      logToFile(`✅ Also saved plaintext version to ${textFilePath}`);
+      
+      // Generate AI summary if OpenAI is configured
+      if (openai) {
+        logToFile(`Generating AI summary of messages...`);
+        
+        const summaryPrompt = generateSummaryPrompt(messagesByAuthor);
+        
+        try {
+          const aiResponse = await openai.chat.completions.create({
+            model: 'gpt-4',
+            messages: [
+              {
+                role: 'system',
+                content: `You are an assistant that summarizes Discord conversations into actionable items.
+                For each user, extract clear, actionable tasks from their messages.
+                Format each item as a bullet point starting with "ACTION:" for definite actions needed,
+                "INFO:" for important information shared, or "DECISION:" for decisions made.
+                Group items by user and be concise - focus only on important, actionable content.`
+              },
+              {
+                role: 'user',
+                content: summaryPrompt
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 1500
+          });
+          
+          const summary = aiResponse.choices[0]?.message?.content;
+          
+          if (summary) {
+            // Save the AI summary
+            const summaryFilePath = path.join(__dirname, 'backups', `summary_${dateStr}.md`);
+            const summaryHeader = `# Daily Message Summary - ${new Date().toLocaleDateString('en-US', { timeZone: TZ })}\n\n`;
+            const channelInfo = `**Channel:** #${channel.name}\n**Time Period:** 7:00 AM - 11:00 AM ${TZ}\n**Message Count:** ${formattedMessages.length}\n\n`;
+            
+            fs.writeFileSync(summaryFilePath, summaryHeader + channelInfo + summary);
+            logToFile(`✅ Successfully created AI summary at ${summaryFilePath}`);
+            
+            // Also try to send the summary to the channel
+            try {
+              const summaryEmbed = new EmbedBuilder()
+                .setTitle('Morning Message Summary')
+                .setDescription('AI-generated summary of this morning\'s conversation')
+                .setColor(0x00AAFF)
+                .addFields({ name: 'Time Period', value: '7:00 AM - 11:00 AM', inline: true })
+                .addFields({ name: 'Message Count', value: `${formattedMessages.length}`, inline: true })
+                .setTimestamp();
+              
+              // Split summary if it's too long for Discord (max 4096 chars for description)
+              if (summary.length <= 4000) {
+                summaryEmbed.setDescription(summary);
+                await channel.send({ embeds: [summaryEmbed] });
+              } else {
+                // Send the first part in the embed
+                summaryEmbed.setDescription(summary.substring(0, 4000) + '...\n*(Summary continued in file attachment)*');
+                
+                // Send the full summary as a file attachment
+                const summaryAttachment = Buffer.from(summary, 'utf8');
+                const attachment = { attachment: summaryAttachment, name: 'morning_summary.md' };
+                
+                await channel.send({ 
+                  embeds: [summaryEmbed],
+                  files: [attachment]
+                });
+              }
+              
+              logToFile(`✅ Successfully sent AI summary to channel`);
+            } catch (sendError) {
+              logToFile(`⚠️ Could not send summary to channel: ${sendError.message}`);
+            }
+          } else {
+            logToFile(`⚠️ AI returned empty summary`);
+          }
+        } catch (aiError) {
+          logToFile(`❌ Error generating AI summary: ${aiError.message}`);
+        }
+      } else {
+        logToFile(`⚠️ OpenAI not configured, skipping AI summary generation`);
+      }
+      
+    } catch (fetchError) {
+      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
+      throw fetchError;
+    }
+    
+    logToFile(`=== Daily Message Backup Completed ===`);
+  } catch (error) {
+    logToFile(`❌ Error in backupChannelMessages: ${error.message}`);
+    console.error('Error in message backup:', error);
+  }
+}
+
+// Helper function to generate the prompt for AI summarization
+function generateSummaryPrompt(messagesByAuthor) {
+  let prompt = `Please summarize the following Discord messages into actionable items by user.\n\n`;
+  
+  Object.keys(messagesByAuthor).forEach(authorId => {
+    const authorData = messagesByAuthor[authorId];
+    prompt += `## User: ${authorData.author.tag}\n\n`;
+    
+    // Sort messages by timestamp
+    const sortedMessages = authorData.messages.sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+    
+    // Add messages with timestamps
+    sortedMessages.forEach(msg => {
+      const time = new Date(msg.timestamp).toLocaleTimeString('en-US', { 
+        timeZone: TZ,
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      prompt += `[${time}] ${msg.content}\n\n`;
+    });
+    
+    prompt += `\n`;
+  });
+  
+  prompt += `\nFor each user, extract actionable items, important information shared, and decisions made from their messages.
+Format as bullet points with "ACTION:", "INFO:", or "DECISION:" prefixes.
+Focus only on important content and be concise.`;
+  
+  return prompt;
 }
