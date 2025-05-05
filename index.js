@@ -793,63 +793,8 @@ client.once('ready', () => {
   console.log('Bot is ready!');
   logToFile('Bot started successfully');
   
-  // Register the extract-tasks command automatically on startup
-  try {
-    console.log('Registering /extract-tasks command...');
-    logToFile('Registering /extract-tasks command on startup...');
-    
-    // Define the command
-    const extractTasksCommand = {
-      name: 'extract-tasks',
-      description: 'Extract tasks from morning messages and create Notion pages'
-    };
-    
-    // Register to all guilds the bot is in
-    const guilds = client.guilds.cache;
-    logToFile(`Bot is in ${guilds.size} guilds`);
-    
-    // Track successful registrations
-    let successCount = 0;
-    let failCount = 0;
-    
-    // Use Promise.all to handle all registrations concurrently
-    const registerPromises = [];
-    
-    guilds.forEach(guild => {
-      logToFile(`Registering /extract-tasks command to guild: ${guild.name} (${guild.id})`);
-      
-      const registerPromise = guild.commands.create(extractTasksCommand)
-        .then(command => {
-          console.log(`✅ Registered /extract-tasks command to guild: ${guild.name}`);
-          logToFile(`✅ Successfully registered /extract-tasks command to ${guild.name} (${guild.id})`);
-          successCount++;
-        })
-        .catch(error => {
-          console.error(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
-          logToFile(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
-          failCount++;
-        });
-      
-      registerPromises.push(registerPromise);
-    });
-    
-    // Wait for all registrations to complete
-    Promise.all(registerPromises)
-      .then(() => {
-        logToFile(`✅ Command registration summary: ${successCount} successful, ${failCount} failed`);
-        if (successCount > 0) {
-          console.log(`✅ Successfully registered /extract-tasks command to ${successCount} guilds`);
-        } else {
-          console.error(`❌ Failed to register /extract-tasks command to any guilds`);
-        }
-      })
-      .catch(err => {
-        logToFile(`❌ Error waiting for command registrations: ${err.message}`);
-      });
-  } catch (error) {
-    console.error('Error registering extract-tasks command:', error);
-    logToFile(`Error registering extract-tasks command: ${error.message}`);
-  }
+  // Remove standalone extract-tasks command registration and rely on the standard command registration
+  // through the auto-register-commands.js module which will now include our command from commands.js
   
   // Verify schedule channel access
   const scheduleChannel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
