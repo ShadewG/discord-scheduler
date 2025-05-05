@@ -4346,13 +4346,26 @@ async function createNotionTaskPage(authorData) {
       return null;
     }
     
-    logToFile(`Creating Notion page with ${tasks.length} tasks for ${author.tag}`);
+    // Name aliases mapping
+    const nameAliases = {
+      'ayoub_prods': 'Ayoub',
+      'yovcheff.': 'Yovcho',
+      'arminnemeth': 'Armin',
+      'Shadew_': 'Shadew',
+      'wisedumdum': 'Jokubas',
+      'amino1473': 'Amino'
+    };
     
-    // Format today's date
-    const today = moment().tz(TZ).format('MMMM D, YYYY');
+    // Get the proper name using the alias mapping, or use the original username if no alias exists
+    const properName = nameAliases[author.username.toLowerCase()] || author.username;
     
-    // Prepare title with project code if available
-    let title = `${author.username}'s Tasks - ${today}`;
+    logToFile(`Creating Notion page with ${tasks.length} tasks for ${properName}`);
+    
+    // Get today's date in ISO format for the Date property
+    const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
+    
+    // Simplify title format
+    let title = `${properName}'s tasks`;
     if (projectCode) {
       title = `${projectCode} - ${title}`;
     }
@@ -4374,6 +4387,12 @@ async function createNotionTaskPage(authorData) {
               }
             }
           ]
+        },
+        // Add Date property with today's date
+        Date: {
+          date: {
+            start: todayISO
+          }
         }
       },
       children: [
@@ -4384,20 +4403,7 @@ async function createNotionTaskPage(authorData) {
             rich_text: [
               {
                 text: {
-                  content: "Tasks from Morning Messages"
-                }
-              }
-            ]
-          }
-        },
-        {
-          object: "block",
-          type: "paragraph",
-          paragraph: {
-            rich_text: [
-              {
-                text: {
-                  content: `Tasks extracted from ${author.username}'s messages on ${today}`
+                  content: "Tasks"
                 }
               }
             ]
@@ -4451,7 +4457,7 @@ async function createNotionTaskPage(authorData) {
       ]
     });
     
-    logToFile(`✅ Successfully created Notion page for ${author.username} with ${tasks.length} tasks. Page ID: ${response.id}`);
+    logToFile(`✅ Successfully created Notion page for ${properName} with ${tasks.length} tasks. Page ID: ${response.id}`);
     return response;
     
   } catch (error) {
