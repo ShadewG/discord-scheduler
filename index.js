@@ -4389,11 +4389,9 @@ async function createNotionTaskPage(authorData) {
     // Get today's date in ISO format for the Date property
     const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
     
-    // Simplify title format
-    let title = `${properName}'s tasks`;
-    if (projectCode) {
-      title = `${projectCode} - ${title}`;
-    }
+    // Always use just the person's name without the project code
+    // as requested, we don't want "CL27 - Ayoub's tasks" but just "Ayoub's tasks"
+    const title = `${properName}'s tasks`;
     
     // Use the specific database ID for tasks
     const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
