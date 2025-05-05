@@ -983,14 +983,116 @@ async function checkStatusAndNotify(projectCode, newStatus, channelId) {
 
 // Handle slash command interactions
 client.on('interactionCreate', async interaction => {
+  // Handle button interactions
+  if (interaction.isButton()) {
+    try {
+      if (interaction.customId === 'refresh_schedule') {
+        const scheduleEmbed = createScheduleEmbed();
+        
+        const row = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('refresh_schedule')
+              .setLabel('Refresh Timers')
+              .setStyle(ButtonStyle.Primary),
+          );
+        
+        await interaction.update({
+          content: '📅 Here is the complete schedule with countdown timers:',
+          embeds: [scheduleEmbed],
+          components: [row]
+        });
+        
+        logToFile(`Schedule timers refreshed by ${interaction.user.tag}`);
+      }
+    } catch (error) {
+      logToFile(`Error handling button interaction: ${error.message}`);
+      try {
+        await interaction.reply({ 
+          content: '❌ Error refreshing schedule timers. Please try again.',
+          ephemeral: true 
+        });
+      } catch (replyError) {
+        logToFile(`Failed to send error reply: ${replyError.message}`);
+      }
+    }
+    return;
+  }
+
+  // Handle command interactions
   if (!interaction.isCommand()) return;
 
   const { commandName } = interaction;
   
   // Add global error handling for all command interactions
   try {
-    // Create a timeout to track if we're at risk of hitting Discord's 3-second limit
     let hasResponded = false;
+    
+    // Handle the /extract-tasks command
+    if (commandName === 'extract-tasks') {
+      try {
+        // Always use ephemeral replies for this command
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        // Update user on progress to prevent timeout
+        await interaction.editReply('⏳ Extracting tasks from morning messages...');
+        
+        // Run the task extraction with a timeout to prevent Discord from timing out
+        const extractionPromise = extractTasksFromMorningMessages();
+        
+        // Set a timeout for the operation (15 seconds max)
+        const timeout = setTimeout(async () => {
+          try {
+            await interaction.editReply('⏳ Still extracting tasks... this is taking longer than expected.');
+          } catch (timeoutError) {
+            logToFile(`Failed to send timeout message: ${timeoutError.message}`);
+          }
+        }, 8000);
+        
+        const result = await extractionPromise;
+        clearTimeout(timeout);
+        
+        if (!result.success) {
+          return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
+        }
+        
+        if (result.messageCount === 0) {
+          return interaction.editReply('No messages found from this morning (since 7 AM).');
+        }
+        
+        // Create embed for response
+        const embed = new EmbedBuilder()
+          .setTitle('Task Extraction Complete')
+          .setColor(0x00AA00)
+          .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
+          .addFields(
+            { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
+            { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
+            { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
+            { name: 'Team Members', value: `${result.authors}`, inline: true }
+          )
+          .setTimestamp();
+        
+        // Send the response
+        await interaction.editReply({ 
+          content: '✅ Task extraction completed successfully!', 
+          embeds: [embed] 
+        });
+        
+      } catch (error) {
+        logToFile(`Error in /extract-tasks command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error extracting tasks: ${error.message}`, ephemeral: true });
+        }
+      }
+      return;
+    }
+    
+    // All other commands continue to be handled by the existing handlers
+    // (The code below is merged from the existing handler at line ~984)
     
     // Handle the /where command
     if (commandName === 'where') {
@@ -3343,60 +3445,17 @@ Example Output: {
     // Handle other commands here
     // ...
     
-  } catch (error) {
-    // Global error handling
-    logToFile(`Uncaught error in command ${commandName}: ${error.message}`);
-    logToFile(error.stack);
-    
+  } catch (globalError) {
+    logToFile(`Global error handler caught: ${globalError.message}`);
     try {
-      // Try to notify the user if possible
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
-      } else {
-        await interaction.followUp({ 
-          content: '❌ An unexpected error occurred. Please try again later.',
-          ephemeral: true 
-        });
+        await interaction.reply({ content: `❌ An error occurred: ${globalError.message}`, ephemeral: true });
+      } else if (interaction.deferred) {
+        await interaction.editReply(`❌ An error occurred: ${globalError.message}`);
       }
-    } catch (notifyError) {
-      logToFile(`Failed to notify user about error: ${notifyError.message}`);
+    } catch (replyError) {
+      logToFile(`Failed to send error reply: ${replyError.message}`);
     }
-  }
-});
-
-// Handle button interactions
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton()) return;
-  
-  try {
-    if (interaction.customId === 'refresh_schedule') {
-      const scheduleEmbed = createScheduleEmbed();
-      
-      const row = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('refresh_schedule')
-            .setLabel('Refresh Timers')
-            .setStyle(ButtonStyle.Primary),
-        );
-      
-      await interaction.update({
-        content: '📅 Here is the complete schedule with countdown timers:',
-        embeds: [scheduleEmbed],
-        components: [row]
-      });
-      
-      logToFile(`Schedule timers refreshed by ${interaction.user.tag}`);
-    }
-  } catch (error) {
-    logToFile(`Error handling button interaction: ${error.message}`);
-    await interaction.reply({ 
-      content: '❌ Error refreshing schedule timers. Please try again.',
-      ephemeral: true 
-    });
   }
 });
 
