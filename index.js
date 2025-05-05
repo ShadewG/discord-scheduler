@@ -4346,26 +4346,13 @@ async function createNotionTaskPage(authorData) {
       return null;
     }
     
-    // Name aliases mapping
-    const nameAliases = {
-      'ayoub_prods': 'Ayoub',
-      'yovcheff.': 'Yovcho',
-      'arminnemeth': 'Armin',
-      'Shadew_': 'Shadew',
-      'wisedumdum': 'Jokubas',
-      'amino1473': 'Amino'
-    };
+    logToFile(`Creating Notion page with ${tasks.length} tasks for ${author.tag}`);
     
-    // Get the proper name using the alias mapping, or use the original username if no alias exists
-    const properName = nameAliases[author.username.toLowerCase()] || author.username;
+    // Format today's date
+    const today = moment().tz(TZ).format('MMMM D, YYYY');
     
-    logToFile(`Creating Notion page with ${tasks.length} tasks for ${properName}`);
-    
-    // Get today's date in ISO format for the Date property
-    const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
-    
-    // Simplify title format
-    let title = `${properName}'s tasks`;
+    // Prepare title with project code if available
+    let title = `${author.username}'s Tasks - ${today}`;
     if (projectCode) {
       title = `${projectCode} - ${title}`;
     }
@@ -4387,12 +4374,6 @@ async function createNotionTaskPage(authorData) {
               }
             }
           ]
-        },
-        // Add Date property with today's date
-        Date: {
-          date: {
-            start: todayISO
-          }
         }
       },
       children: [
@@ -4403,7 +4384,20 @@ async function createNotionTaskPage(authorData) {
             rich_text: [
               {
                 text: {
-                  content: "Tasks"
+                  content: "Tasks from Morning Messages"
+                }
+              }
+            ]
+          }
+        },
+        {
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [
+              {
+                text: {
+                  content: `Tasks extracted from ${author.username}'s messages on ${today}`
                 }
               }
             ]
@@ -4457,7 +4451,7 @@ async function createNotionTaskPage(authorData) {
       ]
     });
     
-    logToFile(`✅ Successfully created Notion page for ${properName} with ${tasks.length} tasks. Page ID: ${response.id}`);
+    logToFile(`✅ Successfully created Notion page for ${author.username} with ${tasks.length} tasks. Page ID: ${response.id}`);
     return response;
     
   } catch (error) {
@@ -4532,28 +4526,36 @@ client.on('interactionCreate', async interaction => {
 
 // In the client.once('ready') handler, after the registerCommandsOnStartup call:
 try {
-  // Load the commands from a file
-  const { registerCommand } = require('./auto-register-commands');
+  console.log('Registering /extract-tasks command separately...');
+  logToFile('Registering /extract-tasks command separately...');
   
-  // Register the extract-tasks command
+  // Define the command
   const extractTasksCommand = {
     name: 'extract-tasks',
     description: 'Extract tasks from morning messages and create Notion pages',
     options: []
   };
   
-  registerCommand(client, TOKEN, extractTasksCommand)
-    .then(() => {
-      console.log('Extract tasks command registered successfully');
-      logToFile('Extract tasks command registered successfully');
-    })
-    .catch(error => {
-      console.error('Error registering extract tasks command:', error);
-      logToFile(`Error registering extract tasks command: ${error.message}`);
-    });
+  // Register to all guilds the bot is in
+  const guilds = client.guilds.cache;
+  logToFile(`Bot is in ${guilds.size} guilds`);
+  
+  guilds.forEach(guild => {
+    logToFile(`Registering /extract-tasks command to guild: ${guild.name} (${guild.id})`);
+    
+    guild.commands.create(extractTasksCommand)
+      .then(command => {
+        console.log(`✅ Registered /extract-tasks command to guild: ${guild.name}`);
+        logToFile(`✅ Successfully registered /extract-tasks command to ${guild.name} (${guild.id})`);
+      })
+      .catch(error => {
+        console.error(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
+        logToFile(`❌ Failed to register command to guild ${guild.name}: ${error.message}`);
+      });
+  });
 } catch (error) {
-  console.error('Error registering extract tasks command:', error);
-  logToFile(`Error registering extract tasks command: ${error.message}`);
+  console.error('Error registering extract-tasks command:', error);
+  logToFile(`Error registering extract-tasks command: ${error.message}`);
 }
 
 // Remove this problematic code that's causing errors
