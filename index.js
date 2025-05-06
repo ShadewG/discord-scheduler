@@ -1,18 +1,40 @@
 // Discord Bot for Insanity
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
-const { OpenAI } = require('openai');
+const { Client, GatewayIntentBits, MessageEmbed, ActivityType, Partials, AttachmentBuilder } = require('discord.js');
+const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
-const moment = require('moment-timezone');
+const axios = require('axios');
+const express = require('express');
+const cors = require('cors');
+const app = express();
+const OpenAI = require('openai');
+
+// Configure OpenAI client
+let openai = null;
+try {
+  if (process.env.OPENAI_API_KEY) {
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+    logToFile('OpenAI client initialized successfully');
+  } else {
+    logToFile('OPENAI_API_KEY not found in environment, GPT task extraction will not be available');
+  }
+} catch (error) {
+  logToFile(`Error initializing OpenAI client: ${error.message}`);
+}
+
+// Setup timezone
+const TZ = process.env.TIMEZONE || 'Europe/Berlin';
 
 // Import availability module
 const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
 
 // Define timezone for all operations
-const TZ = 'Europe/Berlin';
+// const TZ = 'Europe/Berlin'; // Removed duplicate TZ declaration
 
 // Map of active jobs
 const activeJobs = new Map();
@@ -37,7 +59,8 @@ let jobs = [
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
-  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true } // New job to backup messages
+  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
+  { tag: 'End-of-Day Task Check', cron: '0 18 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -521,18 +544,8 @@ function logToFile(message) {
   fs.appendFileSync(path.join(__dirname, 'bot.log'), logMessage);
 }
 
-// Initialize OpenAI client if API key is provided
-let openai = null;
-try {
-  if (OPENAI_API_KEY) {
-    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-    console.log('✅ OpenAI client initialized successfully');
-  } else {
-    console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
-  }
-} catch (error) {
-  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
-}
+// Note: OpenAI client is already initialized at the top of the file
+// let openai = null; (removed duplicate initialization)
 
 // Error handler
 client.on('error', (error) => {
@@ -3697,7 +3710,58 @@ Example Output: {
       }
     }
     
-    // Handle other commands here
+    // Handle the /check-tasks command
+    else if (commandName === 'check-tasks') {
+      try {
+        // Always use ephemeral replies for this command
+        await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
+        
+        // Run the task check
+        await interaction.editReply('⏳ Checking for completed tasks in recent messages...');
+        
+        const result = await checkEndOfDayTaskUpdates();
+        
+        if (!result.success) {
+          return interaction.editReply(`❌ Error checking tasks: ${result.error}`);
+        }
+        
+        if (result.skipped) {
+          return interaction.editReply('Current time is before 16:00, but check was forced. No messages to process.');
+        }
+        
+        if (result.messageCount === 0) {
+          return interaction.editReply('No messages found in the 16:00-20:00 timeframe.');
+        }
+        
+        // Create embed for response
+        const embed = new EmbedBuilder()
+          .setTitle('Task Update Check Complete')
+          .setColor(0x00AA00)
+          .setDescription(`I've analyzed messages from 16:00-20:00 to find completed tasks.`)
+          .addFields(
+            { name: 'Messages Analyzed', value: `${result.messageCount}`, inline: true },
+            { name: 'Tasks Updated', value: `${result.updatedTasks}`, inline: true }
+          )
+          .setTimestamp();
+        
+        // Send the response
+        await interaction.editReply({ 
+          content: '✅ Task update check completed successfully!', 
+          embeds: [embed] 
+        });
+        
+      } catch (error) {
+        logToFile(`Error in /check-tasks command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error checking tasks: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error checking tasks: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
+    // Other commands here
     // ...
     
   } catch (globalError) {
@@ -3761,6 +3825,18 @@ function scheduleAllJobs() {
         if (job.backupMessages) {
           logToFile(`Starting backup of messages from channel ${MESSAGE_BACKUP_CHANNEL_ID}`);
           await backupChannelMessages();
+          return;
+        }
+        
+        // Special handling for the task update job
+        if (job.updateTasks) {
+          logToFile(`Starting end-of-day task update check`);
+          const result = await checkEndOfDayTaskUpdates();
+          if (result.success) {
+            logToFile(`End-of-day task check completed. Updated ${result.updatedTasks || 0} tasks.`);
+          } else {
+            logToFile(`❌ Error in end-of-day task check: ${result.error || 'Unknown error'}`);
+          }
           return;
         }
         
@@ -4493,7 +4569,7 @@ async function extractTasksFromMorningMessages() {
 }
 
 // Function to extract tasks from messages grouped by author
-function extractTasksByAuthor(messages) {
+async function extractTasksByAuthor(messages) {
   const tasksByAuthor = {};
   
   // Convert messages collection to array and sort by time
@@ -4536,17 +4612,120 @@ function extractTasksByAuthor(messages) {
     if (projectMatch && !tasksByAuthor[authorId].projectCode) {
       tasksByAuthor[authorId].projectCode = projectMatch[0].replace(/\s+/g, '').toUpperCase();
     }
-    
-    // Extract tasks using various patterns
-    const tasks = extractTasksFromContent(content);
-    
-    // Add extracted tasks
-    if (tasks.length > 0) {
-      tasksByAuthor[authorId].tasks.push(...tasks);
+  }
+  
+  // Once we have collected all messages by author, use GPT to extract tasks
+  if (openai) {
+    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
+      if (authorData.rawMessages.length > 0) {
+        try {
+          // Create a context string from all messages
+          const contextStr = authorData.rawMessages
+            .map(msg => `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`)
+            .join('\n\n');
+            
+          // Extract tasks using GPT-4o with context awareness
+          const extractedTasks = await extractTasksWithGPT(contextStr, authorData.author.username);
+          
+          if (extractedTasks && extractedTasks.length > 0) {
+            authorData.tasks = extractedTasks;
+            logToFile(`✅ Successfully extracted ${extractedTasks.length} tasks for ${authorData.author.tag} using GPT`);
+          } else {
+            // Fallback to regex extraction if GPT returns no tasks
+            const tasks = extractTasksFromContent(contextStr);
+            authorData.tasks = tasks;
+            logToFile(`ℹ️ Falling back to regex extraction for ${authorData.author.tag}: ${tasks.length} tasks found`);
+          }
+        } catch (error) {
+          logToFile(`❌ Error using GPT for task extraction: ${error.message}. Falling back to regex.`);
+          // Fallback to regex-based extraction for this user
+          for (const msg of authorData.rawMessages) {
+            const tasks = extractTasksFromContent(msg.content);
+            if (tasks.length > 0) {
+              authorData.tasks.push(...tasks);
+            }
+          }
+        }
+      }
+    }
+  } else {
+    // If OpenAI is not available, fall back to regex extraction
+    logToFile(`OpenAI client not available, using regex-based task extraction`);
+    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
+      for (const msg of authorData.rawMessages) {
+        const tasks = extractTasksFromContent(msg.content);
+        if (tasks.length > 0) {
+          authorData.tasks.push(...tasks);
+        }
+      }
     }
   }
   
   return tasksByAuthor;
+}
+
+// Function to extract tasks using GPT-4o
+async function extractTasksWithGPT(messageContent, username) {
+  try {
+    const systemPrompt = `
+You are a task extraction assistant that identifies tasks and goals from Discord messages.
+Your role is to intelligently extract tasks while preserving their context and project associations.
+
+GUIDELINES:
+1. Preserve project context (e.g., "Storyn project (Sherlock)" should be part of the task context)
+2. Identify project codes like BC32, IB15, CL47 and keep them with related tasks
+3. Consider timeframes mentioned (e.g., "complete by 11:00") as part of the task, not separate tasks
+4. Group related bullet points under their common project or context
+5. Distinguish between actual tasks/to-dos and informational statements
+6. Preserve the hierarchical relationship between main tasks and subtasks
+7. Ignore greetings, casual chat, or non-task content
+
+OUTPUT FORMAT:
+Return a JSON array of task strings, where each task includes its full context:
+[
+  "Project X: Task description with timeframe",
+  "Context Y: Specific action item",
+  ...
+]
+
+The user will provide the message content to analyze.`;
+
+    const userPrompt = `Extract tasks from the following Discord messages by ${username}:\n\n${messageContent}`;
+
+    // Call GPT-4o (or fall back to GPT-4 if available)
+    const modelToUse = 'gpt-4o';
+    const response = await openai.chat.completions.create({
+      model: modelToUse,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.2, // Low temperature for more consistent results
+      response_format: { type: 'json_object' }
+    });
+
+    // Extract and parse the tasks
+    const content = response.choices[0]?.message?.content || '';
+    
+    try {
+      // Parse JSON response
+      const parsedResponse = JSON.parse(content);
+      // Return the tasks array or empty array if not found
+      return parsedResponse.tasks || [];
+    } catch (parseError) {
+      logToFile(`Error parsing GPT response: ${parseError.message}. Response: ${content}`);
+      
+      // Try to extract tasks with regex as a fallback
+      const taskMatches = content.match(/"([^"]+)"/g);
+      if (taskMatches && taskMatches.length > 0) {
+        return taskMatches.map(match => match.replace(/^"|"$/g, ''));
+      }
+      return [];
+    }
+  } catch (error) {
+    logToFile(`Error calling OpenAI for task extraction: ${error.message}`);
+    throw error;
+  }
 }
 
 // Function to extract tasks from message content
@@ -4691,6 +4870,12 @@ async function createNotionTaskPage(authorData) {
             Assignee: {
               select: {
                 name: properName
+              }
+            },
+            // Set initial Progress status to "To Do"
+            Progress: {
+              select: {
+                name: "To Do"
               }
             }
           },
@@ -4885,6 +5070,167 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
     
   } catch (error) {
     logToFile(`Error fetching project deadlines: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+// Function to update tasks based on end-of-day messages
+async function checkEndOfDayTaskUpdates() {
+  try {
+    logToFile(`=== Starting End-of-Day Task Update Check ===`);
+    
+    // Get the channel
+    const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
+    if (!channel) {
+      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
+      return { success: false, error: "Channel not found" };
+    }
+    
+    logToFile(`Found channel #${channel.name} (${channel.id})`);
+    
+    // Calculate today's time range in the configured timezone
+    const now = new Date();
+    const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
+    
+    // Set the time range (16:00 to 20:00)
+    const startTime = new Date(today);
+    startTime.setHours(16, 0, 0, 0);
+    
+    const endTime = new Date(today);
+    endTime.setHours(20, 0, 0, 0);
+    
+    // Convert to UTC for comparison with Discord timestamps
+    const utcStartTime = new Date(startTime.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const utcEndTime = new Date(endTime.toLocaleString('en-US', { timeZone: 'UTC' }));
+    
+    // If current time is before 16:00, skip the check
+    if (now < utcStartTime) {
+      logToFile(`Current time is before 16:00 ${TZ}, skipping end-of-day task check`);
+      return { success: true, skipped: true };
+    }
+    
+    logToFile(`Collecting messages between ${utcStartTime.toISOString()} and ${utcEndTime.toISOString()} (16:00-20:00 in ${TZ})`);
+    
+    try {
+      // Fetch messages from the channel
+      const messages = await channel.messages.fetch({ limit: 100 });
+      
+      // Filter messages within the time range
+      const recentMessages = messages.filter(msg => {
+        const msgTime = new Date(msg.createdAt);
+        return msgTime >= utcStartTime && msgTime <= utcEndTime;
+      });
+      
+      logToFile(`Found ${recentMessages.size} messages sent between 16:00-20:00`);
+      
+      if (recentMessages.size === 0) {
+        logToFile(`No messages found in the specified time range.`);
+        return { success: true, messageCount: 0, updatedTasks: 0 };
+      }
+      
+      // Analyze messages to find completed tasks
+      // First, extract tasks by author
+      const tasksByAuthor = extractTasksByAuthor(recentMessages);
+      
+      // Need to query the Notion database to get all tasks for today
+      if (!notion) {
+        logToFile(`❌ Notion client not initialized`);
+        return { success: false, error: "Notion not initialized" };
+      }
+      
+      // Use the specific database ID for tasks
+      const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
+      
+      // Get today's date in ISO format
+      const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
+      
+      // Query Notion for tasks created today
+      const taskResponse = await notion.databases.query({
+        database_id: TASKS_DB_ID,
+        filter: {
+          property: "Date",
+          date: {
+            equals: todayISO
+          }
+        }
+      });
+      
+      logToFile(`Found ${taskResponse.results.length} tasks created today in Notion`);
+      
+      // Check for task completion phrases in messages
+      const completionPhrases = [
+        "done", "completed", "finished", "fixed", "resolved", "complete",
+        "did it", "closed", "done with", "accomplished"
+      ];
+      
+      let tasksUpdated = 0;
+      
+      // For each task in Notion
+      for (const taskPage of taskResponse.results) {
+        // Get task title and assignee
+        const taskTitle = taskPage.properties.title?.title?.[0]?.text?.content || 
+                         taskPage.properties.Title?.title?.[0]?.text?.content || "";
+        
+        if (!taskTitle) continue;
+        
+        // Get current progress status
+        const currentProgress = taskPage.properties.Progress?.select?.name || "";
+        
+        // Skip if already marked as Done
+        if (currentProgress === "Done") continue;
+        
+        // Check if any message indicates this task is complete
+        const isCompleted = [...recentMessages.values()].some(msg => {
+          const content = msg.content.toLowerCase();
+          
+          // Check if the message contains the task name or a close match
+          const containsTaskReference = content.includes(taskTitle.toLowerCase()) || 
+                                       // Check for partial matches with at least 5 characters
+                                       (taskTitle.length > 5 && content.includes(taskTitle.substring(0, Math.floor(taskTitle.length * 0.7)).toLowerCase()));
+          
+          if (!containsTaskReference) return false;
+          
+          // Check if any completion phrase is in the message
+          return completionPhrases.some(phrase => content.includes(phrase.toLowerCase()));
+        });
+        
+        if (isCompleted) {
+          // Update the task status to Done
+          try {
+            await notion.pages.update({
+              page_id: taskPage.id,
+              properties: {
+                Progress: {
+                  select: {
+                    name: "Done"
+                  }
+                }
+              }
+            });
+            
+            logToFile(`✅ Updated task "${taskTitle}" to Done`);
+            tasksUpdated++;
+          } catch (updateError) {
+            logToFile(`❌ Error updating task "${taskTitle}": ${updateError.message}`);
+          }
+        }
+      }
+      
+      logToFile(`✅ End-of-day task check completed: Updated ${tasksUpdated} tasks to Done`);
+      
+      return {
+        success: true,
+        messageCount: recentMessages.size,
+        updatedTasks: tasksUpdated
+      };
+      
+    } catch (fetchError) {
+      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
+      throw fetchError;
+    }
+  } catch (error) {
+    logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
+    console.error('Error checking end-of-day task updates:', error);
     return { success: false, error: error.message };
   }
 }

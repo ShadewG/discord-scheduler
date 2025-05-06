@@ -208,6 +208,9 @@ const commands = {
       
     // Add extract-tasks command to ensure it's registered properly
     new SlashCommandBuilder().setName('extract-tasks').setDescription('Extract tasks from morning messages and create Notion pages'),
+    
+    // Add check-tasks command to manually run the end-of-day task check
+    new SlashCommandBuilder().setName('check-tasks').setDescription('Check for completed tasks in recent messages'),
   ],
 };
 
