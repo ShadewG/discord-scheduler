@@ -4746,62 +4746,11 @@ async function createNotionTaskPage(authorData) {
   }
 }
 
-// Find where the registerCommandsOnStartup function is being called
-// Right after this part: "// Register commands on startup"
-// add the following extra command registration:
+// NOTE: The duplicate command handler for /extract-tasks was removed from here
+// This was causing the issue with tasks not being properly created
+// The main handler is already defined at line ~985
 
-// Handle additional commands (before or after other slash command handlers)
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isCommand()) return;
 
-  const { commandName } = interaction;
-  
-  // Handle the /extract-tasks command
-  if (commandName === 'extract-tasks') {
-    try {
-      // Always use ephemeral replies for this command
-      await interaction.deferReply({ ephemeral: true });
-      
-      // Run the task extraction
-      await interaction.editReply('⏳ Extracting tasks from morning messages...');
-      
-      const result = await extractTasksFromMorningMessages();
-      
-      if (!result.success) {
-        return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
-      }
-      
-      if (result.messageCount === 0) {
-        return interaction.editReply('No messages found from this morning (since 7 AM).');
-      }
-      
-      // Create embed for response
-      const embed = new EmbedBuilder()
-        .setTitle('Task Extraction Complete')
-        .setColor(0x00AA00)
-        .setDescription(`I've extracted tasks from this morning's messages and created individual Notion task pages with proper assignees.`)
-        .addFields(
-          { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
-          { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
-          { name: 'Task Pages Created', value: `${result.pagesCreated}`, inline: true },
-          { name: 'Team Members', value: `${result.authors}`, inline: true }
-        )
-        .setTimestamp();
-      
-      // Send the response
-      await interaction.editReply({ 
-        content: '✅ Task extraction completed successfully!', 
-        embeds: [embed] 
-      });
-      
-    } catch (error) {
-      logToFile(`Error in /extract-tasks command: ${error.message}`);
-      await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
-    }
-  }
-  
-  // Other command handlers continue here...
-});
 
 // The duplicate extract-tasks command registration code below has been removed
 // to prevent conflicts with the registration in the ready event handler
