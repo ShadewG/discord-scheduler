@@ -15,15 +15,21 @@ const OpenAI = require('openai');
 // Configure OpenAI client
 let openai = null;
 try {
+  console.log('Attempting to initialize OpenAI client...');
   if (process.env.OPENAI_API_KEY) {
+    console.log('OPENAI_API_KEY found in environment variables');
     openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
+    console.log('OpenAI client initialized successfully');
     logToFile('OpenAI client initialized successfully');
   } else {
+    console.log('⚠️ OPENAI_API_KEY not found in environment variables');
+    console.log('Environment variables available:', Object.keys(process.env).join(', '));
     logToFile('OPENAI_API_KEY not found in environment, GPT task extraction will not be available');
   }
 } catch (error) {
+  console.log(`❌ Error initializing OpenAI client: ${error.message}`);
   logToFile(`Error initializing OpenAI client: ${error.message}`);
 }
 
@@ -4522,8 +4528,25 @@ async function extractTasksFromMorningMessages() {
         return { success: true, messageCount: 0, taskCount: 0, pagesCreated: 0 };
       }
       
-      // Extract tasks by author using functions we'll define later
-      const tasksByAuthor = extractTasksByAuthor(recentMessages);
+      // Sample message content for debugging
+      if (recentMessages.size > 0) {
+        const sampleMessages = [...recentMessages.values()].slice(0, 3);
+        sampleMessages.forEach((msg, idx) => {
+          logToFile(`Sample message ${idx+1}: ${msg.author.tag}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
+        });
+      }
+      
+      // Extract tasks by author
+      const tasksByAuthor = await extractTasksByAuthor(recentMessages);
+      
+      // Log the users and their tasks
+      logToFile(`Task extraction results by user:`);
+      for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
+        logToFile(`User ${authorData.author.tag}: ${authorData.tasks.length} tasks found`);
+        authorData.tasks.forEach((task, idx) => {
+          logToFile(`  Task ${idx+1}: ${task}`);
+        });
+      }
       
       // Create Notion pages for each task
       let totalPagesCreated = 0;
@@ -4538,6 +4561,8 @@ async function extractTasksFromMorningMessages() {
           if (createdPages && createdPages.length > 0) {
             totalPagesCreated += createdPages.length;
             authorCount++;
+            
+            logToFile(`Created ${createdPages.length} task pages for ${authorData.author.tag}`);
           }
         }
       }
@@ -4563,6 +4588,9 @@ async function extractTasksFromMorningMessages() {
     }
   } catch (error) {
     logToFile(`❌ Error in extractTasksFromMorningMessages: ${error.message}`);
+    if (error.stack) {
+      logToFile(`Stack trace: ${error.stack}`);
+    }
     console.error('Error extracting tasks:', error);
     return { success: false, error: error.message };
   }
@@ -4667,6 +4695,7 @@ async function extractTasksByAuthor(messages) {
 // Function to extract tasks using GPT-4o
 async function extractTasksWithGPT(messageContent, username) {
   try {
+    logToFile(`Attempting to extract tasks using GPT for user ${username}`);
     const systemPrompt = `
 You are a task extraction assistant that identifies tasks and goals from Discord messages.
 Your role is to intelligently extract tasks while preserving their context and project associations.
@@ -4679,18 +4708,23 @@ GUIDELINES:
 5. Distinguish between actual tasks/to-dos and informational statements
 6. Preserve the hierarchical relationship between main tasks and subtasks
 7. Ignore greetings, casual chat, or non-task content
+8. Be generous in identifying tasks - if something could be a task, include it
 
 OUTPUT FORMAT:
-Return a JSON array of task strings, where each task includes its full context:
-[
-  "Project X: Task description with timeframe",
-  "Context Y: Specific action item",
-  ...
-]
+Return a JSON object with a "tasks" array of task strings:
+{
+  "tasks": [
+    "Project X: Task description with timeframe",
+    "Context Y: Specific action item",
+    ...
+  ]
+}
 
 The user will provide the message content to analyze.`;
 
     const userPrompt = `Extract tasks from the following Discord messages by ${username}:\n\n${messageContent}`;
+
+    logToFile(`Sending request to OpenAI with ${messageContent.length} characters of content`);
 
     // Call GPT-4o (or fall back to GPT-4 if available)
     const modelToUse = 'gpt-4o';
@@ -4706,76 +4740,142 @@ The user will provide the message content to analyze.`;
 
     // Extract and parse the tasks
     const content = response.choices[0]?.message?.content || '';
+    logToFile(`Received response from OpenAI (${content.length} characters)`);
     
     try {
       // Parse JSON response
       const parsedResponse = JSON.parse(content);
+      
       // Return the tasks array or empty array if not found
-      return parsedResponse.tasks || [];
+      const tasks = parsedResponse.tasks || [];
+      
+      if (tasks.length > 0) {
+        logToFile(`Successfully extracted ${tasks.length} tasks from GPT response`);
+        tasks.forEach(task => logToFile(`GPT task: ${task}`));
+        return tasks;
+      } else {
+        logToFile(`GPT returned zero tasks, trying alternative parsing methods`);
+      }
     } catch (parseError) {
-      logToFile(`Error parsing GPT response: ${parseError.message}. Response: ${content}`);
+      logToFile(`Error parsing GPT response as JSON: ${parseError.message}`);
+      logToFile(`Response content: ${content}`);
       
       // Try to extract tasks with regex as a fallback
+      logToFile(`Attempting to extract tasks via regex pattern matching`);
+      
+      // Try to extract arrays of items that look like JSON arrays
+      const arrayMatch = content.match(/\[\s*"(.+?)"\s*(?:,\s*"(.+?)"\s*)*\]/gs);
+      if (arrayMatch) {
+        logToFile(`Found array-like structure in response`);
+        try {
+          const arrayContent = arrayMatch[0];
+          const parsedArray = JSON.parse(arrayContent);
+          if (Array.isArray(parsedArray) && parsedArray.length > 0) {
+            logToFile(`Successfully parsed array with ${parsedArray.length} tasks`);
+            return parsedArray;
+          }
+        } catch (arrayParseError) {
+          logToFile(`Error parsing array structure: ${arrayParseError.message}`);
+        }
+      }
+      
+      // Try to extract tasks using quotes
       const taskMatches = content.match(/"([^"]+)"/g);
       if (taskMatches && taskMatches.length > 0) {
-        return taskMatches.map(match => match.replace(/^"|"$/g, ''));
+        const extractedTasks = taskMatches.map(match => match.replace(/^"|"$/g, ''));
+        logToFile(`Extracted ${extractedTasks.length} tasks using quote pattern matching`);
+        return extractedTasks;
       }
-      return [];
+      
+      // Try to extract tasks using bullet points
+      const bulletMatches = content.match(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)(.+?)(?=\n|$)/gm);
+      if (bulletMatches && bulletMatches.length > 0) {
+        const extractedTasks = bulletMatches.map(match => 
+          match.replace(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)/, '').trim()
+        );
+        logToFile(`Extracted ${extractedTasks.length} tasks using bullet point pattern matching`);
+        return extractedTasks;
+      }
+      
+      // If we still can't extract tasks, use our regex task extractor
+      logToFile(`Falling back to standard content task extraction`);
+      return extractTasksFromContent(content);
     }
+    
+    // If we got this far with no tasks, use the regular task extractor
+    logToFile(`No tasks found in GPT response, falling back to content task extraction`);
+    return extractTasksFromContent(messageContent);
   } catch (error) {
     logToFile(`Error calling OpenAI for task extraction: ${error.message}`);
-    throw error;
+    logToFile(`Falling back to content task extraction due to API error`);
+    return extractTasksFromContent(messageContent);
   }
 }
 
 // Function to extract tasks from message content
 function extractTasksFromContent(content) {
   const tasks = [];
+  logToFile(`Analyzing content for tasks: ${content.substring(0, 100)}...`);
   
-  // Check for numbered lists (1. Task, 2. Task)
-  const numberedItems = content.match(/\d+\s*[\)\.](.+?)(?=\n\d+\s*[\)\.]\s|\n\s*$|$)/gs);
+  // Check for numbered lists (1. Task, 2. Task) - more flexible pattern
+  const numberedItems = content.match(/(?:^|\n)\s*\d+\s*[\)\.]\s*(.+?)(?=\n\s*\d+\s*[\)\.]\s*|\n\s*$|$)/gs);
   if (numberedItems) {
+    logToFile(`Found ${numberedItems.length} numbered items`);
     numberedItems.forEach(item => {
-      const taskText = item.replace(/^\d+\s*[\)\.]\s*/, '').trim();
-      if (taskText) tasks.push(taskText);
+      const taskText = item.replace(/^\s*\d+\s*[\)\.]\s*/, '').trim();
+      if (taskText) {
+        logToFile(`Adding numbered task: ${taskText}`);
+        tasks.push(taskText);
+      }
     });
   }
   
-  // Check for dash or bullet lists (- Task, • Task)
-  const bulletItems = content.match(/[-•*]\s+(.+?)(?=\n[-•*]\s|\n\s*$|$)/gs);
+  // Check for dash or bullet lists (-, •, *, etc)
+  const bulletItems = content.match(/(?:^|\n)\s*[-•*]\s+(.+?)(?=\n\s*[-•*]\s+|\n\s*$|$)/gs);
   if (bulletItems) {
+    logToFile(`Found ${bulletItems.length} bullet items`);
     bulletItems.forEach(item => {
-      const taskText = item.replace(/^[-•*]\s+/, '').trim();
-      if (taskText) tasks.push(taskText);
+      const taskText = item.replace(/^\s*[-•*]\s+/, '').trim();
+      if (taskText) {
+        logToFile(`Adding bullet task: ${taskText}`);
+        tasks.push(taskText);
+      }
     });
   }
   
   // Look for explicit task markers like "TODO:", "TASK:", etc.
-  const explicitTasks = content.match(/(?:TODO|TASK|GOAL):\s*(.+?)(?=\n|$)/gi);
+  const explicitTasks = content.match(/(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*(.+?)(?=\n|$)/gi);
   if (explicitTasks) {
+    logToFile(`Found ${explicitTasks.length} explicit tasks`);
     explicitTasks.forEach(item => {
-      const taskText = item.replace(/^(?:TODO|TASK|GOAL):\s*/i, '').trim();
-      if (taskText) tasks.push(taskText);
+      const taskText = item.replace(/^(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*/i, '').trim();
+      if (taskText) {
+        logToFile(`Adding explicit task: ${taskText}`);
+        tasks.push(taskText);
+      }
     });
   }
   
   // Look for "goals" format like "Today's goals:"
-  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan")) {
+  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan") || content.toLowerCase().includes("todo") || content.toLowerCase().includes("to do")) {
+    logToFile(`Found goals/plans/todos section`);
     // Extract lines that look like tasks after "goals" or "plans" header
-    const goalMatch = content.match(/(?:today'?s?\s+goals?|goals?|plans?|plan for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
+    const goalMatch = content.match(/(?:today'?s?\s+(?:goals?|plans?|todos?|to\s+dos?)|goals?|plans?|todos?|to\s+dos?|plan\s+for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
     if (goalMatch && goalMatch[1]) {
       const goalSection = goalMatch[1].trim();
       
       // Split into lines and process each line
       const lines = goalSection.split('\n');
+      logToFile(`Found ${lines.length} lines in goals section`);
       lines.forEach(line => {
         // Clean up the line
         let taskText = line.trim()
-          .replace(/^[-•*]\s+/, '') // Remove bullet points
-          .replace(/^\d+\s*[\)\.]\s*/, '') // Remove numbering
-          .replace(/^[✓✔]\s*/, ''); // Remove checkmarks
+          .replace(/^\s*[-•*]\s+/, '') // Remove bullet points
+          .replace(/^\s*\d+\s*[\)\.]\s*/, '') // Remove numbering
+          .replace(/^\s*[✓✔]\s*/, ''); // Remove checkmarks
         
-        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for)/i)) {
+        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for|todos?|to\s+dos?)/i) && taskText.length > 3) {
+          logToFile(`Adding goal/plan task: ${taskText}`);
           tasks.push(taskText);
         }
       });
@@ -4785,6 +4885,7 @@ function extractTasksFromContent(content) {
   // Special handling for format like "BC32: MGX DRAFT / Clip Selection Finish all MGX BY EOD"
   const projectTaskMatch = content.match(/\b(BC|IB|CL)\s*(\d{2})\s*:\s*([\s\S]*?)(?=\n\s*(?:\b(?:BC|IB|CL)|$)|$)/gi);
   if (projectTaskMatch) {
+    logToFile(`Found ${projectTaskMatch.length} project-specific task sections`);
     projectTaskMatch.forEach(match => {
       const projectCode = match.match(/\b(BC|IB|CL)\s*(\d{2})\b/i)[0].replace(/\s+/g, '').toUpperCase();
       
@@ -4792,18 +4893,50 @@ function extractTasksFromContent(content) {
       const taskContent = match.replace(/\b(BC|IB|CL)\s*(\d{2})\s*:/i, '').trim();
       
       // Split by line breaks, slashes or other common separators
-      const taskParts = taskContent.split(/\n|\/|;/);
+      const taskParts = taskContent.split(/\n|\/|;|,/);
       
       taskParts.forEach(part => {
         const taskText = part.trim();
         if (taskText) {
-          tasks.push(`${projectCode}: ${taskText}`);
+          const fullTask = `${projectCode}: ${taskText}`;
+          logToFile(`Adding project task: ${fullTask}`);
+          tasks.push(fullTask);
         }
       });
     });
   }
   
-  return tasks.filter(task => task.length > 0);
+  // Treat lines with action verbs at the beginning as potential tasks
+  const actionLines = content.match(/(?:^|\n)\s*(?:finish|update|create|write|review|check|fix|implement|add|remove|change|prepare)\s+[^.,;:\n]+/gi);
+  if (actionLines) {
+    logToFile(`Found ${actionLines.length} action verb lines`);
+    actionLines.forEach(line => {
+      const taskText = line.trim();
+      if (taskText && !tasks.includes(taskText) && taskText.length > 5) {
+        logToFile(`Adding action verb task: ${taskText}`);
+        tasks.push(taskText);
+      }
+    });
+  }
+  
+  // Also consider any short lines (between 15-100 chars) that aren't already included as potential tasks
+  // This is a fallback to catch casual task descriptions
+  const lines = content.split('\n');
+  lines.forEach(line => {
+    const trimmedLine = line.trim();
+    if (trimmedLine.length > 15 && trimmedLine.length < 100 && 
+        !tasks.includes(trimmedLine) && 
+        !trimmedLine.startsWith('http') && 
+        !trimmedLine.match(/^\[[\d:]+\]/) && // skip timestamps
+        trimmedLine.match(/[a-z]/i)) { // ensure it has at least one letter
+      logToFile(`Adding fallback task: ${trimmedLine}`);
+      tasks.push(trimmedLine);
+    }
+  });
+  
+  const uniqueTasks = Array.from(new Set(tasks.filter(task => task.length > 0)));
+  logToFile(`Extracted ${uniqueTasks.length} total tasks from content`);
+  return uniqueTasks;
 }
 
 // Function to create individual Notion task pages
