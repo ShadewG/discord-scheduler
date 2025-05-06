@@ -42,6 +42,10 @@ const commands = {
       .addBooleanOption(option => option.setName('dry_run').setDescription('Preview changes without updating Notion'))
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make response only visible to you')),
     
+    new SlashCommandBuilder().setName('deadline').setDescription('Show project deadlines from Notion')
+      .addBooleanOption(option => option.setName('all').setDescription('Show all deadlines for this server\'s projects'))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+    
     new SlashCommandBuilder().setName('set').setDescription('Set a property on the Notion page for this channel')
       .addSubcommand(subcommand => subcommand.setName('status').setDescription('Set the Status property')
         .addStringOption(option => option.setName('value').setDescription('Status value').setRequired(true)

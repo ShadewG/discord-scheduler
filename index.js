@@ -1351,6 +1351,280 @@ client.on('interactionCreate', async interaction => {
       }
     }
     
+    // Handle the /deadline command
+    else if (commandName === 'deadline') {
+      try {
+        // Check if ephemeral flag is set
+        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
+        const showAll = interaction.options.getBoolean('all') || false;
+        
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+        
+        // Check if Notion is configured
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
+        
+        // Get the guild (server) to determine which project series to show if showing all
+        const guild = interaction.guild;
+        const guildName = guild?.name?.toLowerCase() || '';
+        
+        let projectCode = null;
+        let projectSeries = null;
+        
+        // If showAll is false, get the project code from the channel name
+        if (!showAll) {
+          const channel = interaction.channel;
+          if (!channel) {
+            await interaction.editReply('❌ This command can only be used in a text channel.');
+            return;
+          }
+          
+          // Check if the channel name contains a project code
+          const channelName = channel.name.toLowerCase();
+          const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+          
+          if (!codeMatch) {
+            await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc. Use `/deadline all` to see all deadlines.');
+            return;
+          }
+          
+          projectCode = codeMatch[0].toUpperCase();
+          logToFile(`Fetching deadline for specific project: ${projectCode}`);
+        } else {
+          // For "all" mode, determine which series to show based on the server name
+          if (guildName.includes('bodycam')) {
+            projectSeries = 'BC';
+          } else if (guildName.includes('insanity')) {
+            // For Dr. Insanity server, show both CL and IB
+            projectSeries = null; // We'll handle showing both series in the code below
+          } else {
+            // Default to showing all projects
+            projectSeries = null;
+          }
+          
+          logToFile(`Fetching all deadlines for series: ${projectSeries || 'ALL'} in guild: ${guildName}`);
+        }
+        
+        let result;
+        
+        if (projectCode) {
+          // Fetch a single project by code
+          result = await fetchProjectDeadlines(null, projectCode);
+        } else if (projectSeries) {
+          // Fetch all projects of a specific series
+          result = await fetchProjectDeadlines(projectSeries);
+        } else if (guildName.includes('insanity')) {
+          // Special case for Dr. Insanity server - fetch both CL and IB
+          const clResult = await fetchProjectDeadlines('CL');
+          const ibResult = await fetchProjectDeadlines('IB');
+          
+          if (!clResult.success || !ibResult.success) {
+            await interaction.editReply(`❌ Error fetching deadlines: ${clResult.error || ibResult.error}`);
+            return;
+          }
+          
+          // Combine the results
+          result = { 
+            success: true, 
+            projects: [...(clResult.projects || []), ...(ibResult.projects || [])]
+          };
+          
+          // Re-sort combined projects
+          result.projects.sort((a, b) => {
+            if (a.mainDeadline && b.mainDeadline) {
+              return new Date(a.mainDeadline) - new Date(b.mainDeadline);
+            }
+            if (a.mainDeadline) return -1;
+            if (b.mainDeadline) return 1;
+            return a.code.localeCompare(b.code);
+          });
+        } else {
+          // Fetch all projects (default)
+          result = await fetchProjectDeadlines();
+        }
+        
+        if (!result.success) {
+          await interaction.editReply(`❌ Error fetching deadlines: ${result.error}`);
+          return;
+        }
+        
+        const projects = result.projects;
+        
+        if (projects.length === 0) {
+          await interaction.editReply('No projects found with deadline information.');
+          return;
+        }
+        
+        // Create the embed
+        const embed = new EmbedBuilder()
+          .setColor(0x0099FF)
+          .setTimestamp();
+        
+        // Set the title and description based on whether we're showing a single project or all
+        if (projectCode) {
+          embed.setTitle(`📅 Deadline for ${projectCode}`);
+          embed.setDescription(`Here are the deadline details for ${projectCode}:`);
+        } else {
+          embed.setTitle(`📅 Project Deadlines${projectSeries ? ` - ${projectSeries} Series` : ''}`);
+          embed.setDescription(`Here are the upcoming deadlines for ${projectSeries ? `${projectSeries} series` : 'all'} projects:`);
+        }
+        
+        // Choose how to display the data based on whether we're showing one project or many
+        if (projectCode && projects.length === 1) {
+          // Detailed view for a single project
+          const project = projects[0];
+          
+          // Add direct fields for the project
+          embed.addFields({ name: 'Project', value: project.name });
+          embed.addFields({ name: 'Status', value: project.status || 'Not set' });
+          embed.addFields({ name: 'Main Deadline', value: project.formattedMainDeadline || 'Not set', inline: true });
+          embed.addFields({ name: 'Current Stage Deadline', value: project.formattedStageDeadline || 'Not set', inline: true });
+          
+          // Add countdown if a deadline exists
+          if (project.mainDeadline) {
+            const now = new Date();
+            const deadline = new Date(project.mainDeadline);
+            const daysRemaining = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
+            
+            const countdownText = daysRemaining > 0 
+              ? `⏰ **${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining**`
+              : daysRemaining === 0
+                ? `⚠️ **Due today!**`
+                : `❌ **Overdue by ${Math.abs(daysRemaining)} day${Math.abs(daysRemaining) !== 1 ? 's' : ''}**`;
+            
+            embed.addFields({ name: 'Countdown', value: countdownText });
+          }
+          
+          // Add a button to open the Notion page
+          const row = new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setLabel('Open in Notion')
+                .setStyle(ButtonStyle.Link)
+                .setURL(project.notionUrl)
+            );
+          
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        } else {
+          // Summarized view for multiple projects
+          // Group projects by their deadlines for a cleaner presentation
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          const overdue = [];
+          const dueToday = [];
+          const dueThisWeek = [];
+          const dueNextWeek = [];
+          const dueLater = [];
+          const noDueDate = [];
+          
+          // Calculate the end of this week and next week
+          const endOfThisWeek = new Date(today);
+          endOfThisWeek.setDate(today.getDate() + (7 - today.getDay()));
+          
+          const endOfNextWeek = new Date(endOfThisWeek);
+          endOfNextWeek.setDate(endOfThisWeek.getDate() + 7);
+          
+          // Categorize projects
+          projects.forEach(project => {
+            if (!project.mainDeadline) {
+              noDueDate.push(project);
+              return;
+            }
+            
+            const deadlineDate = new Date(project.mainDeadline);
+            deadlineDate.setHours(0, 0, 0, 0);
+            
+            if (deadlineDate < today) {
+              overdue.push(project);
+            } else if (deadlineDate.getTime() === today.getTime()) {
+              dueToday.push(project);
+            } else if (deadlineDate <= endOfThisWeek) {
+              dueThisWeek.push(project);
+            } else if (deadlineDate <= endOfNextWeek) {
+              dueNextWeek.push(project);
+            } else {
+              dueLater.push(project);
+            }
+          });
+          
+          // Create a formatter function for projects
+          const formatProjectList = (projects) => {
+            return projects.map(p => {
+              let line = `**${p.code}** (${p.status}): ${p.formattedMainDeadline}`;
+              
+              // Add stage deadline if different from main deadline
+              if (p.stageDeadline && p.stageDeadline !== p.mainDeadline) {
+                line += ` • Stage: ${p.formattedStageDeadline}`;
+              }
+              
+              return line;
+            }).join('\n');
+          };
+          
+          // Add all the deadline sections
+          if (overdue.length > 0) {
+            embed.addFields({ 
+              name: '❌ OVERDUE', 
+              value: formatProjectList(overdue)
+            });
+          }
+          
+          if (dueToday.length > 0) {
+            embed.addFields({ 
+              name: '⚠️ DUE TODAY', 
+              value: formatProjectList(dueToday)
+            });
+          }
+          
+          if (dueThisWeek.length > 0) {
+            embed.addFields({ 
+              name: '⏳ DUE THIS WEEK', 
+              value: formatProjectList(dueThisWeek)
+            });
+          }
+          
+          if (dueNextWeek.length > 0) {
+            embed.addFields({ 
+              name: '📅 DUE NEXT WEEK', 
+              value: formatProjectList(dueNextWeek)
+            });
+          }
+          
+          if (dueLater.length > 0) {
+            embed.addFields({ 
+              name: '🗓️ FUTURE DEADLINES', 
+              value: formatProjectList(dueLater)
+            });
+          }
+          
+          if (noDueDate.length > 0) {
+            embed.addFields({ 
+              name: '⚠️ NO DEADLINE SET', 
+              value: formatProjectList(noDueDate)
+            });
+          }
+          
+          // Set footer with total count
+          embed.setFooter({ 
+            text: `Total: ${projects.length} projects • Use /deadline without 'all' in a project channel for details`
+          });
+          
+          await interaction.editReply({ embeds: [embed] });
+        }
+      } catch (error) {
+        logToFile(`Error in /deadline command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error displaying deadlines: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error displaying deadlines: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+    
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
@@ -3467,7 +3741,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -4557,4 +4831,135 @@ client.on('interactionCreate', async interaction => {
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
+
+// Add this function after the findProjectByQuery function
+
+// Function to fetch project deadlines from Notion
+async function fetchProjectDeadlines(prefix = null, projectCode = null) {
+  try {
+    if (!notion) {
+      logToFile('Notion client not initialized');
+      return { success: false, error: 'Notion integration is not configured' };
+    }
+    
+    // Get database ID from environment variable or global variable
+    const databaseId = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID || DB;
+    
+    if (!databaseId) {
+      logToFile('ERROR: Notion database ID is undefined. Check your environment variables.');
+      return { success: false, error: 'Notion database ID is undefined' };
+    }
+    
+    logToFile(`Fetching project deadlines for ${projectCode || prefix || 'all projects'}`);
+    
+    // Create filter based on input
+    let filter = {};
+    
+    if (projectCode) {
+      // If a specific project code is provided, filter by that
+      filter = {
+        property: "Project name",
+        title: {
+          contains: projectCode
+        }
+      };
+      logToFile(`Filtering by project code: ${projectCode}`);
+    } else if (prefix) {
+      // If a prefix is provided (CL, IB, BC), filter by that
+      filter = {
+        property: "Project name",
+        title: {
+          contains: prefix
+        }
+      };
+      logToFile(`Filtering by prefix: ${prefix}`);
+    }
+    
+    // Query the database
+    const response = await notion.databases.query({
+      database_id: databaseId,
+      filter: Object.keys(filter).length > 0 ? filter : undefined,
+      sorts: [
+        {
+          property: "Date",
+          direction: "ascending"
+        }
+      ],
+      page_size: 100
+    });
+    
+    logToFile(`Found ${response.results.length} projects`);
+    
+    // Extract relevant information from each project
+    const projects = [];
+    
+    for (const page of response.results) {
+      try {
+        // Extract project code from title
+        const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
+        const codeMatch = projectName.match(/(CL|IB|BC)\d{2}/i);
+        const code = codeMatch ? codeMatch[0].toUpperCase() : projectName;
+        
+        // Skip if we can't extract a code and no specific code was requested
+        if (!code && !projectCode) continue;
+        
+        // Get various date properties
+        const mainDate = page.properties.Date?.date?.start || null;
+        const currentStageDate = page.properties["Date for current stage"]?.date?.start || null;
+        
+        // Format dates if they exist
+        const formattedMainDate = mainDate ? new Date(mainDate).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric'
+        }) : 'Not set';
+        
+        const formattedStageDate = currentStageDate ? new Date(currentStageDate).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric'
+        }) : 'Not set';
+        
+        // Get status
+        let status = 'Not set';
+        if (page.properties.Status?.status?.name) {
+          status = page.properties.Status.status.name;
+        } else if (page.properties.Status?.select?.name) {
+          status = page.properties.Status.select.name;
+        }
+        
+        // Add project to the result list
+        projects.push({
+          code,
+          name: projectName,
+          mainDeadline: mainDate,
+          formattedMainDeadline: formattedMainDate,
+          stageDeadline: currentStageDate,
+          formattedStageDeadline: formattedStageDate,
+          status,
+          notionUrl: getNotionPageUrl(page.id),
+          pageId: page.id
+        });
+      } catch (projectError) {
+        logToFile(`Error processing project: ${projectError.message}`);
+        // Continue with next project
+      }
+    }
+    
+    // Sort projects by main deadline
+    projects.sort((a, b) => {
+      // If both have deadlines, sort by date
+      if (a.mainDeadline && b.mainDeadline) {
+        return new Date(a.mainDeadline) - new Date(b.mainDeadline);
+      }
+      // If only one has a deadline, it comes first
+      if (a.mainDeadline) return -1;
+      if (b.mainDeadline) return 1;
+      // If neither has a deadline, sort by code
+      return a.code.localeCompare(b.code);
+    });
+    
+    return { success: true, projects };
+    
+  } catch (error) {
+    logToFile(`Error fetching project deadlines: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
