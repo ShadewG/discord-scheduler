@@ -1033,25 +1033,11 @@ client.on('interactionCreate', async interaction => {
       try {
         // Always use ephemeral replies for this command
         await interaction.deferReply({ ephemeral: true });
-        hasResponded = true;
         
-        // Update user on progress to prevent timeout
+        // Run the task extraction
         await interaction.editReply('⏳ Extracting tasks from morning messages...');
         
-        // Run the task extraction with a timeout to prevent Discord from timing out
-        const extractionPromise = extractTasksFromMorningMessages();
-        
-        // Set a timeout for the operation (15 seconds max)
-        const timeout = setTimeout(async () => {
-          try {
-            await interaction.editReply('⏳ Still extracting tasks... this is taking longer than expected.');
-          } catch (timeoutError) {
-            logToFile(`Failed to send timeout message: ${timeoutError.message}`);
-          }
-        }, 8000);
-        
-        const result = await extractionPromise;
-        clearTimeout(timeout);
+        const result = await extractTasksFromMorningMessages();
         
         if (!result.success) {
           return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
@@ -1065,11 +1051,11 @@ client.on('interactionCreate', async interaction => {
         const embed = new EmbedBuilder()
           .setTitle('Task Extraction Complete')
           .setColor(0x00AA00)
-          .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
+          .setDescription(`I've extracted tasks from this morning's messages and created individual Notion task pages with proper assignees.`)
           .addFields(
             { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
             { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
-            { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
+            { name: 'Task Pages Created', value: `${result.pagesCreated}`, inline: true },
             { name: 'Team Members', value: `${result.authors}`, inline: true }
           )
           .setTimestamp();
@@ -1082,13 +1068,8 @@ client.on('interactionCreate', async interaction => {
         
       } catch (error) {
         logToFile(`Error in /extract-tasks command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error extracting tasks: ${error.message}`, ephemeral: true });
-        }
+        await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
       }
-      return;
     }
     
     // All other commands continue to be handled by the existing handlers
@@ -4468,12 +4449,20 @@ async function extractTasksFromMorningMessages() {
       // Extract tasks by author using functions we'll define later
       const tasksByAuthor = extractTasksByAuthor(recentMessages);
       
-      // Create Notion pages for each author's tasks
-      let pagesCreated = 0;
+      // Create Notion pages for each task
+      let totalPagesCreated = 0;
+      let authorCount = 0;
+      
       for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
         if (authorData.tasks.length > 0) {
-          await createNotionTaskPage(authorData);
-          pagesCreated++;
+          // createNotionTaskPage now returns an array of created pages
+          const createdPages = await createNotionTaskPage(authorData);
+          
+          // Increment counters
+          if (createdPages && createdPages.length > 0) {
+            totalPagesCreated += createdPages.length;
+            authorCount++;
+          }
         }
       }
       
@@ -4482,14 +4471,14 @@ async function extractTasksFromMorningMessages() {
         (sum, user) => sum + user.tasks.length, 0
       );
       
-      logToFile(`✅ Task extraction completed: Created ${pagesCreated} Notion pages with ${totalTasks} tasks`);
+      logToFile(`✅ Task extraction completed: Created ${totalPagesCreated} individual Notion task pages for ${authorCount} team members (${totalTasks} total tasks)`);
       
       return {
         success: true,
         messageCount: recentMessages.size,
         taskCount: totalTasks,
-        pagesCreated: pagesCreated,
-        authors: Object.keys(tasksByAuthor).length
+        pagesCreated: totalPagesCreated,
+        authors: authorCount
       };
       
     } catch (fetchError) {
@@ -4638,7 +4627,7 @@ function extractTasksFromContent(content) {
   return tasks.filter(task => task.length > 0);
 }
 
-// Function to create a Notion page with task checkboxes
+// Function to create individual Notion task pages
 async function createNotionTaskPage(authorData) {
   try {
     const { author, tasks, projectCode, rawMessages } = authorData;
@@ -4649,7 +4638,7 @@ async function createNotionTaskPage(authorData) {
       return null;
     }
     
-    // Name aliases mapping
+    // Name aliases mapping for Discord usernames to actual names
     const nameAliases = {
       'ayoub_prods': 'Ayoub',
       'yovcheff.': 'Yovcho',
@@ -4662,107 +4651,94 @@ async function createNotionTaskPage(authorData) {
     // Get the proper name using the alias mapping, or use the original username if no alias exists
     const properName = nameAliases[author.username.toLowerCase()] || author.username;
     
-    logToFile(`Creating Notion page with ${tasks.length} tasks for ${properName}`);
-    
     // Get today's date in ISO format for the Date property
     const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
-    
-    // Always use just the person's name without the project code
-    // as requested, we don't want "CL27 - Ayoub's tasks" but just "Ayoub's tasks"
-    const title = `${properName}'s tasks`;
     
     // Use the specific database ID for tasks
     const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
     
-    // Create the Notion page
-    const response = await notion.pages.create({
-      parent: {
-        database_id: TASKS_DB_ID
-      },
-      properties: {
-        title: {
-          title: [
-            {
-              text: {
-                content: title
+    // Store created pages
+    const createdPages = [];
+    
+    // Create a Notion page for each task
+    for (const taskText of tasks) {
+      try {
+        logToFile(`Creating Notion page for task: "${taskText}" assigned to ${properName}`);
+        
+        // Create the Notion page for this individual task
+        const response = await notion.pages.create({
+          parent: {
+            database_id: TASKS_DB_ID
+          },
+          properties: {
+            // Set the task text as the title
+            title: {
+              title: [
+                {
+                  text: {
+                    content: taskText
+                  }
+                }
+              ]
+            },
+            // Set today's date in the Date field
+            Date: {
+              date: {
+                start: todayISO
+              }
+            },
+            // Assign the proper team member using the Assignee property
+            Assignee: {
+              select: {
+                name: properName
               }
             }
+          },
+          // Add the original message as context in the page content
+          children: [
+            {
+              object: "block",
+              type: "heading_3",
+              heading_3: {
+                rich_text: [
+                  {
+                    text: {
+                      content: "Original Messages"
+                    }
+                  }
+                ]
+              }
+            },
+            ...rawMessages.map(msg => ({
+              object: "block",
+              type: "paragraph",
+              paragraph: {
+                rich_text: [
+                  {
+                    text: {
+                      content: `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`
+                    }
+                  }
+                ]
+              }
+            }))
           ]
-        },
-        // Add Date property with today's date
-        Date: {
-          date: {
-            start: todayISO
-          }
-        }
-      },
-      children: [
-        {
-          object: "block",
-          type: "heading_2",
-          heading_2: {
-            rich_text: [
-              {
-                text: {
-                  content: "Tasks"
-                }
-              }
-            ]
-          }
-        },
-        ...tasks.map(task => ({
-          object: "block",
-          type: "to_do",
-          to_do: {
-            rich_text: [
-              {
-                text: {
-                  content: task
-                }
-              }
-            ],
-            checked: false
-          }
-        })),
-        {
-          object: "block",
-          type: "divider",
-          divider: {}
-        },
-        {
-          object: "block",
-          type: "heading_3",
-          heading_3: {
-            rich_text: [
-              {
-                text: {
-                  content: "Original Messages"
-                }
-              }
-            ]
-          }
-        },
-        ...rawMessages.map(msg => ({
-          object: "block",
-          type: "paragraph",
-          paragraph: {
-            rich_text: [
-              {
-                text: {
-                  content: `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`
-                }
-              }
-            ]
-          }
-        }))
-      ]
-    });
+        });
+        
+        createdPages.push(response);
+        logToFile(`✅ Successfully created task page: "${taskText}" for ${properName}. Page ID: ${response.id}`);
+      }
+      catch (taskError) {
+        logToFile(`❌ Error creating task page for "${taskText}": ${taskError.message}`);
+        // Continue with other tasks even if one fails
+      }
+    }
     
-    logToFile(`✅ Successfully created Notion page for ${properName} with ${tasks.length} tasks. Page ID: ${response.id}`);
-    return response;
+    logToFile(`Created ${createdPages.length} individual task pages for ${properName}`);
+    return createdPages;
     
   } catch (error) {
-    logToFile(`❌ Error creating Notion page: ${error.message}`);
+    logToFile(`❌ Error creating task pages: ${error.message}`);
     if (error.body) {
       logToFile(`Error details: ${JSON.stringify(error.body)}`);
     }
@@ -4803,11 +4779,11 @@ client.on('interactionCreate', async interaction => {
       const embed = new EmbedBuilder()
         .setTitle('Task Extraction Complete')
         .setColor(0x00AA00)
-        .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
+        .setDescription(`I've extracted tasks from this morning's messages and created individual Notion task pages with proper assignees.`)
         .addFields(
           { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
           { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
-          { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
+          { name: 'Task Pages Created', value: `${result.pagesCreated}`, inline: true },
           { name: 'Team Members', value: `${result.authors}`, inline: true }
         )
         .setTimestamp();
