@@ -1,10 +1,10 @@
 // Discord Bot for Insanity
 require('dotenv').config();
-const { Client, GatewayIntentBits, MessageEmbed, ActivityType, Partials, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
-const fs = require('fs/promises');
+const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const express = require('express');
