@@ -5392,3 +5392,128 @@ async function checkEndOfDayTaskUpdates() {
     return { success: false, error: error.message };
   }
 }
+
+// Add this near the top of the file with other requires
+const path = require('path');
+
+// Add this after other client events but before client.login
+// Real-time message collection for knowledge assistant
+const BACKUPS_DIR = path.join(__dirname, 'backups');
+const RECENT_MESSAGES_LIMIT = 1000; // Keep the most recent messages in memory
+const recentMessages = [];
+
+// Check if backups directory exists
+if (!fs.existsSync(BACKUPS_DIR)) {
+  fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+  console.log(`Created backups directory: ${BACKUPS_DIR}`);
+}
+
+// Function to save recent messages to file periodically
+function saveRecentMessages() {
+  try {
+    // Only save if we have messages
+    if (recentMessages.length === 0) return;
+    
+    // Group messages by guild
+    const messagesByGuild = {};
+    recentMessages.forEach(msg => {
+      if (!messagesByGuild[msg.guildId]) {
+        messagesByGuild[msg.guildId] = {
+          guildId: msg.guildId,
+          guildName: msg.guildName,
+          backupDate: new Date().toISOString(),
+          messages: []
+        };
+      }
+      messagesByGuild[msg.guildId].messages.push(msg);
+    });
+    
+    // Save each guild's messages to a file
+    Object.values(messagesByGuild).forEach(guildData => {
+      const now = new Date();
+      const dateString = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const filename = `${guildData.guildName.replace(/[^a-z0-9]/gi, '_')}-realtime-${dateString}.json`;
+      const filePath = path.join(BACKUPS_DIR, filename);
+      
+      guildData.messageCount = guildData.messages.length;
+      fs.writeFileSync(filePath, JSON.stringify(guildData, null, 2));
+      console.log(`Saved ${guildData.messages.length} recent messages from ${guildData.guildName}`);
+    });
+    
+    // Clear the array after saving
+    recentMessages.length = 0;
+  } catch (error) {
+    console.error(`Error saving recent messages: ${error.message}`);
+  }
+}
+
+// Save messages every hour
+setInterval(saveRecentMessages, 60 * 60 * 1000);
+
+// Save messages when the bot shuts down
+process.on('SIGINT', () => {
+  console.log('Saving recent messages before shutdown...');
+  saveRecentMessages();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('Saving recent messages before shutdown...');
+  saveRecentMessages();
+  process.exit(0);
+});
+
+// Collect messages in real-time
+client.on('messageCreate', message => {
+  // Skip bot messages
+  if (message.author.bot) return;
+  
+  // Skip messages without content
+  if (!message.content.trim()) return;
+  
+  // Store important message information
+  const storedMessage = {
+    id: message.id,
+    content: message.content,
+    author: {
+      id: message.author.id,
+      username: message.author.username,
+      tag: message.author.tag
+    },
+    channelId: message.channel.id,
+    channelName: message.channel.name,
+    guildId: message.guild?.id,
+    guildName: message.guild?.name,
+    timestamp: message.createdAt.toISOString(),
+    attachments: Array.from(message.attachments.values()).map(a => a.url)
+  };
+  
+  // Add to recent messages array (prepend)
+  recentMessages.unshift(storedMessage);
+  
+  // Limit the array size
+  if (recentMessages.length > RECENT_MESSAGES_LIMIT) {
+    recentMessages.pop();
+  }
+});
+
+// Update the Knowledge Assistant to use real-time messages
+// This code should go in knowledge-assistant.js, but for demonstration:
+
+/* 
+// Add this function to knowledge-assistant.js
+function loadRecentMessages() {
+  try {
+    const recentMessagesFromBot = global.recentMessages || [];
+    return recentMessagesFromBot;
+  } catch (error) {
+    logToFile(`Error loading recent messages: ${error.message}`);
+    return [];
+  }
+}
+
+// Then modify answerQuestion to combine both recent and backed up messages
+*/
+
+// Expose the recent messages array globally for the knowledge assistant
+global.recentMessages = recentMessages;

@@ -9,7 +9,11 @@
     "check-env": "node check-env.js",
     "prestart": "npm run check-env",
     "deploy-bodycam": "node register-bodycam-specific.js",
-    "convert-guides": "node scripts/convert-guides.js"
+    "convert-guides": "node scripts/convert-guides.js",
+    "backup-messages": "node scripts/backup-messages.js",
+    "update-knowledge": "npm run backup-messages && npm run convert-guides",
+    "start-knowledge-scheduler": "node scripts/schedule-knowledge-updates.js",
+    "update-knowledge-now": "node scripts/schedule-knowledge-updates.js --run-now"
   },
   "keywords": [
     "discord",

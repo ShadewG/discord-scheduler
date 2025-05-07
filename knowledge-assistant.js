@@ -187,9 +187,17 @@ async function loadGuides() {
 // Function to load Discord message backups
 function loadDiscordMessages() {
   const backupsDir = path.join(__dirname, 'backups');
-  const messages = [];
+  let messages = [];
 
   try {
+    // First, check for real-time messages in memory
+    const recentMessagesFromBot = global.recentMessages || [];
+    if (recentMessagesFromBot.length > 0) {
+      logToFile(`Loaded ${recentMessagesFromBot.length} real-time messages from memory`);
+      messages = [...recentMessagesFromBot];
+    }
+    
+    // Then check for message backups
     if (!fs.existsSync(backupsDir)) {
       logToFile('Backups directory not found');
       return messages;
@@ -217,7 +225,7 @@ function loadDiscordMessages() {
     return messages;
   } catch (error) {
     logToFile(`Error loading Discord messages: ${error.message}`);
-    return [];
+    return messages;
   }
 }
 
