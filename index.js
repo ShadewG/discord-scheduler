@@ -2588,6 +2588,18 @@ Example Output: {
             notionProperties['3D Status'] = { select: { name: value } };
             break;
             
+          case 'storyboard':
+            notionProperties['Storyboard'] = { select: { name: value } };
+            break;
+            
+          case 'footage':
+            if (value.startsWith('http')) {
+              notionProperties['Footage'] = { url: value };
+            } else {
+              notionProperties['Footage'] = { rich_text: [{ text: { content: value } }] };
+            }
+            break;
+            
           case 'language':
             // Handle language subcommand with additional parameter
             const language = interaction.options.getString('language');

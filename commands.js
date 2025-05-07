@@ -83,6 +83,15 @@ const commands = {
           )))
       .addSubcommand(subcommand => subcommand.setName('date').setDescription('Set the Due Date property')
         .addStringOption(option => option.setName('value').setDescription('Date (e.g., "2023-05-15" or "May 15, 2023")').setRequired(true)))
+      .addSubcommand(subcommand => subcommand.setName('storyboard').setDescription('Set the Storyboard property')
+        .addStringOption(option => option.setName('value').setDescription('Storyboard status').setRequired(true)
+          .addChoices(
+            { name: 'Not Started', value: 'Not Started' },
+            { name: 'In Progress', value: 'In Progress' },
+            { name: 'Complete', value: 'Complete' }
+          )))
+      .addSubcommand(subcommand => subcommand.setName('footage').setDescription('Set the Footage property')
+        .addStringOption(option => option.setName('value').setDescription('Footage URL or status').setRequired(true)))
       .addSubcommand(subcommand => subcommand.setName('script').setDescription('Set the Script URL')
         .addStringOption(option => option.setName('value').setDescription('Script URL (must start with http:// or https://)').setRequired(true)))
       .addSubcommand(subcommand => subcommand.setName('frameio').setDescription('Set the Frame.io URL')
