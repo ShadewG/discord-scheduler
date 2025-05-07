@@ -1,0 +1,2 @@
+# This file ensures the guides directory is tracked in git
+# PDF guides will be stored in this directory but not tracked by git

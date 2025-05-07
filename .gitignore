@@ -27,3 +27,6 @@ pids
 .vscode/
 .idea/
 thumbs.db 
+
+# exclude PDF files in guides directory
+guides/*.pdf 

@@ -6,7 +6,16 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
-const pdfParse = require('pdf-parse');
+
+// Try to load pdf-parse, but don't crash if it's not available
+let pdfParse = null;
+try {
+  pdfParse = require('pdf-parse');
+  console.log('pdf-parse module loaded successfully');
+} catch (error) {
+  console.error(`Error loading pdf-parse module: ${error.message}`);
+  console.log('PDF processing will be disabled');
+}
 
 // Initialize OpenAI
 let openai = null;
@@ -36,6 +45,12 @@ function logToFile(message) {
 // Function to extract text from PDF files
 async function extractTextFromPDF(filePath) {
   try {
+    // Check if pdfParse is available
+    if (!pdfParse) {
+      logToFile(`Cannot extract text from PDF ${filePath}: pdf-parse module is not available`);
+      return `[PDF text extraction not available - please install pdf-parse]`;
+    }
+    
     const dataBuffer = fs.readFileSync(filePath);
     const data = await pdfParse(dataBuffer);
     
@@ -60,6 +75,18 @@ async function loadGuides() {
   const guides = {};
 
   try {
+    // Check if pdf-parse is available
+    if (!pdfParse) {
+      logToFile('PDF processing is disabled - cannot load guides');
+      return guides;
+    }
+    
+    // Check if guides directory exists
+    if (!fs.existsSync(guidesDir)) {
+      logToFile(`Guides directory ${guidesDir} does not exist`);
+      return guides;
+    }
+    
     const files = fs.readdirSync(guidesDir);
 
     for (const file of files) {
@@ -201,6 +228,18 @@ async function handleAskCommand(interaction) {
     }
     
     logToFile(`Loading knowledge base for question: ${question}`);
+    
+    // Check if PDF processing is available
+    if (!pdfParse) {
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('Knowledge Assistant - Limited Functionality')
+        .setDescription(`**Question:** ${question}\n\n**Answer:**\nI'm currently operating with limited functionality because the PDF processing module (pdf-parse) is not available. Please ask an administrator to install this module by running \`npm install pdf-parse --save\` and restart the bot.`)
+        .setColor(0xFF5555)
+        .setFooter({ text: 'Powered by Discord Knowledge Only (PDF guides unavailable)' })
+        .setTimestamp();
+      
+      return await interaction.editReply({ embeds: [errorEmbed] });
+    }
     
     // Load guides and Discord messages for context
     const guides = await loadGuides();
