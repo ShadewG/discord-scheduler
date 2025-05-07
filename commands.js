@@ -210,6 +210,11 @@ const commands = {
       .addStringOption(option => option.setName('time').setDescription('When to send the reminder (e.g., "30m", "1h", "tomorrow 2pm")').setRequired(true))
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the confirmation only visible to you')),
       
+    // Add the ask command for the knowledge assistant
+    new SlashCommandBuilder().setName('ask').setDescription('Ask a question about guides, workflows, or best practices')
+      .addStringOption(option => option.setName('question').setDescription('What would you like to know?').setRequired(true))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+      
     // Add extract-tasks command to ensure it's registered properly
     new SlashCommandBuilder().setName('extract-tasks').setDescription('Extract tasks from morning messages and create Notion pages'),
     

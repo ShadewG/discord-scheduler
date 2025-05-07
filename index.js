@@ -1,6 +1,7 @@
 // Discord Bot for Insanity
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+const { OpenAI } = require('openai');
 const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
@@ -10,7 +11,9 @@ const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const app = express();
-const OpenAI = require('openai');
+
+// Import knowledge assistant
+const { handleAskCommand } = require('./knowledge-assistant');
 
 // Configure OpenAI client
 let openai = null;
@@ -3781,6 +3784,12 @@ Example Output: {
           await interaction.reply({ content: `❌ Error checking tasks: ${error.message}`, ephemeral: true });
         }
       }
+    }
+    
+    // Handle the /ask command
+    else if (commandName === 'ask') {
+      // Use the handleAskCommand function from knowledge-assistant.js
+      await handleAskCommand(interaction);
     }
     
     // Other commands here
