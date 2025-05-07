@@ -1,0 +1,29 @@
+
+
+Animation Composer Guide
+Setup
+ Download the Mister Horse Product Manager
+ Once installed make sure to install it to both Premiere Pro and After Effects.
+ Open up After Effects and go to Window  Animation Composer 3
+ Now go to Add Folder
+Animation Composer Guide1
+
+ Navigate to Insanity/Video/0 Insanity Assets/1 Motion Graphics Templates 
+and press open
+ Make sure to select Inside this folder and press OK 
+Animation Composer Guide2
+
+ Now you have access to every comp from within here 
+Animation Composer Guide3
+
+Usage
+Go to any project file in which the template you want to import 
+is and just press add and it will add it to the active composition.
+Animation Composer Guide4
+
+attachment:457ef50b-75954f778f f1 33efa2338855Monosnapscreenc
+ast2025032012   23  38.mp4
+You can also add the instrumentals/sfx or any other asset 
+folder in premiere to have a one-click import/preview Thereʼs a 
+500 item limit on the free version.)
+Animation Composer Guide5

@@ -39,7 +39,14 @@ const AI_MODEL = 'gpt-4.1-2025-04-14';
 function logToFile(message) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}\n`;
-  fs.appendFileSync(path.join(__dirname, 'knowledge-assistant.log'), logMessage);
+  
+  // Ensure logs directory exists
+  const logsDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  
+  fs.appendFileSync(path.join(logsDir, 'knowledge-assistant.log'), logMessage);
 }
 
 // Function to extract text from PDF files
@@ -72,18 +79,82 @@ async function extractTextFromPDF(filePath) {
 // Function to load all guides from the guides folder
 async function loadGuides() {
   const guidesDir = path.join(__dirname, 'guides');
+  const textGuidesDir = path.join(guidesDir, 'text');
   const guides = {};
 
   try {
-    // Check if pdf-parse is available
-    if (!pdfParse) {
-      logToFile('PDF processing is disabled - cannot load guides');
-      return guides;
-    }
-    
     // Check if guides directory exists
     if (!fs.existsSync(guidesDir)) {
       logToFile(`Guides directory ${guidesDir} does not exist`);
+      return guides;
+    }
+    
+    // First check if we have text/JSON versions of the guides
+    if (fs.existsSync(textGuidesDir)) {
+      const textFiles = fs.readdirSync(textGuidesDir);
+      
+      // Look for JSON files (they contain more metadata)
+      for (const file of textFiles) {
+        if (file.toLowerCase().endsWith('.json')) {
+          const filePath = path.join(textGuidesDir, file);
+          logToFile(`Loading guide from JSON: ${file}`);
+          
+          try {
+            const guideData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            guides[guideData.sourceFile] = {
+              name: guideData.title,
+              content: guideData.content,
+              path: filePath,
+              source: 'json'
+            };
+            
+            logToFile(`Loaded ${guideData.contentLength} characters from ${file}`);
+          } catch (parseError) {
+            logToFile(`Error parsing JSON guide ${file}: ${parseError.message}`);
+          }
+        }
+      }
+      
+      // If we found JSON guides, return them
+      if (Object.keys(guides).length > 0) {
+        logToFile(`Loaded ${Object.keys(guides).length} guides from JSON files`);
+        return guides;
+      }
+      
+      // Otherwise, check for text files
+      for (const file of textFiles) {
+        if (file.toLowerCase().endsWith('.txt')) {
+          const filePath = path.join(textGuidesDir, file);
+          const baseName = path.basename(file, '.txt') + '.pdf';
+          logToFile(`Loading guide from text file: ${file}`);
+          
+          try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            guides[baseName] = {
+              name: path.basename(file, '.txt'),
+              content: content,
+              path: filePath,
+              source: 'text'
+            };
+            
+            logToFile(`Loaded ${content.length} characters from ${file}`);
+          } catch (readError) {
+            logToFile(`Error reading text guide ${file}: ${readError.message}`);
+          }
+        }
+      }
+      
+      // If we found text guides, return them
+      if (Object.keys(guides).length > 0) {
+        logToFile(`Loaded ${Object.keys(guides).length} guides from text files`);
+        return guides;
+      }
+    }
+    
+    // If we don't have text/JSON versions, fall back to PDF parsing
+    // Check if pdf-parse is available
+    if (!pdfParse) {
+      logToFile('PDF processing is disabled - cannot load guides from PDFs');
       return guides;
     }
     
@@ -92,13 +163,14 @@ async function loadGuides() {
     for (const file of files) {
       if (file.toLowerCase().endsWith('.pdf')) {
         const filePath = path.join(guidesDir, file);
-        logToFile(`Loading guide: ${file}`);
+        logToFile(`Loading guide from PDF: ${file}`);
         
         const content = await extractTextFromPDF(filePath);
         guides[file] = {
           name: file.replace('.pdf', ''),
           content: content,
-          path: filePath
+          path: filePath,
+          source: 'pdf'
         };
         
         logToFile(`Loaded ${content.length} characters from ${file}`);
@@ -229,23 +301,23 @@ async function handleAskCommand(interaction) {
     
     logToFile(`Loading knowledge base for question: ${question}`);
     
-    // Check if PDF processing is available
-    if (!pdfParse) {
-      const errorEmbed = new EmbedBuilder()
-        .setTitle('Knowledge Assistant - Limited Functionality')
-        .setDescription(`**Question:** ${question}\n\n**Answer:**\nI'm currently operating with limited functionality because the PDF processing module (pdf-parse) is not available. Please ask an administrator to install this module by running \`npm install pdf-parse --save\` and restart the bot.`)
-        .setColor(0xFF5555)
-        .setFooter({ text: 'Powered by Discord Knowledge Only (PDF guides unavailable)' })
-        .setTimestamp();
-      
-      return await interaction.editReply({ embeds: [errorEmbed] });
-    }
-    
     // Load guides and Discord messages for context
     const guides = await loadGuides();
     const discordMessages = loadDiscordMessages();
     
     logToFile(`Loaded ${Object.keys(guides).length} guides and ${discordMessages.length} Discord messages`);
+    
+    // If no guides were loaded, inform the user about potential issues
+    if (Object.keys(guides).length === 0) {
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('Knowledge Assistant - Limited Functionality')
+        .setDescription(`**Question:** ${question}\n\n**Answer:**\nI'm currently operating with limited functionality because no guides were found. Make sure guides are available in the 'guides' folder.`)
+        .setColor(0xFF5555)
+        .setFooter({ text: 'Powered by Discord Knowledge Only (Guides unavailable)' })
+        .setTimestamp();
+      
+      return await interaction.editReply({ embeds: [errorEmbed] });
+    }
     
     // Generate answer
     const answer = await answerQuestion(question, discordMessages, guides);

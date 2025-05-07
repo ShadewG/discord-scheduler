@@ -1,0 +1,83 @@
+
+
+Frame.io Usage Guide
+ FRAME.IO WORKFLOW GUIDE  JUNIOR EDITORS
+ Purpose:
+This guide outlines how junior editors should properly upload, organize, and 
+manage their video drafts using Frame.io to ensure smooth collaboration and 
+efficient feedback.
+ Login Info
+Username: 
+vsaucemannen1337@gmail.com
+Password: 
+VsauceEditor1337?
+This is a shared team login — please do not change any account settings or 
+passwords.
+ Finding the Right Project Space
+ After logging in, on the left-hand side, you'll see a dropdown for “Matcher 
+Mediaˮ.
+ Inside that, locate the Insanity Bodycam category — this is where all drafts 
+will be uploaded.
+ Projects are labeled as 
+BC[number]
+ (e.g., 
+BC28
+, 
+BC31
+).
+ Uploading Your Draft
+ Navigate to the appropriate project (
+BC[number]
+) or create a new one:
+Right-click inside the Insanity Bodycam section and select New Folder.
+Name the folder using the format: 
+BC[number]
+ (e.g., 
+BC35
+).
+ Inside that folder, upload your draft using the correct file naming convention 
+(critical for team clarity):
+ File Naming Format:
+Examples:
+Frame.io Usage Guide1
+
+BC35_draft_V1
+BC35_draft_clip_selection_V1
+BC35_draft_motion_graphics_V2
+ Using Version Stacks
+Version Stacks keep all versions of a video grouped in one place.
+To add to a version stack:
+Drag and drop your new version on top of the existing video in Frame.io.
+This will automatically create a version stack (
+V1
+, 
+V2
+, etc.).
+Youʼll be able to toggle between versions and review previous notes in one 
+timeline.
+Why it's important:
+This helps lead editors track changes easily, compare revisions, and avoid 
+confusion.
+ Handling Notes
+When a lead editor leaves notes:
+ Review each time-stamped comment carefully.
+ After addressing and amending a note, mark it as complete:
+Open the video → look to the right-hand comments panel.
+Click the small circle icon in the top right of the comment to mark it as 
+complete ✅.
+Important:
+Do not ignore notes or assume you've interpreted them correctly if you're 
+unsure.
+If something is unclear, ask on Discord! It's always better to ask than to guess.
+易 Best Practices
+Always double-check filenames and folder structure before uploading.
+Frame.io Usage Guide2
+
+Keep version stacks clean — donʼt upload versions as separate files unless 
+instructed.
+Donʼt forget to check off notes as you complete them — this is crucial for 
+keeping workflows clear for senior editors.
+Stay communicative. If you're unclear on a note or expectation, post in the 
+project Discord thread.
+If you have questions, ask early, ask often. Weʼre all here to help you succeed.
+Frame.io Usage Guide3

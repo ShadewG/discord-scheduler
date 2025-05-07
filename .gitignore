@@ -28,5 +28,9 @@ pids
 .idea/
 thumbs.db 
 
-# exclude PDF files in guides directory
-guides/*.pdf 
+# exclude PDF files in guides directory but keep text files
+guides/*.pdf
+# include text files and JSON files in the text subdirectory
+!guides/text/
+!guides/text/*.txt
+!guides/text/*.json 

@@ -1,0 +1,81 @@
+
+
+3D AI Scenes Workflow
+Guide to Creating 3D-Rendered AI-
+Generated Scenes
+Overview:
+This guide walks you through the process of creating 3D-rendered AI-generated 
+scenes for video content. Follow the pipeline from image generation to final post-
+processing.
+1. Generating the Image
+Objective:
+Create a simple 3D-rendered image using the AI Image Generator.
+Steps:
+ Go to the Projects tab on the left-hand side of Notion.
+ Select 3D Generator.
+ Click on Generate a Prompt at the top.
+ Tip: Keep your prompt simple. Avoid overly complex scenes for easier 
+conversion into video. Focus on simplicity to achieve a more natural look.
+ Once satisfied with the generated image, download it to your computer.
+2. Importing the Image into Runway
+Objective:
+Import the image into Runway and generate a 510 second video with subtle 
+camera movements.
+Steps:
+3D AI Scenes Workflow1
+
+ Open Runway and navigate to the Generate Video tab on the left-hand side.
+ Upload your image when prompted.
+ Crop the image to a 169 aspect ratio.
+ Add Camera Movement Prompt: Describe the desired camera movement:
+Examples:
+Slow pan to the left
+Slow dolly in
+Camera orbit around statues
+ Important: Specify that the scene features statues or state “no movementˮ if 
+you want the objects to remain still.
+ Click on Generate the Video.
+3. Upscaling the Video with Topaz AI
+Objective:
+Upscale the 720p video to a higher resolution 1080p or 2K.
+Steps:
+ Once the video is generated, export it at 720p.
+ Open Topaz Video AI to upscale the video:
+Choose between 1080p or 2K resolution.
+ Note: Specific settings for Topaz AI will be provided later in the guide, 
+detailing which models and settings to use.
+4. Post-Processing in After Effects
+Objective:
+Enhance the scene with post-processing techniques for better realism and quality.
+Steps:
+ Import your video into After Effects.
+3D AI Scenes Workflow2
+
+ Apply the post-processing template provided.
+ Generate a Depth Map:
+Option 1 Use the Depth Scanner plugin in After Effects (recommended for 
+better results).
+Option 2 Upload your video back to Runway to extract a depth map.
+ Note: Depth Scanner can be slower on certain GPUs but is preferred for its 
+quality.
+5. Final Adjustments & Rendering
+Objective:
+Make final tweaks to the scene and render it for final use.
+Steps:
+ Adjust the depth map, colors, or any additional effects as needed.
+ Render the final video in the desired output format.
+6. Additional Notes & Work in Progress
+Some sections of the guide are still being finalized, including:
+Topaz AI settings
+Post-processing templates for After Effects
+Updates will be added as more information becomes available.
+Notion Specific Formatting Tips:
+Use headings H1, H2, H3 for main sections.
+Use toggle lists for expandable sections like Steps or Notes.
+Organize to-do lists for the actionable steps that are still in progress (like 
+Topaz settings or templates).
+3D AI Scenes Workflow3
+
+Add links to relevant projects or templates where needed (e.g., linking directly 
+to the 3D Generator or Runway tools).
+3D AI Scenes Workflow4

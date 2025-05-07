@@ -1,0 +1,359 @@
+
+
+INSANITY INTRO GUIDE 
+ 
+Hey all! I'm Nick, owner of Dr Insanity and its subsidiaries. 
+ 
+2025 will be a big year for the channel(s), as we hope to break all the boundaries in the True 
+Crime space. I personally have the goal of helping create the most talented and well-respected 
+team of creatives I possibly can. 
+ 
+As I'm sure most of you are aware, the intro is the most important part of a YouTube video. The 
+intro sets the entire ceiling for a video – it intrigues the viewer, makes them feel inclined to learn 
+the outcome of the story, and gives them enough information to quickly determine if the video 
+concept is something they want to watch. 
+ 
+Think about it: 
+ 
+Our videos can sometimes span up to an hour long. We have 30 seconds to convince the 
+viewer to watch an entire hour-long video! 
+ 
+The number of possible intro variations is almost infinite, so building the most accurate intro can 
+be quite the challenge. Hopefully, this guide can help you better understand what a “good” intro 
+should look like, so that building highly intriguing intros will no longer be a challenge. 
+ 
+Technical Understanding of Intros 
+ 
+I’d first like to start this guide by pre-facing the algorithmic reason why intros are so important. 
+ 
+What makes a YouTube video get millions of views? 
+ 
+YouTube determines a video’s quality by ranking it against other videos in a similar niche. A 
+video’s quality is measured using a whole array of micro analytics, but the two most key metrics 
+to understand are: 
+ 
+Click-through rate (CTR): What % of people who see your video, click on your video. 
+ 
+Average Viewer Duration (AVD): The average time someone spends watching the video 
+before clicking off. 
+ 
+Believe it or not, both of these metrics are incredibly dependent on the intro. I’ll explain why. 
+ 
+
+ 
+ 
+CTR In Relationship With Intros 
+ 
+Simply put, when someone clicks on a video, they expect to see exactly what they clicked on. 
+ 
+For example: 
+ 
+ 
+Here is a video we uploaded, which got over 12,000,000 views in just a few months. Observe 
+the title and thumbnail photo, and then watch the intro of the video: 
+ 
+ 
+Man Horrified After Learning Girlfriend's Evil Secret
+ 
+Instantly, we show exactly what the viewer clicked on. This is extremely important, otherwise, 
+the viewer will feel deceived and “clickbaited”. 
+ 
+Always make sure you confirm the title or thumbnail as quickly as possible in the intro. Ideally, 
+the first clip the viewer watches is the exact frame from the thumbnail. 
+ 
+AVD In Relationship With Intros 
+ 
+Intro’s obviously play an incredibly important role in maintaining a high AVD on a video. 
+ 
+
+ 
+ 
+Here is a video we uploaded 30 days ago that has nearly 7,000,000 views. By looking at the 
+retention graph, we can see that the intro was key in outperforming previous videos.  
+ 
+We made a better intro than normal, and as a result, the AVD remained higher than average 
+throughout the entire video. 
+ 
+The intro sets the ceiling for an entire video’s success. 
+ 
+Psychological Understanding of Intros 
+ 
+To create a good intro, it’s crucial to understand why an intro is “good” in the first place. 
+ 
+Generally, a good intro will achieve 2 things: 
+ 
+-Immediately hook the viewer with some form of spectacle 
+-Give the viewer a strong reason(s) to watch the ENTIRE video 
+
+I’ll break these down even further: 
+ 
+Creating Spectacle 
+ 
+If you look at some of the biggest videos on YouTube, all of them have some form of spectacle 
+that separates their video from others. 
+ 
+For example, in MrBeast’s video “Survive 100 Days In Circle, Win $500,000” – MrBeast decides 
+to drop the house instead of starting the video with it already placed, in order to create a 
+spectacle to catch viewers by surprise: 
+ 
+https://youtu.be/gHzuabZUd6c?si=JJ-VsGcfvYkNl0ee&t=15 (0:15) 
+ 
+In our case, we usually want to create a spectacle by shocking viewers in the intro. We want to 
+take the concept shown in the title and thumbnail, and make it 100 times more extreme than 
+what the viewer had initially prepared for. 
+ 
+Take a look at this creator who reacted to our video: 
+ 
+https://youtu.be/4UN5RxiIxlQ?si=63MIqrQoaRlbV7PF&t=130 (2:10) 
+ 
+He is literally jaw-dropped by the information he just learned. I meticulously placed the fact that 
+the couple had killed their own parents at the end of the intro, to leave viewers with information 
+so extreme that they’ll have no choice other than to continue watching. 
+ 
+If the viewers aren’t jaw-dropped like this when the intro finishes, then we haven’t done a proper 
+job creating the intro. 
+ 
+Strong Viewer Incentive 
+ 
+It’s very important to ensure you leave viewers with a clear reason to continue watching.  
+ 
+If we reveal too much information in the intro, then the viewer will have no reason to watch the 
+rest of the video, as they’ve already digested all the interesting parts of the case. 
+ 
+Generally, I like to build the intro with open-ended shock. This means that I’m able to shock the 
+viewers with extreme facts about the case, but in a way that doesn’t spoil what's to come. 
+ 
+Additionally, I like to showcase all the various types of footage we have in the video.  
+ 
+For example: 
+ 
+
+ 
+ 
+If our video follows this format, then it’s crucial to show visual footage from each of these 
+segments in our video, so that the viewer fully understands what's to come– and hopefully feels 
+the need to stick around as a result. 
+ 
+Intro Formatting 
+ 
+The best way to consistently make very good intros in a quick manner, is by nailing our various 
+types of intro formats. 
+ 
+If you look at some of our recent videos, you’ll see all of the intros follow a very similar format, 
+usually starting with “This is [SUSPECT NAME]”. 
+ 
+Below is a set of proven formats we have used on videos with millions of views. 
+ 
+*You do not have to use these formats 1:1 for every intro you work on. These are simply 
+recommendations. Every video is different* 
+ 
+Format 1: General Dr Insanity Format 
+ 
+Play a clip of moments leading up to the thumbnail frame 
+ 
+Pause on thumbnail frame 
+ 
+This, is [SUSPECT AGE] year-old [SUSPECT NAME]. 
+ 
+Explain what happened before this moment. Example: 
+ 
+Just hours ago, [SUSPECT NAME] brutally killed his wife, [WIFE’S NAME]. 
+ 
+Play clips of police on scene discussing dead wife 
+ 
+Explain what the suspect said happened, or why police think he’s suspicious. For example: 
+ 
+At first, [SUSPECT NAME] would claim someone broke into their house, killing [WIFE’S 
+NAME]. However, as officers further investigated the case, strange clues began to 
+emerge that would paint [SUSPECT NAME], as the killer, of his own wife... 
+
+ 
+Play clips of cops finding strange clues, and the suspect getting visibly frustrated while being 
+questioned. End on a spectacle. 
+ 
+INSANITY LOGO ANIMATION PLAYS. End of intro 
+https://youtu.be/nqBgCvvcgzQ?si=r-4X5JER4hYO699e&t=81 
+ 
+An example of this format being used in our video: 
+ 
+Man Terrified After Learning Roommates Evil Secret
+ 
+ 
+Format 2: Real time, Cop POV 
+ 
+Explain the thumbnail clip in real-time: 
+ 
+An officer arrives on the scene of a standard disturbance call. 
+ 
+Explain how they learned about the disturbance: 
+ 
+A neighbor reported shouting had come from the house, and quickly called 911. 
+ 
+Foreshadow how the case is way worse than officers expect: 
+ 
+The officer doesn’t realize it yet, but what would lie inside the home was MUCH worse 
+than he could have ever prepared for... 
+ 
+Play extreme clips showing the insanity of the situation. 
+ 
+OPTIONAL: Reveal the suspect is a relative/friend/has a relationship to the victim 
+ 
+Even worse, is that [VICTIM NAME] wasn’t just killed by a home intruder, like [WITNESS 
+NAME] claims – instead, it would be someone much, much closer to [VICTIM NAME]... 
+ 
+Play clips of killers, end on spectacle. 
+ 
+INSANITY LOGO ANIMATION PLAYS. End of intro 
+https://youtu.be/nqBgCvvcgzQ?si=r-4X5JER4hYO699e&t=81 
+ 
+An example of this format being used in our video: 
+https://youtu.be/KoEzb2eAFkQ?si=_qGmcDUfOIoLyBI_ 
+ 
+ 
+ 
+
+Format 3: Real time, Suspect POV 
+ 
+Play a clip of moments leading up to the thumbnail frame 
+ 
+Pause on thumbnail frame 
+ 
+This, is [SUSPECT AGE] year-old [SUSPECT NAME]. Just hours ago, he would brutally 
+kill his roommate, [ROOMMATE NAME]. 
+ 
+The cops have no idea, and are unaware of the meticulous planning that went into 
+covering up this brutal murder... 
+ 
+Play clips of killer pretending to be innocent 
+ 
+Over the course of the next few days, detectives would do everything they could to track 
+down the killer, and bring justice to [VICTIM NAME]. 
+ 
+But, [KILLER NAME] wasn’t going to make it easy... as he had plans to completely get 
+away with the murder... 
+ 
+Play clips of killer swindling cops, and cops confused as to who could have done the crime. End 
+on a spectacle. 
+ 
+An example of this format being used in our video: 
+ 
+College Killer Thinks He's Getting Away With It
+ 
+Understanding The Final Outcome 
+ 
+One special characteristic I have that often separates scripts I've written from others, is that I 
+deeply understand what the final product will look like. When I’m writing, I'm envisioning what 
+types of instrumentals will be playing, what type of edit ideas the editors will use, and how the 
+complete video will look – not just the script. 
+ 
+Here are a few things I'm always thinking of when writing the script: 
+ 
+Instrumental Choice 
+ 
+In a lot of my scripts, I will literally go and find an instrumental myself, for the editors to use (and 
+in rare cases, produce the instrumental entirely). 
+ 
+
+Now, by no means am I asking you to do this – however, I strongly recommend paying attention 
+to the instrumental choice used in the intros of our latest videos. Take note of these, and try to 
+remember them when creating a strong emotion in the intro. 
+ 
+Tip: Sometimes, I will actually play an eerie instrumental on loop so that I can gear the emotion 
+of the intro to fit the instrumental. Here are a few I listen to: 
+ 
+https://youtu.be/Fn_2KclAeVU?si=DybPsV9O9AJbgbQf 
+ 
+https://youtu.be/yK54v3pZdx0?si=nUtM2JUyp0vIMSlT 
+ 
+https://youtu.be/R5z5j0KG4aE?si=p0RAdehH9xn9-JpD 
+ 
+Editing Ideas 
+ 
+Try to analyze our recent video’s intros and observe what types of edit ideas we use commonly. 
+If you can remember these, you’ll be able to use these ideas yourself to build out the intro. 
+ 
+I want you to find these yourself for learning purposes, but look for things like the various 911 
+call graphics we use, the types of 3D animations we use, and the various Google Maps 
+animations we implement. 
+ 
+Here’s an example of a script I wrote with an influx of editor ideas. This video got over 
+20,000,000 views but unfortunately got taken down: 
+ 
+ 
+Parents Realize Their Daughter Is A Mass Murderer: Editors Notes
+ 
+Checklist 
+ 
+The following is a set of questions you should ask yourself before submitting any intro. It is 
+critical to do this immediately, otherwise, you will forget the information you’ve learned in this 
+guide. 
+ 
+Hook & Spectacle: Have I hooked the viewer within the first few moments?  
+ 
+For example, does the intro contain an unexpected or shocking element (a spectacle) that will 
+grab attention immediately? 
+ 
+Title/Thumbnail Confirmation: Does the intro quickly confirm the promise 
+of the title and thumbnail? 
+
+ The viewer clicked for a reason – have I shown them that exact scenario or subject right away 
+so they don’t feel misled? 
+ 
+Strong Reason to Watch On: Did I give the viewer a compelling reason to 
+keep watching the entire video?  
+ 
+By the end of the intro, the viewer should be intrigued and want to know what happens next 
+(e.g. an unanswered question or an unresolved situation). Is there a clear element of mystery or 
+suspense introduced? 
+ 
+Avoiding Spoilers: Did I reveal just enough without giving away the whole 
+story?  
+ 
+Make sure you haven’t spoiled the ending or key twists in the intro. The intro should tease the 
+content, not summarize it. Are the most shocking facts delivered in an open-ended way? 
+ 
+Multiple Footage/Element Tease: Does the intro preview the different 
+elements of the video to come? 
+ 
+ If the story involves things like a 911 call, bodycam footage, interviews, crime scene photos, 
+etc., have you included a glimpse of each (as appropriate) in the intro? This gives the audience 
+a “preview” of the storytelling tools and keeps them curious about those segments. 
+ 
+Final Moment Impact: Does the intro end on a dramatic high note 
+(spectacle) just before the Insanity logo plays?  
+ 
+The last line or visual of the intro should be the most intense or compelling moment that leaves 
+viewers eager to continue. Ensure you marked the end of the intro clearly (with the logo or a 
+transition). 
+ 
+Tone and Emotion: Is the tone of the intro appropriate and engaging?  
+ 
+Check that the emotional tone (suspenseful, eerie, urgent) matches the content. Would 
+background music and editing enhance this intro? (If possible, imagine the kind of instrumental 
+that might play – does your intro’s pace and mood fit with that music?) 
+ 
+Pacing and Length: Is the intro concise and within the recommended 
+length?  
+ 
+Aim for roughly 30–45 seconds. If your intro script seems too long-winded, trim unnecessary 
+details. Every sentence should either build the intrigue or push the story forward quickly. 
+ 
+
+Clarity and Polish: Have I proofread the intro for clarity and errors? 
+ 
+ Ensure the narration is clear and easy to follow. Check for any typos, grammatical mistakes, or 
+confusing phrasing. Also confirm all names, ages, and facts mentioned are accurate and spelled 
+correctly (consistency is key for credibility). 
+ 
+Self-Audit: Would this intro make me want to watch the full video if I were a 
+viewer?  
+ 
+Put yourself in the shoes of someone who just clicked on the video. Does the intro fulfill what 
+you’d hope to see and leave you excited to find out more? If you hesitate at all, refine the intro 
+until the answer is yes. 
+ 
+ 
+ 
+Good luck!!! 
+ 
+-Nick 

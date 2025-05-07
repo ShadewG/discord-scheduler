@@ -8,7 +8,8 @@
     "test": "node test.js",
     "check-env": "node check-env.js",
     "prestart": "npm run check-env",
-    "deploy-bodycam": "node register-bodycam-specific.js"
+    "deploy-bodycam": "node register-bodycam-specific.js",
+    "convert-guides": "node scripts/convert-guides.js"
   },
   "keywords": [
     "discord",

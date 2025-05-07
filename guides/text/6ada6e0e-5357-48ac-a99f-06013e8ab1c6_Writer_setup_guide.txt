@@ -1,0 +1,25 @@
+
+
+Writer setup guide
+Windows
+ Download premiere pro from this link 
+https://drive.google.com/file/d/1kIJ5Lb94TrCgJwkF0E0WABTkEeVp62k2/view?
+usp=sharing
+ Open the .iso file
+ Disable your internet connection.
+ Open the autoplay.exe
+ Follow the instructions on screen
+ If adobe unlicensed pops up, run the setup.exe file from \Setup\Adobe 
+2025\packages
+ in the case that the installation fails at any point, you might need to go to 
+disable your windows defender  This is because while these donʼt contain 
+actual malware but they sometimes get flagged because they exhibit behavior 
+similar to viruses, such as altering system files. 
+ So to do this go to your windows defender settings - virus & threat protection - 
+manage settings - turn off real time protection. You can turn it on again once 
+the installation is done.
+Writer setup guide1
+
+Writer setup guide2
+
+Writer setup guide3
