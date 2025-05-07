@@ -5394,7 +5394,7 @@ async function checkEndOfDayTaskUpdates() {
 }
 
 // Add this near the top of the file with other requires
-const path = require('path');
+// path is already required at the top of the file
 
 // Add this after other client events but before client.login
 // Real-time message collection for knowledge assistant
