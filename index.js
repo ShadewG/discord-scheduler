@@ -2589,7 +2589,11 @@ Example Output: {
             break;
             
           case 'storyboard':
-            notionProperties['Storyboard'] = { select: { name: value } };
+            if (!value.startsWith('http')) {
+              await interaction.editReply('❌ Storyboard value must be a valid URL starting with http:// or https://');
+              return;
+            }
+            notionProperties['Storyboard'] = { url: value };
             break;
             
           case 'footage':
