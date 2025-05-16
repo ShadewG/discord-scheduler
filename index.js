@@ -1625,11 +1625,11 @@ client.on('interactionCreate', async interaction => {
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
-        const ephemeral = true; // We'll address the deprecation warning later
+        const ephemeral = true; 
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
-        logToFile('[Availability] Command started.'); // Added log
+        logToFile('[AvailabilityCommand] Command initiated.');
         const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
         
         const embed = new EmbedBuilder()
@@ -1641,9 +1641,14 @@ client.on('interactionCreate', async interaction => {
         const activeStaff = [];
         const inactiveStaff = [];
         
+        logToFile(`[AvailabilityCommand] Starting to iterate through ${STAFF_AVAILABILITY.length} staff members.`);
         for (const staff of STAFF_AVAILABILITY) {
-          logToFile(`[Availability] Processing staff: ${staff.name}`); 
+          // Log details for each staff member at the beginning of their processing
+          logToFile(`[AvailabilityCommand] Processing staff member: ${staff.name} (Discord ID: ${staff.discordUserId}, Project Owner: ${staff.notionProjectOwnerName}, Task Assignee: ${staff.notionTaskAssigneeName})`);
+          
           const isActive = isStaffActive(staff);
+          logToFile(`[AvailabilityCommand] Staff ${staff.name} - isActive: ${isActive}`); // Log active status immediately
+          
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
           let workloadInfo = 'Notion data unavailable';
@@ -1651,19 +1656,18 @@ client.on('interactionCreate', async interaction => {
 
           if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
             workloadInfo = 'Discord ID missing for Notion lookup.';
-            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`);
+            logToFile(`[AvailabilityCommand] Staff ${staff.name}: Discord ID missing.`);
           } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
             try {
-              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`);
+              logToFile(`[AvailabilityCommand] Staff ${staff.name}: Fetching workload details...`);
               const { projects, tasks } = await getStaffWorkloadDetails(staff);
-              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`);
+              logToFile(`[AvailabilityCommand] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`);
               
               let projectsString = 'No active projects.';
               if (projects.length > 0) {
-                // Extract case numbers (e.g., BCXX, CLXX, IBXX)
                 const caseNumbers = projects.map(p => {
                   const match = p.name.match(/(BC|CL|IB)\d{2}/i);
-                  return match ? match[0].toUpperCase() : p.name; // Fallback to full name if no code
+                  return match ? match[0].toUpperCase() : p.name;
                 }).join(', ');
                 projectsString = caseNumbers;
                 if (projectsString.length > 100) projectsString = projectsString.substring(0, 97) + "...";
@@ -1672,24 +1676,24 @@ client.on('interactionCreate', async interaction => {
 
               if (isActive) {
                 if (projects.length > 0 || tasks.length > 0) {
-                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`);
+                  logToFile(`[AvailabilityCommand] Staff ${staff.name}: Getting AI assessment...`);
                   aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`);
+                  logToFile(`[AvailabilityCommand] Staff ${staff.name}: AI assessment received: ${aiAssessment}`);
                 } else {
                   aiAssessment = 'Highly Available - No projects or tasks listed.';
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`);
+                  logToFile(`[AvailabilityCommand] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`);
                 }
               } else {
                 aiAssessment = 'N/A (Offline)';
               }
 
             } catch (e) {
-              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`);
+              logToFile(`[AvailabilityCommand] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`);
               workloadInfo = 'Error fetching Notion/AI data.';
             }
           } else {
             workloadInfo = 'Notion names not configured.';
-            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`);
+            logToFile(`[AvailabilityCommand] Staff ${staff.name}: Notion names not configured.`);
           }
           
           const staffInfo = {
@@ -1706,10 +1710,10 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
-          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`);
+          logToFile(`[AvailabilityCommand] Staff ${staff.name}: Processing complete. Added to ${isActive ? 'active' : 'inactive'} list.`);
         }
         
-        logToFile('[Availability] All staff processed. Building embed.');
+        logToFile('[AvailabilityCommand] All staff processed. Building embed.');
 
         if (activeStaff.length > 0) {
           const activeStaffText = activeStaff.map(s => 
@@ -1729,9 +1733,9 @@ client.on('interactionCreate', async interaction => {
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
-        logToFile('[Availability] Sending reply.');
+        logToFile('[AvailabilityCommand] Sending reply.');
         await interaction.editReply({ embeds: [embed] });
-        logToFile('[Availability] Reply sent.');
+        logToFile('[AvailabilityCommand] Reply sent.');
         
       } catch (error) {
         logToFile(`Error in /availability command: ${error.message}\n${error.stack}`);
@@ -1740,13 +1744,13 @@ client.on('interactionCreate', async interaction => {
             try {
                 await interaction.editReply({ content: `❌ Error displaying availability. Please check the bot logs.` });
             } catch (replyError) {
-                logToFile(`[Availability] Failed to send error reply: ${replyError.message}`);
+                logToFile(`[AvailabilityCommand] Failed to send error reply: ${replyError.message}`);
             }
         } else if (!interaction.replied && !interaction.deferred) { // Neither deferred nor replied
             try {
                 await interaction.reply({ content: `❌ Error displaying availability. Please check the bot logs.`, ephemeral: true});
             } catch (replyError) {
-                logToFile(`[Availability] Failed to send initial error reply: ${replyError.message}`);
+                logToFile(`[AvailabilityCommand] Failed to send initial error reply: ${replyError.message}`);
             }
         }
       }

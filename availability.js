@@ -358,33 +358,49 @@ async function getAIAvailabilityAssessment(staffName, projects, tasks) {
     return "Highly Available - No projects or tasks listed.";
   }
 
-  const projectList = projects.map(p => `- ${p.name}`).join('\n');
-  const taskSummary = `Total active tasks: ${tasks.length}`;
+  const projectListString = projects.map(p => `- ${p.name}`).join('\n') || "- None";
+  
+  let taskListString = "- None listed in Daily DB";
+  if (tasks.length > 0) {
+    // Assuming tasks are objects with a 'name' property and optionally 'status'
+    taskListString = tasks.map(t => `- ${t.name}${t.status ? ' (Status: ' + t.status + ')' : ''}`).join('\n');
+    if (taskListString.length > 600) { // Keep prompt reasonable, slightly increased limit
+        taskListString = tasks.slice(0, 5).map(t => `- ${t.name}${t.status ? ' (Status: ' + t.status + ')' : ''}`).join('\n') + `\n- ... and ${tasks.length - 5} more tasks.`;
+    }
+  }
 
   const prompt = `
-    User ${staffName} is currently working.
-    Active Projects:
-    ${projectList || "- None"}
-    Active Tasks Summary: ${taskSummary}
+    Staff member: ${staffName}.
+    Current active projects assigned in Notion:
+    ${projectListString}
 
-    Based on this, assess their current availability for a new high-priority project. 
-    Consider both the number of projects and tasks. 
+    Current active tasks assigned to ${staffName} in Notion (from a "Daily" database, status not "Done"):
+    ${taskListString}
+    (Total active tasks found in Daily DB: ${tasks.length})
+
+    Based *only* on the project and task information listed above, assess ${staffName}'s current availability for a new high-priority project.
     Provide a brief availability status (e.g., Highly Available, Moderately Available, Limited Availability, Potentially Overloaded) and a very short reasoning (1 sentence max).
-    Example: "Moderately Available - Handling a few projects and tasks."
-    Example: "Highly Available - Light current workload."
-    Example: "Limited Availability - Assigned to multiple projects and many tasks."
+    Focus on the quantity and nature of current commitments. Do not invent or assume tasks or projects not listed.
+    Example if tasks are listed: "Moderately Available - Handling a few projects and specific tasks."
+    Example if no tasks listed but projects exist: "Moderately Available - Assigned to several projects, no specific tasks detailed here."
+    Example if no projects or tasks: "Highly Available - Light current workload based on provided data."
   `;
 
   try {
-    logToFile(`[Availability/getAIAssessment] Getting AI assessment for ${staffName} with ${projects.length} projects and ${tasks.length} tasks.`);
+    logToFile(`[Availability/getAIAssessment] Getting AI assessment for ${staffName}. Projects: ${projects.length}, Tasks in Daily DB: ${tasks.length}.`);
+    // If taskListString became very long due to many tasks, log only a summary of it for brevity
+    const loggableTaskList = taskListString.length > 300 ? `(Task list summary: ${tasks.length} tasks)` : taskListString;
+    logToFile(`[Availability/getAIAssessment] Prompt context for ${staffName} - Projects: ${projectListString}. Tasks: ${loggableTaskList}`);
+
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 60,
+      max_tokens: 70, // Increased slightly for potentially longer reasoning
       temperature: 0.3,
     });
-    logToFile(`[Availability/getAIAssessment] AI response for ${staffName}: ${response.choices[0].message.content.trim()}`);
-    return response.choices[0].message.content.trim();
+    const assessment = response.choices[0].message.content.trim();
+    logToFile(`[Availability/getAIAssessment] AI response for ${staffName}: ${assessment}`);
+    return assessment;
   } catch (error) {
     logToFile(`[Availability/getAIAssessment] Error getting AI assessment for ${staffName}: ${error.message}`);
     return "AI Assessment Error";
