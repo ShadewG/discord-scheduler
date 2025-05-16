@@ -199,21 +199,28 @@ function getCurrentDayOfWeek() {
  * @param {Object} staff - Staff member object
  * @returns {boolean} True if staff is currently active
  */
-function isStaffActive(staff) {
-  const now = moment().tz(staff.timezone);
-  const currentDay = now.format("ddd"); // Mon, Tue, etc.
-  const currentTime = now.format("HH:mm");
+function isStaffActive(staffMember) {
+  const now = moment().tz(staffMember.timezone);
+  const currentDayShort = now.format("ddd"); // Mon, Tue, etc.
 
-  const todayWorkHours = staff.workHours.find(wh => wh.day === currentDay);
+  const todayWorkHours = staffMember.workHours.find(wh => wh.day === currentDayShort);
 
   if (!todayWorkHours) {
-    // logToFile(`[isStaffActive] ${staff.name} is not scheduled to work today (${currentDay}).`);
-    return false; 
+    logToFile(`[isStaffActive] ${staffMember.name} is not scheduled to work today (${currentDayShort}) in ${staffMember.timezone}.`);
+    return false;
   }
 
-  // logToFile(`[isStaffActive] Checking ${staff.name}: Now: ${currentTime} (${staff.timezone}), Today's Hours: ${todayWorkHours.start} - ${todayWorkHours.end}`);
-  const isActive = currentTime >= todayWorkHours.start && currentTime <= todayWorkHours.end;
-  // logToFile(`[isStaffActive] ${staff.name} active status: ${isActive}`);
+  // Create moment objects for start and end times for proper comparison
+  // These moments will be for the current date in the staff member's timezone
+  const startTime = moment.tz(`${now.format("YYYY-MM-DD")} ${todayWorkHours.start}`, staffMember.timezone);
+  const endTime = moment.tz(`${now.format("YYYY-MM-DD")} ${todayWorkHours.end}`, staffMember.timezone);
+
+  // Check if 'now' is between startTime and endTime (inclusive of start, exclusive of end by default with isBetween)
+  // To make it inclusive of end time, we check if it's same or before endTime and same or after startTime.
+  const isActive = now.isSameOrAfter(startTime) && now.isSameOrBefore(endTime);
+  
+  logToFile(`[isStaffActive] Checking ${staffMember.name} in ${staffMember.timezone}: Now: ${now.format("HH:mm:ss")}, Day: ${currentDayShort}, Shift: ${todayWorkHours.start}-${todayWorkHours.end}. StartMoment: ${startTime.format("HH:mm:ss")}, EndMoment: ${endTime.format("HH:mm:ss")}. Active: ${isActive}`);
+  
   return isActive;
 }
 
