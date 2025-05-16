@@ -1642,7 +1642,7 @@ client.on('interactionCreate', async interaction => {
         const inactiveStaff = [];
         
         for (const staff of STAFF_AVAILABILITY) {
-          logToFile(`[Availability] Processing staff: ${staff.name}`); // Added log
+          logToFile(`[Availability] Processing staff: ${staff.name}`); 
           const isActive = isStaffActive(staff);
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
@@ -1651,41 +1651,45 @@ client.on('interactionCreate', async interaction => {
 
           if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
             workloadInfo = 'Discord ID missing for Notion lookup.';
-            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`); // Added log
+            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`);
           } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
             try {
-              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`); // Added log
+              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`);
               const { projects, tasks } = await getStaffWorkloadDetails(staff);
-              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`); // Added log
+              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`);
               
               let projectsString = 'No active projects.';
               if (projects.length > 0) {
-                projectsString = projects.map(p => p.name).join(', ');
+                // Extract case numbers (e.g., BCXX, CLXX, IBXX)
+                const caseNumbers = projects.map(p => {
+                  const match = p.name.match(/(BC|CL|IB)\d{2}/i);
+                  return match ? match[0].toUpperCase() : p.name; // Fallback to full name if no code
+                }).join(', ');
+                projectsString = caseNumbers;
                 if (projectsString.length > 100) projectsString = projectsString.substring(0, 97) + "...";
               }
               workloadInfo = `Projects: ${projectsString}\nTasks: ${tasks.length} active`;
 
               if (isActive) {
                 if (projects.length > 0 || tasks.length > 0) {
-                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`); // Added log
+                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`);
                   aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`); // Added log
+                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`);
                 } else {
                   aiAssessment = 'Highly Available - No projects or tasks listed.';
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`); // Added log
+                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`);
                 }
               } else {
                 aiAssessment = 'N/A (Offline)';
               }
 
             } catch (e) {
-              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`); // More detailed log
+              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`);
               workloadInfo = 'Error fetching Notion/AI data.';
-              // Optionally, rethrow or handle more gracefully if this error should stop the whole command
             }
           } else {
             workloadInfo = 'Notion names not configured.';
-            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`); // Added log
+            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`);
           }
           
           const staffInfo = {
@@ -1694,7 +1698,7 @@ client.on('interactionCreate', async interaction => {
             timeLeft,
             workingHours,
             workload: workloadInfo,
-            aiAssessment: aiAssessment, // aiAssessment will be 'N/A (Offline)' if not active
+            aiAssessment: aiAssessment, 
           };
           
           if (isActive) {
@@ -1702,32 +1706,32 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
-          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`); // Added log
+          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`);
         }
         
-        logToFile('[Availability] All staff processed. Building embed.'); // Added log
+        logToFile('[Availability] All staff processed. Building embed.');
 
         if (activeStaff.length > 0) {
           const activeStaffText = activeStaff.map(s => 
-            `**${s.name}** (${s.timeLeft}) - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
+            `**${s.name}** (${s.timeLeft}) - ${s.workingHours}\n*Workload:* ${s.workload}\n${s.aiAssessment}` // Removed 'AI Eval: ' prefix
           ).join('\n\n');
-          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText.substring(0, 1020) });
         } else {
           embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
         }
         
         if (inactiveStaff.length > 0) {
           const inactiveStaffText = inactiveStaff.map(s => 
-            `${s.name} - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
+            `${s.name} - ${s.workingHours}\n*Workload:* ${s.workload}\n${s.aiAssessment}` // Removed 'AI Eval: ' prefix
           ).join('\n\n');
-          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) });
         }
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
-        logToFile('[Availability] Sending reply.'); // Added log
+        logToFile('[Availability] Sending reply.');
         await interaction.editReply({ embeds: [embed] });
-        logToFile('[Availability] Reply sent.'); // Added log
+        logToFile('[Availability] Reply sent.');
         
       } catch (error) {
         logToFile(`Error in /availability command: ${error.message}\n${error.stack}`);
