@@ -1631,15 +1631,16 @@ client.on('interactionCreate', async interaction => {
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
-        const ephemeral = true;
+        const ephemeral = true; // We'll address the deprecation warning later
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
+        logToFile('[Availability] Command started.'); // Added log
         const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
         
         const embed = new EmbedBuilder()
           .setTitle('Team Availability & Workload')
-          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted. Workload from Notion. AI assessment of availability.`) // Updated description
+          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted. Workload from Notion. AI assessment of availability.`)
           .setColor(0x00AAFF)
           .setTimestamp();
         
@@ -1647,17 +1648,22 @@ client.on('interactionCreate', async interaction => {
         const inactiveStaff = [];
         
         for (const staff of STAFF_AVAILABILITY) {
+          logToFile(`[Availability] Processing staff: ${staff.name}`); // Added log
           const isActive = isStaffActive(staff);
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
           let workloadInfo = 'Notion data unavailable';
-          let aiAssessment = 'N/A'; // Default AI assessment
+          let aiAssessment = 'N/A';
 
           if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
             workloadInfo = 'Discord ID missing for Notion lookup.';
+            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`); // Added log
           } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
             try {
+              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`); // Added log
               const { projects, tasks } = await getStaffWorkloadDetails(staff);
+              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`); // Added log
+              
               let projectsString = 'No active projects.';
               if (projects.length > 0) {
                 projectsString = projects.map(p => p.name).join(', ');
@@ -1665,19 +1671,27 @@ client.on('interactionCreate', async interaction => {
               }
               workloadInfo = `Projects: ${projectsString}\nTasks: ${tasks.length} active`;
 
-              // Get AI assessment only for active staff with workload data
-              if (isActive && (projects.length > 0 || tasks.length > 0)) {
-                aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
-              } else if (isActive) {
-                aiAssessment = 'Highly Available - No projects or tasks listed.';
+              if (isActive) {
+                if (projects.length > 0 || tasks.length > 0) {
+                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`); // Added log
+                  aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
+                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`); // Added log
+                } else {
+                  aiAssessment = 'Highly Available - No projects or tasks listed.';
+                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`); // Added log
+                }
+              } else {
+                aiAssessment = 'N/A (Offline)';
               }
 
             } catch (e) {
-              logToFile(`Error fetching workload for ${staff.name}: ${e.message}`);
-              workloadInfo = 'Error fetching Notion data.';
+              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`); // More detailed log
+              workloadInfo = 'Error fetching Notion/AI data.';
+              // Optionally, rethrow or handle more gracefully if this error should stop the whole command
             }
           } else {
             workloadInfo = 'Notion names not configured.';
+            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`); // Added log
           }
           
           const staffInfo = {
@@ -1686,7 +1700,7 @@ client.on('interactionCreate', async interaction => {
             timeLeft,
             workingHours,
             workload: workloadInfo,
-            aiAssessment: isActive ? aiAssessment : 'N/A (Offline)', // AI assessment only for active staff
+            aiAssessment: aiAssessment, // aiAssessment will be 'N/A (Offline)' if not active
           };
           
           if (isActive) {
@@ -1694,36 +1708,48 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
+          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`); // Added log
         }
         
+        logToFile('[Availability] All staff processed. Building embed.'); // Added log
+
         if (activeStaff.length > 0) {
-          const activeStaffText = activeStaff.map(staff => 
-            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}\n*Workload:* ${staff.workload}\n*AI Eval:* ${staff.aiAssessment}`
+          const activeStaffText = activeStaff.map(s => 
+            `**${s.name}** (${s.timeLeft}) - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
           ).join('\n\n');
-          
-          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText });
+          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText.substring(0, 1020) }); // Ensure field value is not too long
         } else {
           embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
         }
         
         if (inactiveStaff.length > 0) {
-          const inactiveStaffText = inactiveStaff.map(staff => 
-            `${staff.name} - ${staff.workingHours}\n*Workload:* ${staff.workload}\n*AI Eval:* ${staff.aiAssessment}` // Show N/A for offline
+          const inactiveStaffText = inactiveStaff.map(s => 
+            `${s.name} - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
           ).join('\n\n');
-          
-          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText });
+          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) }); // Ensure field value is not too long
         }
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
+        logToFile('[Availability] Sending reply.'); // Added log
         await interaction.editReply({ embeds: [embed] });
+        logToFile('[Availability] Reply sent.'); // Added log
         
       } catch (error) {
-        logToFile(`Error in /availability command: ${error.message}\n${error.stack}`); // Added stack trace
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying availability: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error displaying availability: ${error.message}`, ephemeral: true });
+        logToFile(`Error in /availability command: ${error.message}\n${error.stack}`);
+        console.error(`Error in /availability command:`, error); // Also log to console for immediate visibility
+        if (hasResponded && !interaction.replied) { // Check if deferred and not yet replied
+            try {
+                await interaction.editReply({ content: `❌ Error displaying availability. Please check the bot logs.` });
+            } catch (replyError) {
+                logToFile(`[Availability] Failed to send error reply: ${replyError.message}`);
+            }
+        } else if (!interaction.replied && !interaction.deferred) { // Neither deferred nor replied
+            try {
+                await interaction.reply({ content: `❌ Error displaying availability. Please check the bot logs.`, ephemeral: true});
+            } catch (replyError) {
+                logToFile(`[Availability] Failed to send initial error reply: ${replyError.message}`);
+            }
         }
       }
     }
