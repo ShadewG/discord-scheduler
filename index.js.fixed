@@ -2,47 +2,17 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
-const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
-const { logToFile } = require('./log_utils'); // Require logToFile from the new utility file
-const axios = require('axios');
-const express = require('express');
-const cors = require('cors');
-const app = express();
-
-// Import knowledge assistant
-const { handleAskCommand } = require('./knowledge-assistant');
-
-// Configure OpenAI client
-let openai = null;
-try {
-  console.log('Attempting to initialize OpenAI client...');
-  if (process.env.OPENAI_API_KEY) {
-    console.log('OPENAI_API_KEY found in environment variables');
-    openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-    console.log('OpenAI client initialized successfully');
-    logToFile('OpenAI client initialized successfully');
-  } else {
-    console.log('⚠️ OPENAI_API_KEY not found in environment variables');
-    console.log('Environment variables available:', Object.keys(process.env).join(', '));
-    logToFile('OPENAI_API_KEY not found in environment, GPT task extraction will not be available');
-  }
-} catch (error) {
-  console.log(`❌ Error initializing OpenAI client: ${error.message}`);
-  logToFile(`Error initializing OpenAI client: ${error.message}`);
-}
-
-// Setup timezone
-const TZ = process.env.TIMEZONE || 'Europe/Berlin';
+const fs = require('fs');
+const path = require('path');
+const moment = require('moment-timezone');
 
 // Import availability module
-const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours, getStaffWorkloadDetails, getAIAvailabilityAssessment } = require('./availability');
+const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
 
 // Define timezone for all operations
-// const TZ = 'Europe/Berlin'; // Removed duplicate TZ declaration
+const TZ = 'Europe/Berlin';
 
 // Map of active jobs
 const activeJobs = new Map();
@@ -59,16 +29,15 @@ const TEAM_ROLE_ID = '1364657163598823474';
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
-  { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☕ <@&${TEAM_ROLE_ID}> **Social Fika** - Casual check-in + daily sync (9:00-9:20).`, notify: true },
-  { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** starts now — focus mode ON (9:20-11:00).` },
+  { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☁E<@&${TEAM_ROLE_ID}> **Social Fika** - Casual check-in + daily sync (9:00-9:20).`, notify: true },
+  { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** starts now  Efocus mode ON (9:20-11:00).` },
   { tag: 'Fika Break', cron: '0 11 * * 1-5', text: `🍪 <@&${TEAM_ROLE_ID}> **Fika Break** - Short break time! (11:00-11:20)`, notify: true },
-  { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** continues — back to focused mode (11:20-13:00).` },
-  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** — enjoy! Back at 13:45.`, notify: true },
+  { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** continues  Eback to focused mode (11:20-13:00).` },
+  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽�E�E<@&${TEAM_ROLE_ID}> **Lunch break**  Eenjoy! Back at 13:45.`, notify: true },
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
-  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
-  { tag: 'End-of-Day Task Check', cron: '0 18 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
+  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true } // New job to backup messages
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -105,7 +74,7 @@ const notificationJobs = jobs
     return {
       tag: `${job.tag} Notification`,
       cron: notifyCron,
-      text: `🔔 <@&${TEAM_ROLE_ID}> Heads-up — **${meetingName}** in 5 minutes (${formattedHour}:${formattedMinute}).`,
+      text: `🔔 <@&${TEAM_ROLE_ID}> Heads-up  E**${meetingName}** in 5 minutes (${formattedHour}:${formattedMinute}).`,
       isNotification: true
     };
   });
@@ -128,7 +97,7 @@ function validateCronExpressions() {
       // Simple validation - check parts
       const parts = job.cron.split(' ');
       if (parts.length !== 5) {
-        logToFile(`❌ Job ${index + 1}: ${job.tag} - Invalid cron expression format: ${job.cron}`);
+        logToFile(`❁EJob ${index + 1}: ${job.tag} - Invalid cron expression format: ${job.cron}`);
         allValid = false;
         return;
       }
@@ -156,19 +125,19 @@ function validateCronExpressions() {
       const scheduler = cron.schedule(job.cron, () => {}, { scheduled: false });
       scheduler.stop();
       
-      const status = shouldRunToday ? '✅ Should run today' : '⚠️ Not scheduled for today';
+      const status = shouldRunToday ? '✁EShould run today' : '⚠�E�ENot scheduled for today';
       logToFile(`${status} - Job ${index + 1}: ${job.tag} (${job.cron})`);
       
     } catch (error) {
-      logToFile(`❌ Job ${index + 1}: ${job.tag} - Error validating cron expression: ${error.message}`);
+      logToFile(`❁EJob ${index + 1}: ${job.tag} - Error validating cron expression: ${error.message}`);
       allValid = false;
     }
   });
   
   if (allValid) {
-    logToFile('✅ All cron expressions are valid');
+    logToFile('✁EAll cron expressions are valid');
   } else {
-    logToFile('❌ Some cron expressions have issues - check logs');
+    logToFile('❁ESome cron expressions have issues - check logs');
   }
   
   return allValid;
@@ -376,7 +345,7 @@ function createScheduleEmbed() {
       
       embed.addFields({ 
         name: `${index + 1}. ${job.tag} (${hour}:${minute})`, 
-        value: `⏱️ **Countdown:** ${job.timeUntil}\n🕒 **At:** ${job.formatted}\n\n📝 **Message:**\n${messageText}`
+        value: `⏱�E�E**Countdown:** ${job.timeUntil}\n🕒 **At:** ${job.formatted}\n\n📝 **Message:**\n${messageText}`
       });
     });
   } else {
@@ -403,7 +372,7 @@ function createScheduleEmbed() {
       const messageText = job.text.replace('@Schedule', '').trim();
       
       embed.addFields({ 
-        name: `${hour}:${minute} — ${job.tag}`, 
+        name: `${hour}:${minute}  E${job.tag}`, 
         value: messageText
       });
     });
@@ -439,15 +408,15 @@ const STATUS_WATCHERS = [
 
 // Log environment variables for debugging (without showing full values)
 console.log('Environment variables check:');
-console.log(`- DISCORD_TOKEN: ${TOKEN ? '✅ Set' : '❌ Missing'}`);
-console.log(`- NOTION_KEY: ${NOTION_KEY ? '✅ Set' : '❌ Missing'}`);
-console.log(`- NOTION_DATABASE_ID: ${DB ? `✅ Set (${DB.substring(0, 6)}...)` : '❌ Missing'}`);
-console.log(`- NOTION_CHANGELOG_DB_ID: ${CHANGELOG_DB ? `✅ Set (${CHANGELOG_DB.substring(0, 6)}...)` : '❌ Missing'}`);
-console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`- DISCORD_TOKEN: ${TOKEN ? '✁ESet' : '❁EMissing'}`);
+console.log(`- NOTION_KEY: ${NOTION_KEY ? '✁ESet' : '❁EMissing'}`);
+console.log(`- NOTION_DATABASE_ID: ${DB ? `✁ESet (${DB.substring(0, 6)}...)` : '❁EMissing'}`);
+console.log(`- NOTION_CHANGELOG_DB_ID: ${CHANGELOG_DB ? `✁ESet (${CHANGELOG_DB.substring(0, 6)}...)` : '❁EMissing'}`);
+console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✁ESet' : '❁EMissing'}`);
 
 // Validate required environment variables
 if (!TOKEN) {
-  console.error('❌ ERROR: DISCORD_TOKEN is required but not provided in .env file');
+  console.error('❁EERROR: DISCORD_TOKEN is required but not provided in .env file');
   process.exit(1);
 }
 
@@ -484,7 +453,7 @@ async function ping(message) {
         logToFile(`ERROR: Bot doesn't have 'Send Messages' permission in #${channel.name}`);
         return null;
       } else if (!permissions.has('MentionEveryone')) {
-        logToFile(`⚠️ WARNING: Bot doesn't have 'Mention Everyone' permission in #${channel.name}`);
+        logToFile(`⚠�E�EWARNING: Bot doesn't have 'Mention Everyone' permission in #${channel.name}`);
         logToFile(`This may prevent the bot from mentioning roles!`);
         // Continue anyway since we can still send messages
       }
@@ -492,15 +461,15 @@ async function ping(message) {
       // Fix: Use await to properly wait for the message to be sent
       try {
         const sentMessage = await channel.send(message);
-        logToFile(`✅ Successfully sent schedule message to #${channel.name}: ${message}`);
+        logToFile(`✁ESuccessfully sent schedule message to #${channel.name}: ${message}`);
         return sentMessage;
       } catch (err) {
-        logToFile(`❌ Error sending message to #${channel.name}: ${err.message}`);
+        logToFile(`❁EError sending message to #${channel.name}: ${err.message}`);
         console.error(`Failed to send message to #${channel.name}:`, err);
         throw err; // Re-throw to handle it in the calling function
       }
     } else {
-      logToFile(`❌ ERROR: Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
+      logToFile(`❁EERROR: Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
       console.error(`Could not find schedule channel with ID ${SCHEDULE_CHANNEL_ID}`);
       
       // Log all available channels for debugging
@@ -511,7 +480,7 @@ async function ping(message) {
       return null;
     }
   } catch (error) {
-    logToFile(`❌ Critical error in ping function: ${error.message}`);
+    logToFile(`❁ECritical error in ping function: ${error.message}`);
     console.error('Critical error in ping function:', error);
     throw error; // Re-throw to handle it in the calling function
   }
@@ -524,29 +493,46 @@ try {
     notion = new NotionClient({
       auth: NOTION_KEY
     });
-    console.log('✅ Notion client initialized successfully');
+    console.log('✁ENotion client initialized successfully');
     console.log(`  - Using MAIN database ID: ${DB.substring(0, 8)}...`);
     console.log(`  - Using CHANGELOG database ID: ${CHANGELOG_DB.substring(0, 8)}...`);
     
     // Verify databases are different
     if (DB === CHANGELOG_DB) {
-      console.error('❌ ERROR: Main database and changelog database have the same ID!');
-      logToFile('❌ CRITICAL ERROR: Main database and changelog database have the same ID!');
+      console.error('❁EERROR: Main database and changelog database have the same ID!');
+      logToFile('❁ECRITICAL ERROR: Main database and changelog database have the same ID!');
     }
     
     // Store the database ID in global scope for access in functions
     global.NOTION_DATABASE_ID = DB;
     global.NOTION_CHANGELOG_DB_ID = CHANGELOG_DB;
   } else {
-    if (!NOTION_KEY) console.warn('⚠️ NOTION_KEY not provided. Notion features will be disabled.');
-    if (!DB) console.warn('⚠️ NOTION_DATABASE_ID not provided. Notion features will be disabled.');
+    if (!NOTION_KEY) console.warn('⚠�E�ENOTION_KEY not provided. Notion features will be disabled.');
+    if (!DB) console.warn('⚠�E�ENOTION_DATABASE_ID not provided. Notion features will be disabled.');
   }
 } catch (error) {
-  console.warn('⚠️ Failed to initialize Notion client: ' + error.message + '. Notion features will be disabled.');
+  console.warn('⚠�E�EFailed to initialize Notion client: ' + error.message + '. Notion features will be disabled.');
 }
 
-// Note: OpenAI client is already initialized at the top of the file
-// let openai = null; (removed duplicate initialization)
+// Utility function for logging
+function logToFile(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(path.join(__dirname, 'bot.log'), logMessage);
+}
+
+// Initialize OpenAI client if API key is provided
+let openai = null;
+try {
+  if (OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    console.log('✁EOpenAI client initialized successfully');
+  } else {
+    console.warn('⚠�E�EOPENAI_API_KEY not provided. AI features will be disabled.');
+  }
+} catch (error) {
+  console.warn('⚠�E�EFailed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
+}
 
 // Error handler
 client.on('error', (error) => {
@@ -576,7 +562,7 @@ async function findProjectByQuery(query) {
     // Explicitly avoid using the changelog database
     if (databaseId === CHANGELOG_DB) {
       logToFile('ERROR: Attempted to search for projects in the changelog database instead of the main database!');
-      console.error('❌ ERROR: Using changelog database instead of main project database.');
+      console.error('❁EERROR: Using changelog database instead of main project database.');
       return null;
     }
     
@@ -584,7 +570,7 @@ async function findProjectByQuery(query) {
     
     if (!databaseId) {
       logToFile('ERROR: Notion database ID is undefined. Check your environment variables.');
-      console.error('❌ ERROR: Notion database ID is undefined. Check your environment variables.');
+      console.error('❁EERROR: Notion database ID is undefined. Check your environment variables.');
       return null;
     }
     
@@ -813,8 +799,8 @@ client.once('ready', () => {
   // Verify schedule channel access
   const scheduleChannel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
   if (!scheduleChannel) {
-    console.error(`❌ ERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
-    logToFile(`❌ CRITICAL ERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+    console.error(`❁EERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+    logToFile(`❁ECRITICAL ERROR: Schedule channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
     logToFile('Available text channels:');
     client.channels.cache.forEach(ch => {
       if (ch.type === 0) { // Text channels
@@ -822,40 +808,40 @@ client.once('ready', () => {
       }
     });
   } else {
-    console.log(`✅ Found schedule channel: #${scheduleChannel.name}`);
-    logToFile(`✅ Found schedule channel: #${scheduleChannel.name} in server ${scheduleChannel.guild.name}`);
+    console.log(`✁EFound schedule channel: #${scheduleChannel.name}`);
+    logToFile(`✁EFound schedule channel: #${scheduleChannel.name} in server ${scheduleChannel.guild.name}`);
     
     // Check permissions
     const permissions = scheduleChannel.permissionsFor(client.user);
     if (!permissions) {
-      console.error('❌ Cannot check permissions for the schedule channel');
-      logToFile('❌ Cannot check permissions for the schedule channel');
+      console.error('❁ECannot check permissions for the schedule channel');
+      logToFile('❁ECannot check permissions for the schedule channel');
     } else {
       const requiredPermissions = ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory'];
       const missingPermissions = requiredPermissions.filter(perm => !permissions.has(perm));
       
       if (missingPermissions.length > 0) {
-        console.error(`❌ Missing permissions for schedule channel: ${missingPermissions.join(', ')}`);
-        logToFile(`❌ Missing permissions for schedule channel: ${missingPermissions.join(', ')}`);
+        console.error(`❁EMissing permissions for schedule channel: ${missingPermissions.join(', ')}`);
+        logToFile(`❁EMissing permissions for schedule channel: ${missingPermissions.join(', ')}`);
       } else {
-        console.log('✅ Bot has all required permissions for the schedule channel');
-        logToFile('✅ Bot has all required permissions for the schedule channel');
+        console.log('✁EBot has all required permissions for the schedule channel');
+        logToFile('✁EBot has all required permissions for the schedule channel');
         
         // Check specifically for mention permissions
         if (!permissions.has('MentionEveryone')) {
-          console.warn('⚠️ Bot does not have permission to mention @everyone, @here, or roles');
-          logToFile('⚠️ Bot does not have permission to mention @everyone, @here, or roles');
+          console.warn('⚠�E�EBot does not have permission to mention @everyone, @here, or roles');
+          logToFile('⚠�E�EBot does not have permission to mention @everyone, @here, or roles');
           logToFile('This may prevent role mentions from working properly in scheduled messages');
           logToFile('To fix this, give the bot the "Mention @everyone, @here, and All Roles" permission');
         } else {
-          console.log('✅ Bot has permission to mention roles');
-          logToFile('✅ Bot has permission to mention roles');
+          console.log('✁EBot has permission to mention roles');
+          logToFile('✁EBot has permission to mention roles');
         }
         
         // Create a test message with a role mention but don't send it
-        const testMessage = `🤖 Bot startup test: This is a test message with role mention <@&${TEAM_ROLE_ID}>`;
+        const testMessage = `🤁EBot startup test: This is a test message with role mention <@&${TEAM_ROLE_ID}>`;
         logToFile(`Test message format with role mention: ${testMessage}`);
-        logToFile('✅ Startup checks complete - no test message sent to avoid channel spam');
+        logToFile('✁EStartup checks complete - no test message sent to avoid channel spam');
       }
     }
   }
@@ -910,16 +896,16 @@ client.once('ready', () => {
       registerCommandsToGuild(client, TOKEN, BODYCAM_SERVER_ID, CATEGORIES_TO_INCLUDE)
         .then(success => {
           if (success) {
-            logToFile(`✅ Successfully registered specific commands to BODYCAM server`);
+            logToFile(`✁ESuccessfully registered specific commands to BODYCAM server`);
           } else {
-            logToFile(`❌ Failed to register specific commands to BODYCAM server`);
+            logToFile(`❁EFailed to register specific commands to BODYCAM server`);
           }
         })
         .catch(error => {
           logToFile(`Error registering specific commands to BODYCAM server: ${error.message}`);
         });
     } else {
-      logToFile(`⚠️ BODYCAM server with ID ${BODYCAM_SERVER_ID} not found in bot's guilds`);
+      logToFile(`⚠�E�EBODYCAM server with ID ${BODYCAM_SERVER_ID} not found in bot's guilds`);
     }
   } catch (error) {
     console.error('Error registering commands:', error);
@@ -943,7 +929,7 @@ function startScheduleHealthCheck() {
     logToFile(`Schedule health check: activeJobs.size=${activeJobs.size}, expected=${jobs.length}`);
     
     if (activeJobs.size < jobs.length) {
-      logToFile(`⚠️ Schedule health check: ${jobs.length - activeJobs.size} jobs not scheduled. Re-scheduling all jobs.`);
+      logToFile(`⚠�E�ESchedule health check: ${jobs.length - activeJobs.size} jobs not scheduled. Re-scheduling all jobs.`);
       scheduleAllJobs();
     }
   }, 5000); // After 5 seconds
@@ -1023,7 +1009,7 @@ client.on('interactionCreate', async interaction => {
       logToFile(`Error handling button interaction: ${error.message}`);
       try {
         await interaction.reply({ 
-          content: '❌ Error refreshing schedule timers. Please try again.',
+          content: '❁EError refreshing schedule timers. Please try again.',
           ephemeral: true 
         });
       } catch (replyError) {
@@ -1054,7 +1040,7 @@ client.on('interactionCreate', async interaction => {
         const result = await extractTasksFromMorningMessages();
         
         if (!result.success) {
-          return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
+          return interaction.editReply(`❁EError extracting tasks: ${result.error}`);
         }
         
         if (result.messageCount === 0) {
@@ -1076,13 +1062,13 @@ client.on('interactionCreate', async interaction => {
         
         // Send the response
         await interaction.editReply({ 
-          content: '✅ Task extraction completed successfully!', 
+          content: '✁ETask extraction completed successfully!', 
           embeds: [embed] 
         });
         
       } catch (error) {
         logToFile(`Error in /extract-tasks command: ${error.message}`);
-        await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+        await interaction.editReply(`❁EError extracting tasks: ${error.message}`);
       }
     }
     
@@ -1099,7 +1085,7 @@ client.on('interactionCreate', async interaction => {
         
         // Check if Notion is configured
         if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          await interaction.editReply('❁ENotion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
           return;
         }
         
@@ -1111,7 +1097,7 @@ client.on('interactionCreate', async interaction => {
         
         const result = await findProjectByQuery(query);
         if (!result) {
-          await interaction.editReply(`❌ Could not find a project matching "${query}"`);
+          await interaction.editReply(`❁ECould not find a project matching "${query}"`);
           return;
         }
         
@@ -1291,7 +1277,7 @@ client.on('interactionCreate', async interaction => {
         }
         
         if (editors !== 'None') {
-          embed.addFields({ name: '✂️ Editors', value: editors, inline: true });
+          embed.addFields({ name: '✂︁EEditors', value: editors, inline: true });
         }
         
         // Create buttons for links
@@ -1339,9 +1325,9 @@ client.on('interactionCreate', async interaction => {
       } catch (error) {
         logToFile(`Error in /where command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error finding project: ${error.message}`);
+          await interaction.editReply(`❁EError finding project: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error finding project: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError finding project: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -1358,7 +1344,7 @@ client.on('interactionCreate', async interaction => {
         
         // Check if Notion is configured
         if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          await interaction.editReply('❁ENotion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
           return;
         }
         
@@ -1373,7 +1359,7 @@ client.on('interactionCreate', async interaction => {
         if (!showAll) {
           const channel = interaction.channel;
           if (!channel) {
-            await interaction.editReply('❌ This command can only be used in a text channel.');
+            await interaction.editReply('❁EThis command can only be used in a text channel.');
             return;
           }
           
@@ -1382,7 +1368,7 @@ client.on('interactionCreate', async interaction => {
           const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
           
           if (!codeMatch) {
-            await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc. Use `/deadline all` to see all deadlines.');
+            await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc. Use `/deadline all` to see all deadlines.');
             return;
           }
           
@@ -1417,7 +1403,7 @@ client.on('interactionCreate', async interaction => {
           const ibResult = await fetchProjectDeadlines('IB');
           
           if (!clResult.success || !ibResult.success) {
-            await interaction.editReply(`❌ Error fetching deadlines: ${clResult.error || ibResult.error}`);
+            await interaction.editReply(`❁EError fetching deadlines: ${clResult.error || ibResult.error}`);
             return;
           }
           
@@ -1442,7 +1428,7 @@ client.on('interactionCreate', async interaction => {
         }
         
         if (!result.success) {
-          await interaction.editReply(`❌ Error fetching deadlines: ${result.error}`);
+          await interaction.editReply(`❁EError fetching deadlines: ${result.error}`);
           return;
         }
         
@@ -1487,8 +1473,8 @@ client.on('interactionCreate', async interaction => {
             const countdownText = daysRemaining > 0 
               ? `⏰ **${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining**`
               : daysRemaining === 0
-                ? `⚠️ **Due today!**`
-                : `❌ **Overdue by ${Math.abs(daysRemaining)} day${Math.abs(daysRemaining) !== 1 ? 's' : ''}**`;
+                ? `⚠�E�E**Due today!**`
+                : `❁E**Overdue by ${Math.abs(daysRemaining)} day${Math.abs(daysRemaining) !== 1 ? 's' : ''}**`;
             
             embed.addFields({ name: 'Countdown', value: countdownText });
           }
@@ -1563,14 +1549,14 @@ client.on('interactionCreate', async interaction => {
           // Add all the deadline sections
           if (overdue.length > 0) {
             embed.addFields({ 
-              name: '❌ OVERDUE', 
+              name: '❁EOVERDUE', 
               value: formatProjectList(overdue)
             });
           }
           
           if (dueToday.length > 0) {
             embed.addFields({ 
-              name: '⚠️ DUE TODAY', 
+              name: '⚠�E�EDUE TODAY', 
               value: formatProjectList(dueToday)
             });
           }
@@ -1591,14 +1577,14 @@ client.on('interactionCreate', async interaction => {
           
           if (dueLater.length > 0) {
             embed.addFields({ 
-              name: '🗓️ FUTURE DEADLINES', 
+              name: '🗓�E�EFUTURE DEADLINES', 
               value: formatProjectList(dueLater)
             });
           }
           
           if (noDueDate.length > 0) {
             embed.addFields({ 
-              name: '⚠️ NO DEADLINE SET', 
+              name: '⚠�E�ENO DEADLINE SET', 
               value: formatProjectList(noDueDate)
             });
           }
@@ -1613,9 +1599,9 @@ client.on('interactionCreate', async interaction => {
       } catch (error) {
         logToFile(`Error in /deadline command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying deadlines: ${error.message}`);
+          await interaction.editReply(`❁EError displaying deadlines: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error displaying deadlines: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError displaying deadlines: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -1623,76 +1609,36 @@ client.on('interactionCreate', async interaction => {
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
-        const ephemeral = true; // We'll address the deprecation warning later
+        // Check if ephemeral flag is set
+        const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
-        logToFile('[Availability] Command started.'); // Added log
+        // Current Berlin time
         const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
         
+        // Create the embed
         const embed = new EmbedBuilder()
-          .setTitle('Team Availability & Workload')
-          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted. Workload from Notion. AI assessment of availability.`)
+          .setTitle('Team Availability')
+          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted below:`)
           .setColor(0x00AAFF)
           .setTimestamp();
         
+        // Group staff by availability status
         const activeStaff = [];
         const inactiveStaff = [];
         
-        for (const staff of STAFF_AVAILABILITY) {
-          logToFile(`[Availability] Processing staff: ${staff.name}`); // Added log
+        // Process each staff member
+        STAFF_AVAILABILITY.forEach(staff => {
           const isActive = isStaffActive(staff);
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
-          let workloadInfo = 'Notion data unavailable';
-          let aiAssessment = 'N/A';
-
-          if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
-            workloadInfo = 'Discord ID missing for Notion lookup.';
-            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`); // Added log
-          } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
-            try {
-              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`); // Added log
-              const { projects, tasks } = await getStaffWorkloadDetails(staff);
-              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`); // Added log
-              
-              let projectsString = 'No active projects.';
-              if (projects.length > 0) {
-                projectsString = projects.map(p => p.name).join(', ');
-                if (projectsString.length > 100) projectsString = projectsString.substring(0, 97) + "...";
-              }
-              workloadInfo = `Projects: ${projectsString}\nTasks: ${tasks.length} active`;
-
-              if (isActive) {
-                if (projects.length > 0 || tasks.length > 0) {
-                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`); // Added log
-                  aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`); // Added log
-                } else {
-                  aiAssessment = 'Highly Available - No projects or tasks listed.';
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`); // Added log
-                }
-              } else {
-                aiAssessment = 'N/A (Offline)';
-              }
-
-            } catch (e) {
-              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`); // More detailed log
-              workloadInfo = 'Error fetching Notion/AI data.';
-              // Optionally, rethrow or handle more gracefully if this error should stop the whole command
-            }
-          } else {
-            workloadInfo = 'Notion names not configured.';
-            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`); // Added log
-          }
           
           const staffInfo = {
             name: staff.name,
             isActive,
             timeLeft,
-            workingHours,
-            workload: workloadInfo,
-            aiAssessment: aiAssessment, // aiAssessment will be 'N/A (Offline)' if not active
+            workingHours
           };
           
           if (isActive) {
@@ -1700,48 +1646,39 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
-          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`); // Added log
-        }
+        });
         
-        logToFile('[Availability] All staff processed. Building embed.'); // Added log
-
+        // Add active staff field with inline status
         if (activeStaff.length > 0) {
-          const activeStaffText = activeStaff.map(s => 
-            `**${s.name}** (${s.timeLeft}) - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
-          ).join('\n\n');
-          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          const activeStaffText = activeStaff.map(staff => 
+            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText });
         } else {
           embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
         }
         
+        // Add inactive staff field
         if (inactiveStaff.length > 0) {
-          const inactiveStaffText = inactiveStaff.map(s => 
-            `${s.name} - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
-          ).join('\n\n');
-          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          const inactiveStaffText = inactiveStaff.map(staff => 
+            `${staff.name} - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText });
         }
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
-        logToFile('[Availability] Sending reply.'); // Added log
+        // Send the embed
         await interaction.editReply({ embeds: [embed] });
-        logToFile('[Availability] Reply sent.'); // Added log
         
       } catch (error) {
-        logToFile(`Error in /availability command: ${error.message}\n${error.stack}`);
-        console.error(`Error in /availability command:`, error); // Also log to console for immediate visibility
-        if (hasResponded && !interaction.replied) { // Check if deferred and not yet replied
-            try {
-                await interaction.editReply({ content: `❌ Error displaying availability. Please check the bot logs.` });
-            } catch (replyError) {
-                logToFile(`[Availability] Failed to send error reply: ${replyError.message}`);
-            }
-        } else if (!interaction.replied && !interaction.deferred) { // Neither deferred nor replied
-            try {
-                await interaction.reply({ content: `❌ Error displaying availability. Please check the bot logs.`, ephemeral: true});
-            } catch (replyError) {
-                logToFile(`[Availability] Failed to send initial error reply: ${replyError.message}`);
-            }
+        logToFile(`Error in /availability command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❁EError displaying availability: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❁EError displaying availability: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -1760,14 +1697,14 @@ client.on('interactionCreate', async interaction => {
         // Check if channel is linked to a Notion page
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
         // Check permissions
         const permissions = channel.permissionsFor(interaction.client.user);
         if (!permissions || !permissions.has('ReadMessageHistory')) {
-          await interaction.editReply('❌ I don\'t have permission to read message history in this channel. Please give me the "Read Message History" permission and try again.');
+          await interaction.editReply('❁EI don\'t have permission to read message history in this channel. Please give me the "Read Message History" permission and try again.');
           return;
         }
         
@@ -1776,7 +1713,7 @@ client.on('interactionCreate', async interaction => {
         
         // Check if Notion is configured
         if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          await interaction.editReply('❁ENotion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
           return;
         }
         
@@ -1785,7 +1722,7 @@ client.on('interactionCreate', async interaction => {
         const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
         
         if (!codeMatch) {
-          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
           return;
         }
         
@@ -1794,7 +1731,7 @@ client.on('interactionCreate', async interaction => {
         // Find the project in Notion
         const project = await findProjectByQuery(projectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${projectCode}" in Notion database.`);
           return;
         }
         
@@ -1809,13 +1746,13 @@ client.on('interactionCreate', async interaction => {
           logToFile(`Fetched ${messages.size} messages from #${channel.name}`);
         } catch (fetchError) {
           logToFile(`Error fetching messages: ${fetchError.message}`);
-          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}. Make sure the bot has the "Read Message History" permission in this channel.`);
+          await interaction.editReply(`❁EError fetching messages: ${fetchError.message}. Make sure the bot has the "Read Message History" permission in this channel.`);
           return;
         }
         
         // If OpenAI is not configured, we can't analyze messages
         if (!openai) {
-          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          await interaction.editReply('❁EOpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
           return;
         }
         
@@ -1857,14 +1794,14 @@ client.on('interactionCreate', async interaction => {
           logToFile(`OpenAI analysis completed for ${projectCode}`);
         } catch (aiError) {
           logToFile(`OpenAI error: ${aiError.message}`);
-          await interaction.editReply(`❌ Error analyzing messages: ${aiError.message}`);
+          await interaction.editReply(`❁EError analyzing messages: ${aiError.message}`);
           return;
         }
         
         // Extract completion
         const completion = gptResponse.choices[0]?.message?.content;
         if (!completion) {
-          await interaction.editReply('❌ Error: No completion received from OpenAI.');
+          await interaction.editReply('❁EError: No completion received from OpenAI.');
           return;
         }
         
@@ -1881,7 +1818,7 @@ client.on('interactionCreate', async interaction => {
           logToFile(`Successfully parsed JSON for ${projectCode}`);
         } catch (parseError) {
           logToFile(`JSON parse error: ${parseError.message}, raw: ${completion}`);
-          await interaction.editReply(`❌ Error parsing extracted data: ${parseError.message}`);
+          await interaction.editReply(`❁EError parsing extracted data: ${parseError.message}`);
           return;
         }
         
@@ -1901,7 +1838,7 @@ client.on('interactionCreate', async interaction => {
         
         // Add footer based on dry run status
         if (dryRun) {
-          embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
+          embed.setFooter({ text: '⚠�E�EDRY RUN - No changes were made to Notion' });
         } else {
           // Convert extracted data to Notion properties
           const propertiesToUpdate = {};
@@ -1954,7 +1891,7 @@ client.on('interactionCreate', async interaction => {
             // Get Notion URL for button
             const notionUrl = getNotionPageUrl(page.id);
             
-            embed.setFooter({ text: '✅ Notion updated successfully' });
+            embed.setFooter({ text: '✁ENotion updated successfully' });
             
             // Create button component if there's a Notion URL
             const components = [];
@@ -1978,7 +1915,7 @@ client.on('interactionCreate', async interaction => {
             logToFile(`Notion updated for ${projectCode} with properties: ${Object.keys(propertiesToUpdate).join(', ')}`);
           } catch (notionError) {
             logToFile(`Notion update error: ${notionError.message}`);
-            embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
+            embed.setFooter({ text: `❁EError updating Notion: ${notionError.message}` });
             await interaction.editReply({ embeds: [embed] });
           }
         }
@@ -1989,9 +1926,9 @@ client.on('interactionCreate', async interaction => {
       } catch (error) {
         logToFile(`Error in /analyze command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error analyzing messages: ${error.message}`);
+          await interaction.editReply(`❁EError analyzing messages: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error analyzing messages: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError analyzing messages: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2007,7 +1944,7 @@ client.on('interactionCreate', async interaction => {
         // Check if channel is linked to a project
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
@@ -2016,7 +1953,7 @@ client.on('interactionCreate', async interaction => {
         const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
         
         if (!codeMatch) {
-          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
           return;
         }
         
@@ -2025,14 +1962,14 @@ client.on('interactionCreate', async interaction => {
         // Find the project in Notion
         const project = await findProjectByQuery(projectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${projectCode}" in Notion database.`);
           return;
         }
         
         // Get the Notion URL
         const notionUrl = getNotionPageUrl(project.page.id);
         if (!notionUrl) {
-          await interaction.editReply(`❌ Could not generate Notion URL for project "${projectCode}".`);
+          await interaction.editReply(`❁ECould not generate Notion URL for project "${projectCode}".`);
           return;
         }
         
@@ -2061,9 +1998,9 @@ client.on('interactionCreate', async interaction => {
       } catch (error) {
         logToFile(`Error in /link command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error finding Notion link: ${error.message}`);
+          await interaction.editReply(`❁EError finding Notion link: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error finding Notion link: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError finding Notion link: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2081,14 +2018,14 @@ client.on('interactionCreate', async interaction => {
         
         // Check if OpenAI is configured
         if (!openai) {
-          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          await interaction.editReply('❁EOpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
           return;
         }
         
         // Check if channel is linked to a project
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
@@ -2097,7 +2034,7 @@ client.on('interactionCreate', async interaction => {
         const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
         
         if (!codeMatch) {
-          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
           return;
         }
         
@@ -2106,7 +2043,7 @@ client.on('interactionCreate', async interaction => {
         // Find the project in Notion
         const project = await findProjectByQuery(projectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${projectCode}" in Notion database.`);
           return;
         }
         
@@ -2183,7 +2120,7 @@ Example Output: {
         // Get the completion
         const completion = response.choices[0]?.message?.content;
         if (!completion) {
-          await interaction.editReply('❌ Error: No response received from AI.');
+          await interaction.editReply('❁EError: No response received from AI.');
           return;
         }
         
@@ -2200,7 +2137,7 @@ Example Output: {
           logToFile(`Successfully parsed properties for ${projectCode}: ${JSON.stringify(properties)}`);
         } catch (parseError) {
           logToFile(`JSON parse error: ${parseError.message}, raw response: ${completion}`);
-          await interaction.editReply(`❌ Error parsing AI response: ${parseError.message}`);
+          await interaction.editReply(`❁EError parsing AI response: ${parseError.message}`);
           return;
         }
         
@@ -2294,7 +2231,7 @@ Example Output: {
         // Create embed for display
         const embed = new EmbedBuilder()
           .setTitle(`Sync Results: ${projectCode}`)
-          .setDescription(dryRun ? '⚠️ DRY RUN - Preview only, no changes made' : '✅ Notion will be updated with these properties')
+          .setDescription(dryRun ? '⚠�E�EDRY RUN - Preview only, no changes made' : '✁ENotion will be updated with these properties')
           .setColor(dryRun ? 0xFFAA00 : 0x00AAFF)
           .setTimestamp();
         
@@ -2338,7 +2275,7 @@ Example Output: {
             const notionUrl = getNotionPageUrl(project.page.id);
             
             logToFile(`Notion updated for ${projectCode}`);
-            embed.setFooter({ text: '✅ Notion updated successfully' });
+            embed.setFooter({ text: '✁ENotion updated successfully' });
             
             // Create button component if there's a Notion URL
             const components = [];
@@ -2361,19 +2298,19 @@ Example Output: {
             
           } catch (notionError) {
             logToFile(`Notion update error: ${notionError.message}`);
-            embed.setFooter({ text: `❌ Error updating Notion: ${notionError.message}` });
+            embed.setFooter({ text: `❁EError updating Notion: ${notionError.message}` });
             await interaction.editReply({ embeds: [embed] });
           }
         } else {
-          embed.setFooter({ text: '⚠️ DRY RUN - No changes were made to Notion' });
+          embed.setFooter({ text: '⚠�E�EDRY RUN - No changes were made to Notion' });
           await interaction.editReply({ embeds: [embed] });
         }
       } catch (error) {
         logToFile(`Error in /sync command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error syncing with Notion: ${error.message}`);
+          await interaction.editReply(`❁EError syncing with Notion: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error syncing with Notion: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError syncing with Notion: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2387,7 +2324,7 @@ Example Output: {
         // Check if channel is linked to a project
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
@@ -2396,7 +2333,7 @@ Example Output: {
         const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
         
         if (!codeMatch) {
-          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
           return;
         }
         
@@ -2405,7 +2342,7 @@ Example Output: {
         // Find the project in Notion
         const project = await findProjectByQuery(projectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${projectCode}" in Notion database.`);
           return;
         }
         
@@ -2479,13 +2416,13 @@ Example Output: {
               
               // Success message
               await interaction.editReply({
-                content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
+                content: `✁EUpdated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode} using property name "${bestMatch}"`,
                 components: components.length > 0 ? components : undefined
               });
               
               // Also send a non-ephemeral message to channel for visibility
               await interaction.channel.send(
-                `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+                `✁E<@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
               );
               
               // Skip the rest of the function since we've handled it
@@ -2528,13 +2465,13 @@ Example Output: {
               
               // Success message
               await interaction.editReply({
-                content: `✅ Updated status to "${value}" for project ${projectCode}`,
+                content: `✁EUpdated status to "${value}" for project ${projectCode}`,
                 components: components.length > 0 ? components : undefined
               });
               
               // Also send a non-ephemeral message to channel for visibility
               await channel.send(
-                `✅ <@${interaction.user.id}> set status to "${value}" for project ${projectCode}`
+                `✁E<@${interaction.user.id}> set status to "${value}" for project ${projectCode}`
               );
               
               // Notify any relevant users of status change
@@ -2595,14 +2532,14 @@ Example Output: {
               }
               notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
             } catch (e) {
-              await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
+              await interaction.editReply(`❁EInvalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
               return;
             }
             break;
             
           case 'script':
             if (!value.startsWith('http')) {
-              await interaction.editReply('❌ Script value must be a valid URL starting with http:// or https://');
+              await interaction.editReply('❁EScript value must be a valid URL starting with http:// or https://');
               return;
             }
             notionProperties['Script'] = { url: value };
@@ -2610,7 +2547,7 @@ Example Output: {
             
           case 'frameio':
             if (!value.startsWith('http')) {
-              await interaction.editReply('❌ Frame.io value must be a valid URL starting with http:// or https://');
+              await interaction.editReply('❁EFrame.io value must be a valid URL starting with http:// or https://');
               return;
             }
             notionProperties['Frame.io'] = { url: value };
@@ -2632,29 +2569,13 @@ Example Output: {
             notionProperties['3D Status'] = { select: { name: value } };
             break;
             
-          case 'storyboard':
-            if (!value.startsWith('http')) {
-              await interaction.editReply('❌ Storyboard value must be a valid URL starting with http:// or https://');
-              return;
-            }
-            notionProperties['Storyboard'] = { url: value };
-            break;
-            
-          case 'footage':
-            if (value.startsWith('http')) {
-              notionProperties['Footage'] = { url: value };
-            } else {
-              notionProperties['Footage'] = { rich_text: [{ text: { content: value } }] };
-            }
-            break;
-            
           case 'language':
             // Handle language subcommand with additional parameter
             const language = interaction.options.getString('language');
             const languageStatus = value;
             
             if (!['Portuguese', 'Spanish', 'Russian', 'Indonesian'].includes(language)) {
-              await interaction.editReply('❌ Invalid language. Must be one of: Portuguese, Spanish, Russian, Indonesian');
+              await interaction.editReply('❁EInvalid language. Must be one of: Portuguese, Spanish, Russian, Indonesian');
               return;
             }
             
@@ -2662,7 +2583,7 @@ Example Output: {
             break;
             
           default:
-            await interaction.editReply(`❌ Unknown subcommand: ${subcommand}`);
+            await interaction.editReply(`❁EUnknown subcommand: ${subcommand}`);
             return;
         }
         
@@ -2731,13 +2652,13 @@ Example Output: {
           
           // Success message
           await interaction.editReply({
-            content: `✅ Updated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`,
+            content: `✁EUpdated ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`,
             components: components.length > 0 ? components : undefined
           });
           
           // Also send a non-ephemeral message to channel for visibility
           await interaction.channel.send(
-            `✅ <@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
+            `✁E<@${interaction.user.id}> set ${subcommand.replace(/_/g, ' ')} to "${value}" for project ${projectCode}`
           );
           
         } catch (updateError) {
@@ -2751,12 +2672,12 @@ Example Output: {
           }
           
           // Provide better error message to the user based on error type
-          let errorMessage = `❌ Error updating property: ${updateError.message}`;
+          let errorMessage = `❁EError updating property: ${updateError.message}`;
           
           if (updateError.message.includes('permission')) {
-            errorMessage = `❌ Notion permission error: The bot doesn't have permission to update this property. Please make sure the Notion integration has been added to the database (via "Add connections" menu) and has "Update content" capabilities.`;
+            errorMessage = `❁ENotion permission error: The bot doesn't have permission to update this property. Please make sure the Notion integration has been added to the database (via "Add connections" menu) and has "Update content" capabilities.`;
           } else if (updateError.message.includes('status is expected to be')) {
-            errorMessage = `❌ Property type mismatch: This property has a different type than expected. Try using the /sync command instead which can handle different property types.`;
+            errorMessage = `❁EProperty type mismatch: This property has a different type than expected. Try using the /sync command instead which can handle different property types.`;
           }
           
           await interaction.editReply(errorMessage);
@@ -2764,9 +2685,9 @@ Example Output: {
       } catch (error) {
         logToFile(`Error in /set command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error setting property: ${error.message}`);
+          await interaction.editReply(`❁EError setting property: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error setting property: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError setting property: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2797,7 +2718,7 @@ Example Output: {
       } catch (error) {
         logToFile(`Error in /help command: ${error.message}`);
         if (!hasResponded) {
-          await interaction.reply({ content: `❌ Error displaying help: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError displaying help: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2831,9 +2752,9 @@ Example Output: {
       } catch (error) {
         logToFile(`Error in /schedule command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying schedule: ${error.message}`);
+          await interaction.editReply(`❁EError displaying schedule: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error displaying schedule: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError displaying schedule: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2860,7 +2781,7 @@ Example Output: {
         }
         
         if (!jobToSend) {
-          await interaction.editReply(`❌ Could not find a job with the tag "${messageType}${isNotification ? ' Notification' : ''}".`);
+          await interaction.editReply(`❁ECould not find a job with the tag "${messageType}${isNotification ? ' Notification' : ''}".`);
           return;
         }
         
@@ -2870,16 +2791,16 @@ Example Output: {
         logToFile(`Manually sent message for job: ${jobToSend.tag}`);
         
         await interaction.editReply({
-          content: `✅ Successfully sent the ${isNotification ? 'notification for' : ''} "${messageType}" message.`,
+          content: `✁ESuccessfully sent the ${isNotification ? 'notification for' : ''} "${messageType}" message.`,
           components: []
         });
         
       } catch (error) {
         logToFile(`Error in /send command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error sending message: ${error.message}`);
+          await interaction.editReply(`❁EError sending message: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error sending message: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError sending message: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2900,24 +2821,24 @@ Example Output: {
         // Check permissions
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
         // Check for required permissions
         const permissions = channel.permissionsFor(client.user);
         if (!permissions) {
-          await interaction.editReply('❌ Cannot check channel permissions. Please make sure I have the "View Channel" permission.');
+          await interaction.editReply('❁ECannot check channel permissions. Please make sure I have the "View Channel" permission.');
           return;
         }
         
         if (!permissions.has('SendMessages')) {
-          await interaction.editReply('❌ I don\'t have permission to send messages in this channel. Please grant me the "Send Messages" permission.');
+          await interaction.editReply('❁EI don\'t have permission to send messages in this channel. Please grant me the "Send Messages" permission.');
           return;
         }
         
         if (!permissions.has('ViewChannel')) {
-          await interaction.editReply('❌ I don\'t have permission to view this channel. Please grant me the "View Channel" permission.');
+          await interaction.editReply('❁EI don\'t have permission to view this channel. Please grant me the "View Channel" permission.');
           return;
         }
         
@@ -2955,14 +2876,14 @@ Example Output: {
         
         // If date parsing failed, return an error
         if (!meetingDate) {
-          await interaction.editReply(`❌ Could not parse the time: "${time}". Please use a more standard format like "tomorrow at 3pm" or "in 30m".`);
+          await interaction.editReply(`❁ECould not parse the time: "${time}". Please use a more standard format like "tomorrow at 3pm" or "in 30m".`);
           return;
         }
         
         // Check if the date is in the past
         const now = new Date();
         if (meetingDate < now) {
-          await interaction.editReply(`❌ The meeting time is in the past. Please choose a future time.`);
+          await interaction.editReply(`❁EThe meeting time is in the past. Please choose a future time.`);
           return;
         }
         
@@ -2984,7 +2905,7 @@ Example Output: {
         
         // Create message for the meeting time
         const reminderMessage = `🔔 Reminder: **${title}** starts in 5 minutes!\n${description ? description + '\n' : ''}${mentionsString}`;
-        const meetingMessage = `🗓️ **${title}** - It's meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
+        const meetingMessage = `🗓�E�E**${title}** - It's meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
         
         // Schedule the meeting timestamp (Unix time in ms)
         const meetingTime = meetingDate.getTime();
@@ -3006,7 +2927,7 @@ Example Output: {
         
         // Send confirmation message
         const embed = new EmbedBuilder()
-          .setTitle(`🗓️ Meeting Scheduled: ${title}`)
+          .setTitle(`🗓�E�EMeeting Scheduled: ${title}`)
           .setColor(0x00AAFF)
           .setDescription(description || 'No description provided')
           .addFields(
@@ -3021,7 +2942,7 @@ Example Output: {
         
         // Send notification to channel
         await channel.send(
-          `🆕 <@${interaction.user.id}> scheduled a meeting **${title}** for ${formattedDate} with ${mentionsString}`
+          `�E <@${interaction.user.id}> scheduled a meeting **${title}** for ${formattedDate} with ${mentionsString}`
         );
         
         logToFile(`Meeting "${title}" scheduled for ${formattedDate} with ${mentionedUserIds.length} participants`);
@@ -3029,9 +2950,9 @@ Example Output: {
       } catch (error) {
         logToFile(`Error in /meeting command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error scheduling meeting: ${error.message}`);
+          await interaction.editReply(`❁EError scheduling meeting: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error scheduling meeting: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError scheduling meeting: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -3048,7 +2969,7 @@ Example Output: {
         
         // Check if Notion is configured
         if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          await interaction.editReply('❁ENotion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
           return;
         }
         
@@ -3063,7 +2984,7 @@ Example Output: {
           if (codeMatch) {
             targetProjectCode = codeMatch[0].toUpperCase();
           } else {
-            await interaction.editReply('❌ Please specify a project code or use this command in a project-specific channel.');
+            await interaction.editReply('❁EPlease specify a project code or use this command in a project-specific channel.');
             return;
           }
         }
@@ -3071,7 +2992,7 @@ Example Output: {
         // Find the project in Notion
         const project = await findProjectByQuery(targetProjectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${targetProjectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${targetProjectCode}" in Notion database.`);
           return;
         }
         
@@ -3298,7 +3219,7 @@ Example Output: {
               ` (${change.daysSincePrevious} day${change.daysSincePrevious !== 1 ? 's' : ''})` : 
               '';
             
-            const statusBar = index > 0 ? '↓ ' + '─'.repeat(5) + daysInfo + '\n' : '';
+            const statusBar = index > 0 ? 'ↁE' + '─'.repeat(5) + daysInfo + '\n' : '';
             timelineText += `${statusBar}**${index + 1}. ${change.status}** - ${formattedDate}\n`;
             
             // Add additional details if available (limit to first 8 changes to avoid hitting character limits)
@@ -3333,7 +3254,7 @@ Example Output: {
             const totalDays = Math.round((lastDate - firstDate) / (1000 * 60 * 60 * 24));
             
             embed.addFields({
-              name: '⏱️ Total Time in Pipeline',
+              name: '⏱�E�ETotal Time in Pipeline',
               value: `${totalDays} day${totalDays !== 1 ? 's' : ''}`
             });
           }
@@ -3375,15 +3296,15 @@ Example Output: {
           
         } catch (notionError) {
           logToFile(`Error fetching changelog: ${notionError.message}`);
-          await interaction.editReply(`❌ Error fetching changelog: ${notionError.message}`);
+          await interaction.editReply(`❁EError fetching changelog: ${notionError.message}`);
         }
         
       } catch (error) {
         logToFile(`Error in /changelog command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying changelog: ${error.message}`);
+          await interaction.editReply(`❁EError displaying changelog: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error displaying changelog: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError displaying changelog: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -3401,7 +3322,7 @@ Example Output: {
         const job = jobs.find(j => j.tag === messageType);
         
         if (!job) {
-          await interaction.editReply(`❌ No job found with tag "${messageType}". Available tags: ${jobs.map(j => j.tag).join(', ')}`);
+          await interaction.editReply(`❁ENo job found with tag "${messageType}". Available tags: ${jobs.map(j => j.tag).join(', ')}`);
           return;
         }
         
@@ -3412,8 +3333,8 @@ Example Output: {
         // Check if the channel exists
         const channel = client.channels.cache.get(SCHEDULE_CHANNEL_ID);
         if (!channel) {
-          logToFile(`❌ Channel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
-          await interaction.editReply(`❌ Channel with ID ${SCHEDULE_CHANNEL_ID} not found! Please check your .env configuration.`);
+          logToFile(`❁EChannel with ID ${SCHEDULE_CHANNEL_ID} not found!`);
+          await interaction.editReply(`❁EChannel with ID ${SCHEDULE_CHANNEL_ID} not found! Please check your .env configuration.`);
           
           // Log all available channels
           logToFile('Available text channels:');
@@ -3422,19 +3343,19 @@ Example Output: {
             .map(ch => `${ch.id}: #${ch.name}`);
           
           logToFile(availableChannels.join('\n'));
-          await interaction.editReply(`❌ Channel not found. Available text channels:\n${availableChannels.join('\n')}`);
+          await interaction.editReply(`❁EChannel not found. Available text channels:\n${availableChannels.join('\n')}`);
           return;
         }
         
         // Test permissions
         const permissions = channel.permissionsFor(client.user);
         if (!permissions) {
-          await interaction.editReply(`❌ Cannot check permissions for channel #${channel.name}`);
+          await interaction.editReply(`❁ECannot check permissions for channel #${channel.name}`);
           return;
         }
         
         if (!permissions.has('SendMessages')) {
-          await interaction.editReply(`❌ Bot doesn't have 'Send Messages' permission in #${channel.name}`);
+          await interaction.editReply(`❁EBot doesn't have 'Send Messages' permission in #${channel.name}`);
           return;
         }
         
@@ -3452,22 +3373,22 @@ Example Output: {
           logToFile(`First sending a plain test message: "${plainMessage}"`);
           
           const plainResult = await channel.send(plainMessage);
-          logToFile(`✅ Plain test message sent successfully, ID: ${plainResult.id}`);
+          logToFile(`✁EPlain test message sent successfully, ID: ${plainResult.id}`);
           
           // Now try the actual schedule message
           logToFile(`Now sending the actual schedule message: "${messageText}"`);
           const result = await ping(messageText);
           
-          await interaction.editReply(`✅ Test messages sent successfully to #${channel.name}. Check the channel and logs.`);
+          await interaction.editReply(`✁ETest messages sent successfully to #${channel.name}. Check the channel and logs.`);
         } catch (sendError) {
-          await interaction.editReply(`❌ Error sending message: ${sendError.message}`);
+          await interaction.editReply(`❁EError sending message: ${sendError.message}`);
         }
       } catch (error) {
         logToFile(`Error in /test_schedule command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error: ${error.message}`);
+          await interaction.editReply(`❁EError: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -3484,14 +3405,14 @@ Example Output: {
         
         // Check if OpenAI is configured
         if (!openai) {
-          await interaction.editReply('❌ OpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
+          await interaction.editReply('❁EOpenAI API is not configured. Please ask an administrator to set up the OpenAI API key.');
           return;
         }
         
         // Check if channel is linked to a project
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.editReply('❌ This command can only be used in a text channel.');
+          await interaction.editReply('❁EThis command can only be used in a text channel.');
           return;
         }
         
@@ -3500,7 +3421,7 @@ Example Output: {
         const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
         
         if (!codeMatch) {
-          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          await interaction.editReply('❁EThis channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
           return;
         }
         
@@ -3509,7 +3430,7 @@ Example Output: {
         // Find the project in Notion
         const project = await findProjectByQuery(projectCode);
         if (!project) {
-          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          await interaction.editReply(`❁ECould not find project with code "${projectCode}" in Notion database.`);
           return;
         }
         
@@ -3593,7 +3514,7 @@ Example Output: {
           // Extract completion
           const summary = gptResponse.choices[0]?.message?.content;
           if (!summary) {
-            await interaction.editReply('❌ Error: No summary received from OpenAI.');
+            await interaction.editReply('❁EError: No summary received from OpenAI.');
             return;
           }
           
@@ -3634,16 +3555,16 @@ Example Output: {
           
         } catch (fetchError) {
           logToFile(`Error fetching messages: ${fetchError.message}`);
-          await interaction.editReply(`❌ Error fetching messages: ${fetchError.message}`);
+          await interaction.editReply(`❁EError fetching messages: ${fetchError.message}`);
           return;
         }
         
       } catch (error) {
         logToFile(`Error in /summary command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error generating summary: ${error.message}`);
+          await interaction.editReply(`❁EError generating summary: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error generating summary: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError generating summary: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -3662,17 +3583,17 @@ Example Output: {
         
         // Validate inputs
         if (!user) {
-          await interaction.editReply('❌ Please specify a user to remind.');
+          await interaction.editReply('❁EPlease specify a user to remind.');
           return;
         }
         
         if (!message) {
-          await interaction.editReply('❌ Please specify a reminder message.');
+          await interaction.editReply('❁EPlease specify a reminder message.');
           return;
         }
         
         if (!time) {
-          await interaction.editReply('❌ Please specify when to send the reminder.');
+          await interaction.editReply('❁EPlease specify when to send the reminder.');
           return;
         }
         
@@ -3696,14 +3617,14 @@ Example Output: {
         
         // If date parsing failed, return an error
         if (!reminderDate) {
-          await interaction.editReply(`❌ Could not parse the time: "${time}". Please use a more standard format like "30m", "1h", or "tomorrow at 3pm".`);
+          await interaction.editReply(`❁ECould not parse the time: "${time}". Please use a more standard format like "30m", "1h", or "tomorrow at 3pm".`);
           return;
         }
         
         // Check if the date is in the past
         const now = new Date();
         if (reminderDate < now) {
-          await interaction.editReply(`❌ The reminder time is in the past. Please choose a future time.`);
+          await interaction.editReply(`❁EThe reminder time is in the past. Please choose a future time.`);
           return;
         }
         
@@ -3761,7 +3682,7 @@ Example Output: {
         // Send non-ephemeral confirmation in the channel if ephemeral is false
         if (!ephemeral) {
           await interaction.channel.send(
-            `✅ <@${interaction.user.id}> set a reminder for <@${user.id}> at ${formattedDate} (in ${timeUntilText})`
+            `✁E<@${interaction.user.id}> set a reminder for <@${user.id}> at ${formattedDate} (in ${timeUntilText})`
           );
         }
         
@@ -3769,80 +3690,23 @@ Example Output: {
       } catch (error) {
         logToFile(`Error in /remind command: ${error.message}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ Error scheduling reminder: ${error.message}`);
+          await interaction.editReply(`❁EError scheduling reminder: ${error.message}`);
         } else {
-          await interaction.reply({ content: `❌ Error scheduling reminder: ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❁EError scheduling reminder: ${error.message}`, ephemeral: true });
         }
       }
     }
     
-    // Handle the /check-tasks command
-    else if (commandName === 'check-tasks') {
-      try {
-        // Always use ephemeral replies for this command
-        await interaction.deferReply({ ephemeral: true });
-        hasResponded = true;
-        
-        // Run the task check
-        await interaction.editReply('⏳ Checking for completed tasks in recent messages...');
-        
-        const result = await checkEndOfDayTaskUpdates();
-        
-        if (!result.success) {
-          return interaction.editReply(`❌ Error checking tasks: ${result.error}`);
-        }
-        
-        if (result.skipped) {
-          return interaction.editReply('Current time is before 16:00, but check was forced. No messages to process.');
-        }
-        
-        if (result.messageCount === 0) {
-          return interaction.editReply('No messages found in the 16:00-20:00 timeframe.');
-        }
-        
-        // Create embed for response
-        const embed = new EmbedBuilder()
-          .setTitle('Task Update Check Complete')
-          .setColor(0x00AA00)
-          .setDescription(`I've analyzed messages from 16:00-20:00 to find completed tasks.`)
-          .addFields(
-            { name: 'Messages Analyzed', value: `${result.messageCount}`, inline: true },
-            { name: 'Tasks Updated', value: `${result.updatedTasks}`, inline: true }
-          )
-          .setTimestamp();
-        
-        // Send the response
-        await interaction.editReply({ 
-          content: '✅ Task update check completed successfully!', 
-          embeds: [embed] 
-        });
-        
-      } catch (error) {
-        logToFile(`Error in /check-tasks command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error checking tasks: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error checking tasks: ${error.message}`, ephemeral: true });
-        }
-      }
-    }
-    
-    // Handle the /ask command
-    else if (commandName === 'ask') {
-      // Use the handleAskCommand function from knowledge-assistant.js
-      await handleAskCommand(interaction);
-    }
-    
-    // Other commands here
+    // Handle other commands here
     // ...
     
   } catch (globalError) {
     logToFile(`Global error handler caught: ${globalError.message}`);
     try {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: `❌ An error occurred: ${globalError.message}`, ephemeral: true });
+        await interaction.reply({ content: `❁EAn error occurred: ${globalError.message}`, ephemeral: true });
       } else if (interaction.deferred) {
-        await interaction.editReply(`❌ An error occurred: ${globalError.message}`);
+        await interaction.editReply(`❁EAn error occurred: ${globalError.message}`);
       }
     } catch (replyError) {
       logToFile(`Failed to send error reply: ${replyError.message}`);
@@ -3900,18 +3764,6 @@ function scheduleAllJobs() {
           return;
         }
         
-        // Special handling for the task update job
-        if (job.updateTasks) {
-          logToFile(`Starting end-of-day task update check`);
-          const result = await checkEndOfDayTaskUpdates();
-          if (result.success) {
-            logToFile(`End-of-day task check completed. Updated ${result.updatedTasks || 0} tasks.`);
-          } else {
-            logToFile(`❌ Error in end-of-day task check: ${result.error || 'Unknown error'}`);
-          }
-          return;
-        }
-        
         // Regular job execution for notification messages
         logToFile(`Message to send: ${job.text}`);
         
@@ -3919,12 +3771,12 @@ function scheduleAllJobs() {
         try {
           const sentMessage = await ping(job.text);
           if (sentMessage) {
-            logToFile(`✅ Job ${job.tag} executed successfully, message ID: ${sentMessage.id}`);
+            logToFile(`✁EJob ${job.tag} executed successfully, message ID: ${sentMessage.id}`);
           } else {
-            logToFile(`⚠️ Job ${job.tag} did not return a sent message - likely failed`);
+            logToFile(`⚠�E�EJob ${job.tag} did not return a sent message - likely failed`);
           }
         } catch (error) {
-          logToFile(`❌ Error executing job ${job.tag}: ${error.message}`);
+          logToFile(`❁EError executing job ${job.tag}: ${error.message}`);
         }
       }, options);
       
@@ -3934,9 +3786,9 @@ function scheduleAllJobs() {
       // Log next execution time
       const nextExecution = getNextExecution(job.cron);
       if (nextExecution) {
-        logToFile(`   → Next execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
+        logToFile(`   ↁENext execution: ${nextExecution.formatted} (in ${nextExecution.formattedTimeLeft})`);
       } else {
-        logToFile(`   → Failed to calculate next execution time for job: ${job.tag}`);
+        logToFile(`   ↁEFailed to calculate next execution time for job: ${job.tag}`);
       }
     } catch (error) {
       logToFile(`ERROR scheduling job ${job.tag}: ${error.message}`);
@@ -4182,7 +4034,7 @@ function scheduleMeeting(meetingId, channelId, date, mentionedUsers, title, desc
   const mentionsString = mentionedUsers.map(userId => `<@${userId}>`).join(' ');
   
   // Create meeting message
-  const meetingMessage = `🗓️ **${title}** - Meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
+  const meetingMessage = `🗓�E�E**${title}** - Meeting time!\n${description ? description + '\n' : ''}${mentionsString}`;
   
   // Create reminder message
   const reminderMessage = `🔔 Reminder: **${title}** starts in 5 minutes at ${formattedDate}\n${mentionsString}`;
@@ -4276,8 +4128,8 @@ async function updateNotionStatus(pageId, statusValue) {
     logToFile(`Successfully updated status to "${statusValue}"`);
     return { success: true, data: response };
   } catch (error) {
-    logToFile(`❌ ERROR updating status: ${error.message}`);
-    logToFile(`❌ ERROR details: ${JSON.stringify(error, null, 2)}`);
+    logToFile(`❁EERROR updating status: ${error.message}`);
+    logToFile(`❁EERROR details: ${JSON.stringify(error, null, 2)}`);
     
     // Try alternative format (select instead of status)
     try {
@@ -4297,10 +4149,10 @@ async function updateNotionStatus(pageId, statusValue) {
         ...alternativeFormat
       });
       
-      logToFile(`✅ Successfully updated status using select format`);
+      logToFile(`✁ESuccessfully updated status using select format`);
       return { success: true, data: response };
     } catch (retryError) {
-      logToFile(`❌ Both status formats failed. Second error: ${retryError.message}`);
+      logToFile(`❁EBoth status formats failed. Second error: ${retryError.message}`);
       return { success: false, error };
     }
   }
@@ -4316,7 +4168,7 @@ async function backupChannelMessages() {
     // Get the channel
     const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
     if (!channel) {
-      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
+      logToFile(`❁EError: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
       return;
     }
     
@@ -4399,7 +4251,7 @@ async function backupChannelMessages() {
         }, null, 2)
       );
       
-      logToFile(`✅ Successfully backed up ${formattedMessages.length} messages to ${backupFilePath}`);
+      logToFile(`✁ESuccessfully backed up ${formattedMessages.length} messages to ${backupFilePath}`);
       
       // Also write a plaintext version for easy reading
       const textContent = formattedMessages
@@ -4410,7 +4262,7 @@ async function backupChannelMessages() {
       const textFilePath = path.join(__dirname, 'backups', `message_backup_${dateStr}.txt`);
       fs.writeFileSync(textFilePath, textContent);
       
-      logToFile(`✅ Also saved plaintext version to ${textFilePath}`);
+      logToFile(`✁EAlso saved plaintext version to ${textFilePath}`);
       
       // Generate AI summary if OpenAI is configured
       if (openai) {
@@ -4448,7 +4300,7 @@ async function backupChannelMessages() {
             const channelInfo = `**Channel:** #${channel.name}\n**Time Period:** 7:00 AM - 11:00 AM ${TZ}\n**Message Count:** ${formattedMessages.length}\n\n`;
             
             fs.writeFileSync(summaryFilePath, summaryHeader + channelInfo + summary);
-            logToFile(`✅ Successfully created AI summary at ${summaryFilePath}`);
+            logToFile(`✁ESuccessfully created AI summary at ${summaryFilePath}`);
             
             // Also try to send the summary to the channel
             try {
@@ -4478,28 +4330,28 @@ async function backupChannelMessages() {
                 });
               }
               
-              logToFile(`✅ Successfully sent AI summary to channel`);
+              logToFile(`✁ESuccessfully sent AI summary to channel`);
             } catch (sendError) {
-              logToFile(`⚠️ Could not send summary to channel: ${sendError.message}`);
+              logToFile(`⚠�E�ECould not send summary to channel: ${sendError.message}`);
             }
           } else {
-            logToFile(`⚠️ AI returned empty summary`);
+            logToFile(`⚠�E�EAI returned empty summary`);
           }
         } catch (aiError) {
-          logToFile(`❌ Error generating AI summary: ${aiError.message}`);
+          logToFile(`❁EError generating AI summary: ${aiError.message}`);
         }
       } else {
-        logToFile(`⚠️ OpenAI not configured, skipping AI summary generation`);
+        logToFile(`⚠�E�EOpenAI not configured, skipping AI summary generation`);
       }
       
     } catch (fetchError) {
-      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
+      logToFile(`❁EError fetching messages: ${fetchError.message}`);
       throw fetchError;
     }
     
     logToFile(`=== Daily Message Backup Completed ===`);
   } catch (error) {
-    logToFile(`❌ Error in backupChannelMessages: ${error.message}`);
+    logToFile(`❁EError in backupChannelMessages: ${error.message}`);
     console.error('Error in message backup:', error);
   }
 }
@@ -4545,7 +4397,7 @@ function scheduleBackupJob() {
       logToFile(`⏰ Executing daily message backup and task extraction at ${moment().tz(TZ).format('YYYY-MM-DD HH:mm:ss')}`);
       await backupAndProcessMessages();
     } catch (error) {
-      logToFile(`❌ Error executing daily backup job: ${error.message}`);
+      logToFile(`❁EError executing daily backup job: ${error.message}`);
       console.error('Error in daily backup job:', error);
     }
   }, {
@@ -4553,7 +4405,7 @@ function scheduleBackupJob() {
     scheduled: true
   });
   
-  logToFile(`✅ Scheduled daily message backup job for 11:00 AM ${TZ}`);
+  logToFile(`✁EScheduled daily message backup job for 11:00 AM ${TZ}`);
 }
 
 // Function to extract tasks from morning messages and create Notion pages
@@ -4564,7 +4416,7 @@ async function extractTasksFromMorningMessages() {
     // Get the channel
     const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
     if (!channel) {
-      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
+      logToFile(`❁EError: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
       return { success: false, error: "Channel not found" };
     }
     
@@ -4594,25 +4446,8 @@ async function extractTasksFromMorningMessages() {
         return { success: true, messageCount: 0, taskCount: 0, pagesCreated: 0 };
       }
       
-      // Sample message content for debugging
-      if (recentMessages.size > 0) {
-        const sampleMessages = [...recentMessages.values()].slice(0, 3);
-        sampleMessages.forEach((msg, idx) => {
-          logToFile(`Sample message ${idx+1}: ${msg.author.tag}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
-        });
-      }
-      
-      // Extract tasks by author
-      const tasksByAuthor = await extractTasksByAuthor(recentMessages);
-      
-      // Log the users and their tasks
-      logToFile(`Task extraction results by user:`);
-      for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-        logToFile(`User ${authorData.author.tag}: ${authorData.tasks.length} tasks found`);
-        authorData.tasks.forEach((task, idx) => {
-          logToFile(`  Task ${idx+1}: ${task}`);
-        });
-      }
+      // Extract tasks by author using functions we'll define later
+      const tasksByAuthor = extractTasksByAuthor(recentMessages);
       
       // Create Notion pages for each task
       let totalPagesCreated = 0;
@@ -4627,8 +4462,6 @@ async function extractTasksFromMorningMessages() {
           if (createdPages && createdPages.length > 0) {
             totalPagesCreated += createdPages.length;
             authorCount++;
-            
-            logToFile(`Created ${createdPages.length} task pages for ${authorData.author.tag}`);
           }
         }
       }
@@ -4638,7 +4471,7 @@ async function extractTasksFromMorningMessages() {
         (sum, user) => sum + user.tasks.length, 0
       );
       
-      logToFile(`✅ Task extraction completed: Created ${totalPagesCreated} individual Notion task pages for ${authorCount} team members (${totalTasks} total tasks)`);
+      logToFile(`✁ETask extraction completed: Created ${totalPagesCreated} individual Notion task pages for ${authorCount} team members (${totalTasks} total tasks)`);
       
       return {
         success: true,
@@ -4649,21 +4482,18 @@ async function extractTasksFromMorningMessages() {
       };
       
     } catch (fetchError) {
-      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
+      logToFile(`❁EError fetching messages: ${fetchError.message}`);
       throw fetchError;
     }
   } catch (error) {
-    logToFile(`❌ Error in extractTasksFromMorningMessages: ${error.message}`);
-    if (error.stack) {
-      logToFile(`Stack trace: ${error.stack}`);
-    }
+    logToFile(`❁EError in extractTasksFromMorningMessages: ${error.message}`);
     console.error('Error extracting tasks:', error);
     return { success: false, error: error.message };
   }
 }
 
 // Function to extract tasks from messages grouped by author
-async function extractTasksByAuthor(messages) {
+function extractTasksByAuthor(messages) {
   const tasksByAuthor = {};
   
   // Convert messages collection to array and sort by time
@@ -4706,242 +4536,67 @@ async function extractTasksByAuthor(messages) {
     if (projectMatch && !tasksByAuthor[authorId].projectCode) {
       tasksByAuthor[authorId].projectCode = projectMatch[0].replace(/\s+/g, '').toUpperCase();
     }
-  }
-  
-  // Once we have collected all messages by author, use GPT to extract tasks
-  if (openai) {
-    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-      if (authorData.rawMessages.length > 0) {
-        try {
-          // Create a context string from all messages
-          const contextStr = authorData.rawMessages
-            .map(msg => `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`)
-            .join('\n\n');
-            
-          // Extract tasks using GPT-4o with context awareness
-          const extractedTasks = await extractTasksWithGPT(contextStr, authorData.author.username);
-          
-          if (extractedTasks && extractedTasks.length > 0) {
-            authorData.tasks = extractedTasks;
-            logToFile(`✅ Successfully extracted ${extractedTasks.length} tasks for ${authorData.author.tag} using GPT`);
-          } else {
-            // Fallback to regex extraction if GPT returns no tasks
-            const tasks = extractTasksFromContent(contextStr);
-            authorData.tasks = tasks;
-            logToFile(`ℹ️ Falling back to regex extraction for ${authorData.author.tag}: ${tasks.length} tasks found`);
-          }
-        } catch (error) {
-          logToFile(`❌ Error using GPT for task extraction: ${error.message}. Falling back to regex.`);
-          // Fallback to regex-based extraction for this user
-          for (const msg of authorData.rawMessages) {
-            const tasks = extractTasksFromContent(msg.content);
-            if (tasks.length > 0) {
-              authorData.tasks.push(...tasks);
-            }
-          }
-        }
-      }
-    }
-  } else {
-    // If OpenAI is not available, fall back to regex extraction
-    logToFile(`OpenAI client not available, using regex-based task extraction`);
-    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-      for (const msg of authorData.rawMessages) {
-        const tasks = extractTasksFromContent(msg.content);
-        if (tasks.length > 0) {
-          authorData.tasks.push(...tasks);
-        }
-      }
+    
+    // Extract tasks using various patterns
+    const tasks = extractTasksFromContent(content);
+    
+    // Add extracted tasks
+    if (tasks.length > 0) {
+      tasksByAuthor[authorId].tasks.push(...tasks);
     }
   }
   
   return tasksByAuthor;
 }
 
-// Function to extract tasks using GPT-4o
-async function extractTasksWithGPT(messageContent, username) {
-  try {
-    logToFile(`Attempting to extract tasks using GPT for user ${username}`);
-    const systemPrompt = `
-You are a task extraction assistant that identifies tasks and goals from Discord messages.
-Your role is to intelligently extract tasks while preserving their context and project associations.
-
-GUIDELINES:
-1. Preserve project context (e.g., "Storyn project (Sherlock)" should be part of the task context)
-2. Identify project codes like BC32, IB15, CL47 and keep them with related tasks
-3. Consider timeframes mentioned (e.g., "complete by 11:00") as part of the task, not separate tasks
-4. Group related bullet points under their common project or context
-5. Distinguish between actual tasks/to-dos and informational statements
-6. Preserve the hierarchical relationship between main tasks and subtasks
-7. Ignore greetings, casual chat, or non-task content
-8. Be generous in identifying tasks - if something could be a task, include it
-
-OUTPUT FORMAT:
-Return a JSON object with a "tasks" array of task strings:
-{
-  "tasks": [
-    "Project X: Task description with timeframe",
-    "Context Y: Specific action item",
-    ...
-  ]
-}
-
-The user will provide the message content to analyze.`;
-
-    const userPrompt = `Extract tasks from the following Discord messages by ${username}:\n\n${messageContent}`;
-
-    logToFile(`Sending request to OpenAI with ${messageContent.length} characters of content`);
-
-    // Call GPT-4o (or fall back to GPT-4 if available)
-    const modelToUse = 'gpt-4o';
-    const response = await openai.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.2, // Low temperature for more consistent results
-      response_format: { type: 'json_object' }
-    });
-
-    // Extract and parse the tasks
-    const content = response.choices[0]?.message?.content || '';
-    logToFile(`Received response from OpenAI (${content.length} characters)`);
-    
-    try {
-      // Parse JSON response
-      const parsedResponse = JSON.parse(content);
-      
-      // Return the tasks array or empty array if not found
-      const tasks = parsedResponse.tasks || [];
-      
-      if (tasks.length > 0) {
-        logToFile(`Successfully extracted ${tasks.length} tasks from GPT response`);
-        tasks.forEach(task => logToFile(`GPT task: ${task}`));
-        return tasks;
-      } else {
-        logToFile(`GPT returned zero tasks, trying alternative parsing methods`);
-      }
-    } catch (parseError) {
-      logToFile(`Error parsing GPT response as JSON: ${parseError.message}`);
-      logToFile(`Response content: ${content}`);
-      
-      // Try to extract tasks with regex as a fallback
-      logToFile(`Attempting to extract tasks via regex pattern matching`);
-      
-      // Try to extract arrays of items that look like JSON arrays
-      const arrayMatch = content.match(/\[\s*"(.+?)"\s*(?:,\s*"(.+?)"\s*)*\]/gs);
-      if (arrayMatch) {
-        logToFile(`Found array-like structure in response`);
-        try {
-          const arrayContent = arrayMatch[0];
-          const parsedArray = JSON.parse(arrayContent);
-          if (Array.isArray(parsedArray) && parsedArray.length > 0) {
-            logToFile(`Successfully parsed array with ${parsedArray.length} tasks`);
-            return parsedArray;
-          }
-        } catch (arrayParseError) {
-          logToFile(`Error parsing array structure: ${arrayParseError.message}`);
-        }
-      }
-      
-      // Try to extract tasks using quotes
-      const taskMatches = content.match(/"([^"]+)"/g);
-      if (taskMatches && taskMatches.length > 0) {
-        const extractedTasks = taskMatches.map(match => match.replace(/^"|"$/g, ''));
-        logToFile(`Extracted ${extractedTasks.length} tasks using quote pattern matching`);
-        return extractedTasks;
-      }
-      
-      // Try to extract tasks using bullet points
-      const bulletMatches = content.match(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)(.+?)(?=\n|$)/gm);
-      if (bulletMatches && bulletMatches.length > 0) {
-        const extractedTasks = bulletMatches.map(match => 
-          match.replace(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)/, '').trim()
-        );
-        logToFile(`Extracted ${extractedTasks.length} tasks using bullet point pattern matching`);
-        return extractedTasks;
-      }
-      
-      // If we still can't extract tasks, use our regex task extractor
-      logToFile(`Falling back to standard content task extraction`);
-      return extractTasksFromContent(content);
-    }
-    
-    // If we got this far with no tasks, use the regular task extractor
-    logToFile(`No tasks found in GPT response, falling back to content task extraction`);
-    return extractTasksFromContent(messageContent);
-  } catch (error) {
-    logToFile(`Error calling OpenAI for task extraction: ${error.message}`);
-    logToFile(`Falling back to content task extraction due to API error`);
-    return extractTasksFromContent(messageContent);
-  }
-}
-
 // Function to extract tasks from message content
 function extractTasksFromContent(content) {
   const tasks = [];
-  logToFile(`Analyzing content for tasks: ${content.substring(0, 100)}...`);
   
-  // Check for numbered lists (1. Task, 2. Task) - more flexible pattern
-  const numberedItems = content.match(/(?:^|\n)\s*\d+\s*[\)\.]\s*(.+?)(?=\n\s*\d+\s*[\)\.]\s*|\n\s*$|$)/gs);
+  // Check for numbered lists (1. Task, 2. Task)
+  const numberedItems = content.match(/\d+\s*[\)\.](.+?)(?=\n\d+\s*[\)\.]\s|\n\s*$|$)/gs);
   if (numberedItems) {
-    logToFile(`Found ${numberedItems.length} numbered items`);
     numberedItems.forEach(item => {
-      const taskText = item.replace(/^\s*\d+\s*[\)\.]\s*/, '').trim();
-      if (taskText) {
-        logToFile(`Adding numbered task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^\d+\s*[\)\.]\s*/, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
-  // Check for dash or bullet lists (-, •, *, etc)
-  const bulletItems = content.match(/(?:^|\n)\s*[-•*]\s+(.+?)(?=\n\s*[-•*]\s+|\n\s*$|$)/gs);
+  // Check for dash or bullet lists (- Task, • Task)
+  const bulletItems = content.match(/[-•*]\s+(.+?)(?=\n[-•*]\s|\n\s*$|$)/gs);
   if (bulletItems) {
-    logToFile(`Found ${bulletItems.length} bullet items`);
     bulletItems.forEach(item => {
-      const taskText = item.replace(/^\s*[-•*]\s+/, '').trim();
-      if (taskText) {
-        logToFile(`Adding bullet task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^[-•*]\s+/, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
   // Look for explicit task markers like "TODO:", "TASK:", etc.
-  const explicitTasks = content.match(/(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*(.+?)(?=\n|$)/gi);
+  const explicitTasks = content.match(/(?:TODO|TASK|GOAL):\s*(.+?)(?=\n|$)/gi);
   if (explicitTasks) {
-    logToFile(`Found ${explicitTasks.length} explicit tasks`);
     explicitTasks.forEach(item => {
-      const taskText = item.replace(/^(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*/i, '').trim();
-      if (taskText) {
-        logToFile(`Adding explicit task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^(?:TODO|TASK|GOAL):\s*/i, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
   // Look for "goals" format like "Today's goals:"
-  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan") || content.toLowerCase().includes("todo") || content.toLowerCase().includes("to do")) {
-    logToFile(`Found goals/plans/todos section`);
+  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan")) {
     // Extract lines that look like tasks after "goals" or "plans" header
-    const goalMatch = content.match(/(?:today'?s?\s+(?:goals?|plans?|todos?|to\s+dos?)|goals?|plans?|todos?|to\s+dos?|plan\s+for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
+    const goalMatch = content.match(/(?:today'?s?\s+goals?|goals?|plans?|plan for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
     if (goalMatch && goalMatch[1]) {
       const goalSection = goalMatch[1].trim();
       
       // Split into lines and process each line
       const lines = goalSection.split('\n');
-      logToFile(`Found ${lines.length} lines in goals section`);
       lines.forEach(line => {
         // Clean up the line
         let taskText = line.trim()
-          .replace(/^\s*[-•*]\s+/, '') // Remove bullet points
-          .replace(/^\s*\d+\s*[\)\.]\s*/, '') // Remove numbering
-          .replace(/^\s*[✓✔]\s*/, ''); // Remove checkmarks
+          .replace(/^[-•*]\s+/, '') // Remove bullet points
+          .replace(/^\d+\s*[\)\.]\s*/, '') // Remove numbering
+          .replace(/^[✓✔]\s*/, ''); // Remove checkmarks
         
-        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for|todos?|to\s+dos?)/i) && taskText.length > 3) {
-          logToFile(`Adding goal/plan task: ${taskText}`);
+        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for)/i)) {
           tasks.push(taskText);
         }
       });
@@ -4951,7 +4606,6 @@ function extractTasksFromContent(content) {
   // Special handling for format like "BC32: MGX DRAFT / Clip Selection Finish all MGX BY EOD"
   const projectTaskMatch = content.match(/\b(BC|IB|CL)\s*(\d{2})\s*:\s*([\s\S]*?)(?=\n\s*(?:\b(?:BC|IB|CL)|$)|$)/gi);
   if (projectTaskMatch) {
-    logToFile(`Found ${projectTaskMatch.length} project-specific task sections`);
     projectTaskMatch.forEach(match => {
       const projectCode = match.match(/\b(BC|IB|CL)\s*(\d{2})\b/i)[0].replace(/\s+/g, '').toUpperCase();
       
@@ -4959,50 +4613,18 @@ function extractTasksFromContent(content) {
       const taskContent = match.replace(/\b(BC|IB|CL)\s*(\d{2})\s*:/i, '').trim();
       
       // Split by line breaks, slashes or other common separators
-      const taskParts = taskContent.split(/\n|\/|;|,/);
+      const taskParts = taskContent.split(/\n|\/|;/);
       
       taskParts.forEach(part => {
         const taskText = part.trim();
         if (taskText) {
-          const fullTask = `${projectCode}: ${taskText}`;
-          logToFile(`Adding project task: ${fullTask}`);
-          tasks.push(fullTask);
+          tasks.push(`${projectCode}: ${taskText}`);
         }
       });
     });
   }
   
-  // Treat lines with action verbs at the beginning as potential tasks
-  const actionLines = content.match(/(?:^|\n)\s*(?:finish|update|create|write|review|check|fix|implement|add|remove|change|prepare)\s+[^.,;:\n]+/gi);
-  if (actionLines) {
-    logToFile(`Found ${actionLines.length} action verb lines`);
-    actionLines.forEach(line => {
-      const taskText = line.trim();
-      if (taskText && !tasks.includes(taskText) && taskText.length > 5) {
-        logToFile(`Adding action verb task: ${taskText}`);
-        tasks.push(taskText);
-      }
-    });
-  }
-  
-  // Also consider any short lines (between 15-100 chars) that aren't already included as potential tasks
-  // This is a fallback to catch casual task descriptions
-  const lines = content.split('\n');
-  lines.forEach(line => {
-    const trimmedLine = line.trim();
-    if (trimmedLine.length > 15 && trimmedLine.length < 100 && 
-        !tasks.includes(trimmedLine) && 
-        !trimmedLine.startsWith('http') && 
-        !trimmedLine.match(/^\[[\d:]+\]/) && // skip timestamps
-        trimmedLine.match(/[a-z]/i)) { // ensure it has at least one letter
-      logToFile(`Adding fallback task: ${trimmedLine}`);
-      tasks.push(trimmedLine);
-    }
-  });
-  
-  const uniqueTasks = Array.from(new Set(tasks.filter(task => task.length > 0)));
-  logToFile(`Extracted ${uniqueTasks.length} total tasks from content`);
-  return uniqueTasks;
+  return tasks.filter(task => task.length > 0);
 }
 
 // Function to create individual Notion task pages
@@ -5070,12 +4692,6 @@ async function createNotionTaskPage(authorData) {
               select: {
                 name: properName
               }
-            },
-            // Set initial Progress status to "To Do"
-            Progress: {
-              select: {
-                name: "To Do"
-              }
             }
           },
           // Add the original message as context in the page content
@@ -5110,10 +4726,10 @@ async function createNotionTaskPage(authorData) {
         });
         
         createdPages.push(response);
-        logToFile(`✅ Successfully created task page: "${taskText}" for ${properName}. Page ID: ${response.id}`);
+        logToFile(`✁ESuccessfully created task page: "${taskText}" for ${properName}. Page ID: ${response.id}`);
       }
       catch (taskError) {
-        logToFile(`❌ Error creating task page for "${taskText}": ${taskError.message}`);
+        logToFile(`❁EError creating task page for "${taskText}": ${taskError.message}`);
         // Continue with other tasks even if one fails
       }
     }
@@ -5122,7 +4738,7 @@ async function createNotionTaskPage(authorData) {
     return createdPages;
     
   } catch (error) {
-    logToFile(`❌ Error creating task pages: ${error.message}`);
+    logToFile(`❁EError creating task pages: ${error.message}`);
     if (error.body) {
       logToFile(`Error details: ${JSON.stringify(error.body)}`);
     }
@@ -5130,11 +4746,62 @@ async function createNotionTaskPage(authorData) {
   }
 }
 
-// NOTE: The duplicate command handler for /extract-tasks was removed from here
-// This was causing the issue with tasks not being properly created
-// The main handler is already defined at line ~985
+// Find where the registerCommandsOnStartup function is being called
+// Right after this part: "// Register commands on startup"
+// add the following extra command registration:
 
+// Handle additional commands (before or after other slash command handlers)
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
 
+  const { commandName } = interaction;
+  
+  // Handle the /extract-tasks command
+  if (commandName === 'extract-tasks') {
+    try {
+      // Always use ephemeral replies for this command
+      await interaction.deferReply({ ephemeral: true });
+      
+      // Run the task extraction
+      await interaction.editReply('⏳ Extracting tasks from morning messages...');
+      
+      const result = await extractTasksFromMorningMessages();
+      
+      if (!result.success) {
+        return interaction.editReply(`❁EError extracting tasks: ${result.error}`);
+      }
+      
+      if (result.messageCount === 0) {
+        return interaction.editReply('No messages found from this morning (since 7 AM).');
+      }
+      
+      // Create embed for response
+      const embed = new EmbedBuilder()
+        .setTitle('Task Extraction Complete')
+        .setColor(0x00AA00)
+        .setDescription(`I've extracted tasks from this morning's messages and created individual Notion task pages with proper assignees.`)
+        .addFields(
+          { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
+          { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
+          { name: 'Task Pages Created', value: `${result.pagesCreated}`, inline: true },
+          { name: 'Team Members', value: `${result.authors}`, inline: true }
+        )
+        .setTimestamp();
+      
+      // Send the response
+      await interaction.editReply({ 
+        content: '✁ETask extraction completed successfully!', 
+        embeds: [embed] 
+      });
+      
+    } catch (error) {
+      logToFile(`Error in /extract-tasks command: ${error.message}`);
+      await interaction.editReply(`❁EError extracting tasks: ${error.message}`);
+    }
+  }
+  
+  // Other command handlers continue here...
+});
 
 // The duplicate extract-tasks command registration code below has been removed
 // to prevent conflicts with the registration in the ready event handler
@@ -5272,289 +4939,3 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
     return { success: false, error: error.message };
   }
 }
-
-// Function to update tasks based on end-of-day messages
-async function checkEndOfDayTaskUpdates() {
-  try {
-    logToFile(`=== Starting End-of-Day Task Update Check ===`);
-    
-    // Get the channel
-    const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
-    if (!channel) {
-      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
-      return { success: false, error: "Channel not found" };
-    }
-    
-    logToFile(`Found channel #${channel.name} (${channel.id})`);
-    
-    // Calculate today's time range in the configured timezone
-    const now = new Date();
-    const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
-    
-    // Set the time range (16:00 to 20:00)
-    const startTime = new Date(today);
-    startTime.setHours(16, 0, 0, 0);
-    
-    const endTime = new Date(today);
-    endTime.setHours(20, 0, 0, 0);
-    
-    // Convert to UTC for comparison with Discord timestamps
-    const utcStartTime = new Date(startTime.toLocaleString('en-US', { timeZone: 'UTC' }));
-    const utcEndTime = new Date(endTime.toLocaleString('en-US', { timeZone: 'UTC' }));
-    
-    // If current time is before 16:00, skip the check
-    if (now < utcStartTime) {
-      logToFile(`Current time is before 16:00 ${TZ}, skipping end-of-day task check`);
-      return { success: true, skipped: true };
-    }
-    
-    logToFile(`Collecting messages between ${utcStartTime.toISOString()} and ${utcEndTime.toISOString()} (16:00-20:00 in ${TZ})`);
-    
-    try {
-      // Fetch messages from the channel
-      const messages = await channel.messages.fetch({ limit: 100 });
-      
-      // Filter messages within the time range
-      const recentMessages = messages.filter(msg => {
-        const msgTime = new Date(msg.createdAt);
-        return msgTime >= utcStartTime && msgTime <= utcEndTime;
-      });
-      
-      logToFile(`Found ${recentMessages.size} messages sent between 16:00-20:00`);
-      
-      if (recentMessages.size === 0) {
-        logToFile(`No messages found in the specified time range.`);
-        return { success: true, messageCount: 0, updatedTasks: 0 };
-      }
-      
-      // Analyze messages to find completed tasks
-      // First, extract tasks by author
-      const tasksByAuthor = extractTasksByAuthor(recentMessages);
-      
-      // Need to query the Notion database to get all tasks for today
-      if (!notion) {
-        logToFile(`❌ Notion client not initialized`);
-        return { success: false, error: "Notion not initialized" };
-      }
-      
-      // Use the specific database ID for tasks
-      const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
-      
-      // Get today's date in ISO format
-      const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
-      
-      // Query Notion for tasks created today
-      const taskResponse = await notion.databases.query({
-        database_id: TASKS_DB_ID,
-        filter: {
-          property: "Date",
-          date: {
-            equals: todayISO
-          }
-        }
-      });
-      
-      logToFile(`Found ${taskResponse.results.length} tasks created today in Notion`);
-      
-      // Check for task completion phrases in messages
-      const completionPhrases = [
-        "done", "completed", "finished", "fixed", "resolved", "complete",
-        "did it", "closed", "done with", "accomplished"
-      ];
-      
-      let tasksUpdated = 0;
-      
-      // For each task in Notion
-      for (const taskPage of taskResponse.results) {
-        // Get task title and assignee
-        const taskTitle = taskPage.properties.title?.title?.[0]?.text?.content || 
-                         taskPage.properties.Title?.title?.[0]?.text?.content || "";
-        
-        if (!taskTitle) continue;
-        
-        // Get current progress status
-        const currentProgress = taskPage.properties.Progress?.select?.name || "";
-        
-        // Skip if already marked as Done
-        if (currentProgress === "Done") continue;
-        
-        // Check if any message indicates this task is complete
-        const isCompleted = [...recentMessages.values()].some(msg => {
-          const content = msg.content.toLowerCase();
-          
-          // Check if the message contains the task name or a close match
-          const containsTaskReference = content.includes(taskTitle.toLowerCase()) || 
-                                       // Check for partial matches with at least 5 characters
-                                       (taskTitle.length > 5 && content.includes(taskTitle.substring(0, Math.floor(taskTitle.length * 0.7)).toLowerCase()));
-          
-          if (!containsTaskReference) return false;
-          
-          // Check if any completion phrase is in the message
-          return completionPhrases.some(phrase => content.includes(phrase.toLowerCase()));
-        });
-        
-        if (isCompleted) {
-          // Update the task status to Done
-          try {
-            await notion.pages.update({
-              page_id: taskPage.id,
-              properties: {
-                Progress: {
-                  select: {
-                    name: "Done"
-                  }
-                }
-              }
-            });
-            
-            logToFile(`✅ Updated task "${taskTitle}" to Done`);
-            tasksUpdated++;
-          } catch (updateError) {
-            logToFile(`❌ Error updating task "${taskTitle}": ${updateError.message}`);
-          }
-        }
-      }
-      
-      logToFile(`✅ End-of-day task check completed: Updated ${tasksUpdated} tasks to Done`);
-      
-      return {
-        success: true,
-        messageCount: recentMessages.size,
-        updatedTasks: tasksUpdated
-      };
-      
-    } catch (fetchError) {
-      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
-      throw fetchError;
-    }
-  } catch (error) {
-    logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
-    console.error('Error checking end-of-day task updates:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Add this near the top of the file with other requires
-// path is already required at the top of the file
-
-// Add this after other client events but before client.login
-// Real-time message collection for knowledge assistant
-const BACKUPS_DIR = path.join(__dirname, 'backups');
-const RECENT_MESSAGES_LIMIT = 1000; // Keep the most recent messages in memory
-const recentMessages = [];
-
-// Check if backups directory exists
-if (!fs.existsSync(BACKUPS_DIR)) {
-  fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-  console.log(`Created backups directory: ${BACKUPS_DIR}`);
-}
-
-// Function to save recent messages to file periodically
-function saveRecentMessages() {
-  try {
-    // Only save if we have messages
-    if (recentMessages.length === 0) return;
-    
-    // Group messages by guild
-    const messagesByGuild = {};
-    recentMessages.forEach(msg => {
-      if (!messagesByGuild[msg.guildId]) {
-        messagesByGuild[msg.guildId] = {
-          guildId: msg.guildId,
-          guildName: msg.guildName,
-          backupDate: new Date().toISOString(),
-          messages: []
-        };
-      }
-      messagesByGuild[msg.guildId].messages.push(msg);
-    });
-    
-    // Save each guild's messages to a file
-    Object.values(messagesByGuild).forEach(guildData => {
-      const now = new Date();
-      const dateString = now.toISOString().split('T')[0]; // YYYY-MM-DD
-      const filename = `${guildData.guildName.replace(/[^a-z0-9]/gi, '_')}-realtime-${dateString}.json`;
-      const filePath = path.join(BACKUPS_DIR, filename);
-      
-      guildData.messageCount = guildData.messages.length;
-      fs.writeFileSync(filePath, JSON.stringify(guildData, null, 2));
-      console.log(`Saved ${guildData.messages.length} recent messages from ${guildData.guildName}`);
-    });
-    
-    // Clear the array after saving
-    recentMessages.length = 0;
-  } catch (error) {
-    console.error(`Error saving recent messages: ${error.message}`);
-  }
-}
-
-// Save messages every hour
-setInterval(saveRecentMessages, 60 * 60 * 1000);
-
-// Save messages when the bot shuts down
-process.on('SIGINT', () => {
-  console.log('Saving recent messages before shutdown...');
-  saveRecentMessages();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('Saving recent messages before shutdown...');
-  saveRecentMessages();
-  process.exit(0);
-});
-
-// Collect messages in real-time
-client.on('messageCreate', message => {
-  // Skip bot messages
-  if (message.author.bot) return;
-  
-  // Skip messages without content
-  if (!message.content.trim()) return;
-  
-  // Store important message information
-  const storedMessage = {
-    id: message.id,
-    content: message.content,
-    author: {
-      id: message.author.id,
-      username: message.author.username,
-      tag: message.author.tag
-    },
-    channelId: message.channel.id,
-    channelName: message.channel.name,
-    guildId: message.guild?.id,
-    guildName: message.guild?.name,
-    timestamp: message.createdAt.toISOString(),
-    attachments: Array.from(message.attachments.values()).map(a => a.url)
-  };
-  
-  // Add to recent messages array (prepend)
-  recentMessages.unshift(storedMessage);
-  
-  // Limit the array size
-  if (recentMessages.length > RECENT_MESSAGES_LIMIT) {
-    recentMessages.pop();
-  }
-});
-
-// Update the Knowledge Assistant to use real-time messages
-// This code should go in knowledge-assistant.js, but for demonstration:
-
-/* 
-// Add this function to knowledge-assistant.js
-function loadRecentMessages() {
-  try {
-    const recentMessagesFromBot = global.recentMessages || [];
-    return recentMessagesFromBot;
-  } catch (error) {
-    logToFile(`Error loading recent messages: ${error.message}`);
-    return [];
-  }
-}
-
-// Then modify answerQuestion to combine both recent and backed up messages
-*/
-
-// Expose the recent messages array globally for the knowledge assistant
-global.recentMessages = recentMessages;

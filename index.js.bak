@@ -2,47 +2,17 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
-const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
-const { logToFile } = require('./log_utils'); // Require logToFile from the new utility file
-const axios = require('axios');
-const express = require('express');
-const cors = require('cors');
-const app = express();
-
-// Import knowledge assistant
-const { handleAskCommand } = require('./knowledge-assistant');
-
-// Configure OpenAI client
-let openai = null;
-try {
-  console.log('Attempting to initialize OpenAI client...');
-  if (process.env.OPENAI_API_KEY) {
-    console.log('OPENAI_API_KEY found in environment variables');
-    openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-    console.log('OpenAI client initialized successfully');
-    logToFile('OpenAI client initialized successfully');
-  } else {
-    console.log('⚠️ OPENAI_API_KEY not found in environment variables');
-    console.log('Environment variables available:', Object.keys(process.env).join(', '));
-    logToFile('OPENAI_API_KEY not found in environment, GPT task extraction will not be available');
-  }
-} catch (error) {
-  console.log(`❌ Error initializing OpenAI client: ${error.message}`);
-  logToFile(`Error initializing OpenAI client: ${error.message}`);
-}
-
-// Setup timezone
-const TZ = process.env.TIMEZONE || 'Europe/Berlin';
+const fs = require('fs');
+const path = require('path');
+const moment = require('moment-timezone');
 
 // Import availability module
-const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours, getStaffWorkloadDetails, getAIAvailabilityAssessment } = require('./availability');
+const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
 
 // Define timezone for all operations
-// const TZ = 'Europe/Berlin'; // Removed duplicate TZ declaration
+const TZ = 'Europe/Berlin';
 
 // Map of active jobs
 const activeJobs = new Map();
@@ -67,8 +37,7 @@ let jobs = [
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
-  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
-  { tag: 'End-of-Day Task Check', cron: '0 18 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
+  { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true } // New job to backup messages
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -545,8 +514,25 @@ try {
   console.warn('⚠️ Failed to initialize Notion client: ' + error.message + '. Notion features will be disabled.');
 }
 
-// Note: OpenAI client is already initialized at the top of the file
-// let openai = null; (removed duplicate initialization)
+// Utility function for logging
+function logToFile(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(path.join(__dirname, 'bot.log'), logMessage);
+}
+
+// Initialize OpenAI client if API key is provided
+let openai = null;
+try {
+  if (OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    console.log('✅ OpenAI client initialized successfully');
+  } else {
+    console.warn('⚠️ OPENAI_API_KEY not provided. AI features will be disabled.');
+  }
+} catch (error) {
+  console.warn('⚠️ Failed to initialize OpenAI: ' + error.message + '. AI features will be disabled.');
+}
 
 // Error handler
 client.on('error', (error) => {
@@ -1047,11 +1033,25 @@ client.on('interactionCreate', async interaction => {
       try {
         // Always use ephemeral replies for this command
         await interaction.deferReply({ ephemeral: true });
+        hasResponded = true;
         
-        // Run the task extraction
+        // Update user on progress to prevent timeout
         await interaction.editReply('⏳ Extracting tasks from morning messages...');
         
-        const result = await extractTasksFromMorningMessages();
+        // Run the task extraction with a timeout to prevent Discord from timing out
+        const extractionPromise = extractTasksFromMorningMessages();
+        
+        // Set a timeout for the operation (15 seconds max)
+        const timeout = setTimeout(async () => {
+          try {
+            await interaction.editReply('⏳ Still extracting tasks... this is taking longer than expected.');
+          } catch (timeoutError) {
+            logToFile(`Failed to send timeout message: ${timeoutError.message}`);
+          }
+        }, 8000);
+        
+        const result = await extractionPromise;
+        clearTimeout(timeout);
         
         if (!result.success) {
           return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
@@ -1065,11 +1065,11 @@ client.on('interactionCreate', async interaction => {
         const embed = new EmbedBuilder()
           .setTitle('Task Extraction Complete')
           .setColor(0x00AA00)
-          .setDescription(`I've extracted tasks from this morning's messages and created individual Notion task pages with proper assignees.`)
+          .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
           .addFields(
             { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
             { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
-            { name: 'Task Pages Created', value: `${result.pagesCreated}`, inline: true },
+            { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
             { name: 'Team Members', value: `${result.authors}`, inline: true }
           )
           .setTimestamp();
@@ -1082,8 +1082,13 @@ client.on('interactionCreate', async interaction => {
         
       } catch (error) {
         logToFile(`Error in /extract-tasks command: ${error.message}`);
-        await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error extracting tasks: ${error.message}`, ephemeral: true });
+        }
       }
+      return;
     }
     
     // All other commands continue to be handled by the existing handlers
@@ -1346,353 +1351,39 @@ client.on('interactionCreate', async interaction => {
       }
     }
     
-    // Handle the /deadline command
-    else if (commandName === 'deadline') {
-      try {
-        // Check if ephemeral flag is set
-        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
-        const showAll = interaction.options.getBoolean('all') || false;
-        
-        await interaction.deferReply({ ephemeral });
-        hasResponded = true;
-        
-        // Check if Notion is configured
-        if (!notion) {
-          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
-          return;
-        }
-        
-        // Get the guild (server) to determine which project series to show if showing all
-        const guild = interaction.guild;
-        const guildName = guild?.name?.toLowerCase() || '';
-        
-        let projectCode = null;
-        let projectSeries = null;
-        
-        // If showAll is false, get the project code from the channel name
-        if (!showAll) {
-          const channel = interaction.channel;
-          if (!channel) {
-            await interaction.editReply('❌ This command can only be used in a text channel.');
-            return;
-          }
-          
-          // Check if the channel name contains a project code
-          const channelName = channel.name.toLowerCase();
-          const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
-          
-          if (!codeMatch) {
-            await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc. Use `/deadline all` to see all deadlines.');
-            return;
-          }
-          
-          projectCode = codeMatch[0].toUpperCase();
-          logToFile(`Fetching deadline for specific project: ${projectCode}`);
-        } else {
-          // For "all" mode, determine which series to show based on the server name
-          if (guildName.includes('bodycam')) {
-            projectSeries = 'BC';
-          } else if (guildName.includes('insanity')) {
-            // For Dr. Insanity server, show both CL and IB
-            projectSeries = null; // We'll handle showing both series in the code below
-          } else {
-            // Default to showing all projects
-            projectSeries = null;
-          }
-          
-          logToFile(`Fetching all deadlines for series: ${projectSeries || 'ALL'} in guild: ${guildName}`);
-        }
-        
-        let result;
-        
-        if (projectCode) {
-          // Fetch a single project by code
-          result = await fetchProjectDeadlines(null, projectCode);
-        } else if (projectSeries) {
-          // Fetch all projects of a specific series
-          result = await fetchProjectDeadlines(projectSeries);
-        } else if (guildName.includes('insanity')) {
-          // Special case for Dr. Insanity server - fetch both CL and IB
-          const clResult = await fetchProjectDeadlines('CL');
-          const ibResult = await fetchProjectDeadlines('IB');
-          
-          if (!clResult.success || !ibResult.success) {
-            await interaction.editReply(`❌ Error fetching deadlines: ${clResult.error || ibResult.error}`);
-            return;
-          }
-          
-          // Combine the results
-          result = { 
-            success: true, 
-            projects: [...(clResult.projects || []), ...(ibResult.projects || [])]
-          };
-          
-          // Re-sort combined projects
-          result.projects.sort((a, b) => {
-            if (a.mainDeadline && b.mainDeadline) {
-              return new Date(a.mainDeadline) - new Date(b.mainDeadline);
-            }
-            if (a.mainDeadline) return -1;
-            if (b.mainDeadline) return 1;
-            return a.code.localeCompare(b.code);
-          });
-        } else {
-          // Fetch all projects (default)
-          result = await fetchProjectDeadlines();
-        }
-        
-        if (!result.success) {
-          await interaction.editReply(`❌ Error fetching deadlines: ${result.error}`);
-          return;
-        }
-        
-        const projects = result.projects;
-        
-        if (projects.length === 0) {
-          await interaction.editReply('No projects found with deadline information.');
-          return;
-        }
-        
-        // Create the embed
-        const embed = new EmbedBuilder()
-          .setColor(0x0099FF)
-          .setTimestamp();
-        
-        // Set the title and description based on whether we're showing a single project or all
-        if (projectCode) {
-          embed.setTitle(`📅 Deadline for ${projectCode}`);
-          embed.setDescription(`Here are the deadline details for ${projectCode}:`);
-        } else {
-          embed.setTitle(`📅 Project Deadlines${projectSeries ? ` - ${projectSeries} Series` : ''}`);
-          embed.setDescription(`Here are the upcoming deadlines for ${projectSeries ? `${projectSeries} series` : 'all'} projects:`);
-        }
-        
-        // Choose how to display the data based on whether we're showing one project or many
-        if (projectCode && projects.length === 1) {
-          // Detailed view for a single project
-          const project = projects[0];
-          
-          // Add direct fields for the project
-          embed.addFields({ name: 'Project', value: project.name });
-          embed.addFields({ name: 'Status', value: project.status || 'Not set' });
-          embed.addFields({ name: 'Main Deadline', value: project.formattedMainDeadline || 'Not set', inline: true });
-          embed.addFields({ name: 'Current Stage Deadline', value: project.formattedStageDeadline || 'Not set', inline: true });
-          
-          // Add countdown if a deadline exists
-          if (project.mainDeadline) {
-            const now = new Date();
-            const deadline = new Date(project.mainDeadline);
-            const daysRemaining = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
-            
-            const countdownText = daysRemaining > 0 
-              ? `⏰ **${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining**`
-              : daysRemaining === 0
-                ? `⚠️ **Due today!**`
-                : `❌ **Overdue by ${Math.abs(daysRemaining)} day${Math.abs(daysRemaining) !== 1 ? 's' : ''}**`;
-            
-            embed.addFields({ name: 'Countdown', value: countdownText });
-          }
-          
-          // Add a button to open the Notion page
-          const row = new ActionRowBuilder()
-            .addComponents(
-              new ButtonBuilder()
-                .setLabel('Open in Notion')
-                .setStyle(ButtonStyle.Link)
-                .setURL(project.notionUrl)
-            );
-          
-          await interaction.editReply({ embeds: [embed], components: [row] });
-        } else {
-          // Summarized view for multiple projects
-          // Group projects by their deadlines for a cleaner presentation
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          
-          const overdue = [];
-          const dueToday = [];
-          const dueThisWeek = [];
-          const dueNextWeek = [];
-          const dueLater = [];
-          const noDueDate = [];
-          
-          // Calculate the end of this week and next week
-          const endOfThisWeek = new Date(today);
-          endOfThisWeek.setDate(today.getDate() + (7 - today.getDay()));
-          
-          const endOfNextWeek = new Date(endOfThisWeek);
-          endOfNextWeek.setDate(endOfThisWeek.getDate() + 7);
-          
-          // Categorize projects
-          projects.forEach(project => {
-            if (!project.mainDeadline) {
-              noDueDate.push(project);
-              return;
-            }
-            
-            const deadlineDate = new Date(project.mainDeadline);
-            deadlineDate.setHours(0, 0, 0, 0);
-            
-            if (deadlineDate < today) {
-              overdue.push(project);
-            } else if (deadlineDate.getTime() === today.getTime()) {
-              dueToday.push(project);
-            } else if (deadlineDate <= endOfThisWeek) {
-              dueThisWeek.push(project);
-            } else if (deadlineDate <= endOfNextWeek) {
-              dueNextWeek.push(project);
-            } else {
-              dueLater.push(project);
-            }
-          });
-          
-          // Create a formatter function for projects
-          const formatProjectList = (projects) => {
-            return projects.map(p => {
-              let line = `**${p.code}** (${p.status}): ${p.formattedMainDeadline}`;
-              
-              // Add stage deadline if different from main deadline
-              if (p.stageDeadline && p.stageDeadline !== p.mainDeadline) {
-                line += ` • Stage: ${p.formattedStageDeadline}`;
-              }
-              
-              return line;
-            }).join('\n');
-          };
-          
-          // Add all the deadline sections
-          if (overdue.length > 0) {
-            embed.addFields({ 
-              name: '❌ OVERDUE', 
-              value: formatProjectList(overdue)
-            });
-          }
-          
-          if (dueToday.length > 0) {
-            embed.addFields({ 
-              name: '⚠️ DUE TODAY', 
-              value: formatProjectList(dueToday)
-            });
-          }
-          
-          if (dueThisWeek.length > 0) {
-            embed.addFields({ 
-              name: '⏳ DUE THIS WEEK', 
-              value: formatProjectList(dueThisWeek)
-            });
-          }
-          
-          if (dueNextWeek.length > 0) {
-            embed.addFields({ 
-              name: '📅 DUE NEXT WEEK', 
-              value: formatProjectList(dueNextWeek)
-            });
-          }
-          
-          if (dueLater.length > 0) {
-            embed.addFields({ 
-              name: '🗓️ FUTURE DEADLINES', 
-              value: formatProjectList(dueLater)
-            });
-          }
-          
-          if (noDueDate.length > 0) {
-            embed.addFields({ 
-              name: '⚠️ NO DEADLINE SET', 
-              value: formatProjectList(noDueDate)
-            });
-          }
-          
-          // Set footer with total count
-          embed.setFooter({ 
-            text: `Total: ${projects.length} projects • Use /deadline without 'all' in a project channel for details`
-          });
-          
-          await interaction.editReply({ embeds: [embed] });
-        }
-      } catch (error) {
-        logToFile(`Error in /deadline command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error displaying deadlines: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error displaying deadlines: ${error.message}`, ephemeral: true });
-        }
-      }
-    }
-    
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
-        const ephemeral = true; // We'll address the deprecation warning later
+        // Check if ephemeral flag is set
+        const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
-        logToFile('[Availability] Command started.'); // Added log
+        // Current Berlin time
         const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
         
+        // Create the embed
         const embed = new EmbedBuilder()
-          .setTitle('Team Availability & Workload')
-          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted. Workload from Notion. AI assessment of availability.`)
+          .setTitle('Team Availability')
+          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted below:`)
           .setColor(0x00AAFF)
           .setTimestamp();
         
+        // Group staff by availability status
         const activeStaff = [];
         const inactiveStaff = [];
         
-        for (const staff of STAFF_AVAILABILITY) {
-          logToFile(`[Availability] Processing staff: ${staff.name}`); // Added log
+        // Process each staff member
+        STAFF_AVAILABILITY.forEach(staff => {
           const isActive = isStaffActive(staff);
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
-          let workloadInfo = 'Notion data unavailable';
-          let aiAssessment = 'N/A';
-
-          if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
-            workloadInfo = 'Discord ID missing for Notion lookup.';
-            logToFile(`[Availability] Staff ${staff.name}: Discord ID missing.`); // Added log
-          } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
-            try {
-              logToFile(`[Availability] Staff ${staff.name}: Fetching workload details...`); // Added log
-              const { projects, tasks } = await getStaffWorkloadDetails(staff);
-              logToFile(`[Availability] Staff ${staff.name}: Workload details received. Projects: ${projects.length}, Tasks: ${tasks.length}`); // Added log
-              
-              let projectsString = 'No active projects.';
-              if (projects.length > 0) {
-                projectsString = projects.map(p => p.name).join(', ');
-                if (projectsString.length > 100) projectsString = projectsString.substring(0, 97) + "...";
-              }
-              workloadInfo = `Projects: ${projectsString}\nTasks: ${tasks.length} active`;
-
-              if (isActive) {
-                if (projects.length > 0 || tasks.length > 0) {
-                  logToFile(`[Availability] Staff ${staff.name}: Getting AI assessment...`); // Added log
-                  aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment received: ${aiAssessment}`); // Added log
-                } else {
-                  aiAssessment = 'Highly Available - No projects or tasks listed.';
-                  logToFile(`[Availability] Staff ${staff.name}: AI assessment skipped (no projects/tasks).`); // Added log
-                }
-              } else {
-                aiAssessment = 'N/A (Offline)';
-              }
-
-            } catch (e) {
-              logToFile(`[Availability] Staff ${staff.name}: Error fetching workload/AI data: ${e.message}\n${e.stack}`); // More detailed log
-              workloadInfo = 'Error fetching Notion/AI data.';
-              // Optionally, rethrow or handle more gracefully if this error should stop the whole command
-            }
-          } else {
-            workloadInfo = 'Notion names not configured.';
-            logToFile(`[Availability] Staff ${staff.name}: Notion names not configured.`); // Added log
-          }
           
           const staffInfo = {
             name: staff.name,
             isActive,
             timeLeft,
-            workingHours,
-            workload: workloadInfo,
-            aiAssessment: aiAssessment, // aiAssessment will be 'N/A (Offline)' if not active
+            workingHours
           };
           
           if (isActive) {
@@ -1700,48 +1391,39 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
-          logToFile(`[Availability] Staff ${staff.name}: Processing complete.`); // Added log
-        }
+        });
         
-        logToFile('[Availability] All staff processed. Building embed.'); // Added log
-
+        // Add active staff field with inline status
         if (activeStaff.length > 0) {
-          const activeStaffText = activeStaff.map(s => 
-            `**${s.name}** (${s.timeLeft}) - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
-          ).join('\n\n');
-          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          const activeStaffText = activeStaff.map(staff => 
+            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '🟢 Currently Working', value: activeStaffText });
         } else {
           embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
         }
         
+        // Add inactive staff field
         if (inactiveStaff.length > 0) {
-          const inactiveStaffText = inactiveStaff.map(s => 
-            `${s.name} - ${s.workingHours}\n*Workload:* ${s.workload}\n*AI Eval:* ${s.aiAssessment}`
-          ).join('\n\n');
-          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) }); // Ensure field value is not too long
+          const inactiveStaffText = inactiveStaff.map(staff => 
+            `${staff.name} - ${staff.workingHours}`
+          ).join('\n');
+          
+          embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText });
         }
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
-        logToFile('[Availability] Sending reply.'); // Added log
+        // Send the embed
         await interaction.editReply({ embeds: [embed] });
-        logToFile('[Availability] Reply sent.'); // Added log
         
       } catch (error) {
-        logToFile(`Error in /availability command: ${error.message}\n${error.stack}`);
-        console.error(`Error in /availability command:`, error); // Also log to console for immediate visibility
-        if (hasResponded && !interaction.replied) { // Check if deferred and not yet replied
-            try {
-                await interaction.editReply({ content: `❌ Error displaying availability. Please check the bot logs.` });
-            } catch (replyError) {
-                logToFile(`[Availability] Failed to send error reply: ${replyError.message}`);
-            }
-        } else if (!interaction.replied && !interaction.deferred) { // Neither deferred nor replied
-            try {
-                await interaction.reply({ content: `❌ Error displaying availability. Please check the bot logs.`, ephemeral: true});
-            } catch (replyError) {
-                logToFile(`[Availability] Failed to send initial error reply: ${replyError.message}`);
-            }
+        logToFile(`Error in /availability command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error displaying availability: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error displaying availability: ${error.message}`, ephemeral: true });
         }
       }
     }
@@ -2630,22 +2312,6 @@ Example Output: {
             
           case '3d_status':
             notionProperties['3D Status'] = { select: { name: value } };
-            break;
-            
-          case 'storyboard':
-            if (!value.startsWith('http')) {
-              await interaction.editReply('❌ Storyboard value must be a valid URL starting with http:// or https://');
-              return;
-            }
-            notionProperties['Storyboard'] = { url: value };
-            break;
-            
-          case 'footage':
-            if (value.startsWith('http')) {
-              notionProperties['Footage'] = { url: value };
-            } else {
-              notionProperties['Footage'] = { rich_text: [{ text: { content: value } }] };
-            }
             break;
             
           case 'language':
@@ -3776,64 +3442,7 @@ Example Output: {
       }
     }
     
-    // Handle the /check-tasks command
-    else if (commandName === 'check-tasks') {
-      try {
-        // Always use ephemeral replies for this command
-        await interaction.deferReply({ ephemeral: true });
-        hasResponded = true;
-        
-        // Run the task check
-        await interaction.editReply('⏳ Checking for completed tasks in recent messages...');
-        
-        const result = await checkEndOfDayTaskUpdates();
-        
-        if (!result.success) {
-          return interaction.editReply(`❌ Error checking tasks: ${result.error}`);
-        }
-        
-        if (result.skipped) {
-          return interaction.editReply('Current time is before 16:00, but check was forced. No messages to process.');
-        }
-        
-        if (result.messageCount === 0) {
-          return interaction.editReply('No messages found in the 16:00-20:00 timeframe.');
-        }
-        
-        // Create embed for response
-        const embed = new EmbedBuilder()
-          .setTitle('Task Update Check Complete')
-          .setColor(0x00AA00)
-          .setDescription(`I've analyzed messages from 16:00-20:00 to find completed tasks.`)
-          .addFields(
-            { name: 'Messages Analyzed', value: `${result.messageCount}`, inline: true },
-            { name: 'Tasks Updated', value: `${result.updatedTasks}`, inline: true }
-          )
-          .setTimestamp();
-        
-        // Send the response
-        await interaction.editReply({ 
-          content: '✅ Task update check completed successfully!', 
-          embeds: [embed] 
-        });
-        
-      } catch (error) {
-        logToFile(`Error in /check-tasks command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ Error checking tasks: ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ Error checking tasks: ${error.message}`, ephemeral: true });
-        }
-      }
-    }
-    
-    // Handle the /ask command
-    else if (commandName === 'ask') {
-      // Use the handleAskCommand function from knowledge-assistant.js
-      await handleAskCommand(interaction);
-    }
-    
-    // Other commands here
+    // Handle other commands here
     // ...
     
   } catch (globalError) {
@@ -3858,7 +3467,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -3897,18 +3506,6 @@ function scheduleAllJobs() {
         if (job.backupMessages) {
           logToFile(`Starting backup of messages from channel ${MESSAGE_BACKUP_CHANNEL_ID}`);
           await backupChannelMessages();
-          return;
-        }
-        
-        // Special handling for the task update job
-        if (job.updateTasks) {
-          logToFile(`Starting end-of-day task update check`);
-          const result = await checkEndOfDayTaskUpdates();
-          if (result.success) {
-            logToFile(`End-of-day task check completed. Updated ${result.updatedTasks || 0} tasks.`);
-          } else {
-            logToFile(`❌ Error in end-of-day task check: ${result.error || 'Unknown error'}`);
-          }
           return;
         }
         
@@ -4594,42 +4191,15 @@ async function extractTasksFromMorningMessages() {
         return { success: true, messageCount: 0, taskCount: 0, pagesCreated: 0 };
       }
       
-      // Sample message content for debugging
-      if (recentMessages.size > 0) {
-        const sampleMessages = [...recentMessages.values()].slice(0, 3);
-        sampleMessages.forEach((msg, idx) => {
-          logToFile(`Sample message ${idx+1}: ${msg.author.tag}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
-        });
-      }
+      // Extract tasks by author using functions we'll define later
+      const tasksByAuthor = extractTasksByAuthor(recentMessages);
       
-      // Extract tasks by author
-      const tasksByAuthor = await extractTasksByAuthor(recentMessages);
-      
-      // Log the users and their tasks
-      logToFile(`Task extraction results by user:`);
-      for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-        logToFile(`User ${authorData.author.tag}: ${authorData.tasks.length} tasks found`);
-        authorData.tasks.forEach((task, idx) => {
-          logToFile(`  Task ${idx+1}: ${task}`);
-        });
-      }
-      
-      // Create Notion pages for each task
-      let totalPagesCreated = 0;
-      let authorCount = 0;
-      
+      // Create Notion pages for each author's tasks
+      let pagesCreated = 0;
       for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
         if (authorData.tasks.length > 0) {
-          // createNotionTaskPage now returns an array of created pages
-          const createdPages = await createNotionTaskPage(authorData);
-          
-          // Increment counters
-          if (createdPages && createdPages.length > 0) {
-            totalPagesCreated += createdPages.length;
-            authorCount++;
-            
-            logToFile(`Created ${createdPages.length} task pages for ${authorData.author.tag}`);
-          }
+          await createNotionTaskPage(authorData);
+          pagesCreated++;
         }
       }
       
@@ -4638,14 +4208,14 @@ async function extractTasksFromMorningMessages() {
         (sum, user) => sum + user.tasks.length, 0
       );
       
-      logToFile(`✅ Task extraction completed: Created ${totalPagesCreated} individual Notion task pages for ${authorCount} team members (${totalTasks} total tasks)`);
+      logToFile(`✅ Task extraction completed: Created ${pagesCreated} Notion pages with ${totalTasks} tasks`);
       
       return {
         success: true,
         messageCount: recentMessages.size,
         taskCount: totalTasks,
-        pagesCreated: totalPagesCreated,
-        authors: authorCount
+        pagesCreated: pagesCreated,
+        authors: Object.keys(tasksByAuthor).length
       };
       
     } catch (fetchError) {
@@ -4654,16 +4224,13 @@ async function extractTasksFromMorningMessages() {
     }
   } catch (error) {
     logToFile(`❌ Error in extractTasksFromMorningMessages: ${error.message}`);
-    if (error.stack) {
-      logToFile(`Stack trace: ${error.stack}`);
-    }
     console.error('Error extracting tasks:', error);
     return { success: false, error: error.message };
   }
 }
 
 // Function to extract tasks from messages grouped by author
-async function extractTasksByAuthor(messages) {
+function extractTasksByAuthor(messages) {
   const tasksByAuthor = {};
   
   // Convert messages collection to array and sort by time
@@ -4706,242 +4273,67 @@ async function extractTasksByAuthor(messages) {
     if (projectMatch && !tasksByAuthor[authorId].projectCode) {
       tasksByAuthor[authorId].projectCode = projectMatch[0].replace(/\s+/g, '').toUpperCase();
     }
-  }
-  
-  // Once we have collected all messages by author, use GPT to extract tasks
-  if (openai) {
-    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-      if (authorData.rawMessages.length > 0) {
-        try {
-          // Create a context string from all messages
-          const contextStr = authorData.rawMessages
-            .map(msg => `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`)
-            .join('\n\n');
-            
-          // Extract tasks using GPT-4o with context awareness
-          const extractedTasks = await extractTasksWithGPT(contextStr, authorData.author.username);
-          
-          if (extractedTasks && extractedTasks.length > 0) {
-            authorData.tasks = extractedTasks;
-            logToFile(`✅ Successfully extracted ${extractedTasks.length} tasks for ${authorData.author.tag} using GPT`);
-          } else {
-            // Fallback to regex extraction if GPT returns no tasks
-            const tasks = extractTasksFromContent(contextStr);
-            authorData.tasks = tasks;
-            logToFile(`ℹ️ Falling back to regex extraction for ${authorData.author.tag}: ${tasks.length} tasks found`);
-          }
-        } catch (error) {
-          logToFile(`❌ Error using GPT for task extraction: ${error.message}. Falling back to regex.`);
-          // Fallback to regex-based extraction for this user
-          for (const msg of authorData.rawMessages) {
-            const tasks = extractTasksFromContent(msg.content);
-            if (tasks.length > 0) {
-              authorData.tasks.push(...tasks);
-            }
-          }
-        }
-      }
-    }
-  } else {
-    // If OpenAI is not available, fall back to regex extraction
-    logToFile(`OpenAI client not available, using regex-based task extraction`);
-    for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
-      for (const msg of authorData.rawMessages) {
-        const tasks = extractTasksFromContent(msg.content);
-        if (tasks.length > 0) {
-          authorData.tasks.push(...tasks);
-        }
-      }
+    
+    // Extract tasks using various patterns
+    const tasks = extractTasksFromContent(content);
+    
+    // Add extracted tasks
+    if (tasks.length > 0) {
+      tasksByAuthor[authorId].tasks.push(...tasks);
     }
   }
   
   return tasksByAuthor;
 }
 
-// Function to extract tasks using GPT-4o
-async function extractTasksWithGPT(messageContent, username) {
-  try {
-    logToFile(`Attempting to extract tasks using GPT for user ${username}`);
-    const systemPrompt = `
-You are a task extraction assistant that identifies tasks and goals from Discord messages.
-Your role is to intelligently extract tasks while preserving their context and project associations.
-
-GUIDELINES:
-1. Preserve project context (e.g., "Storyn project (Sherlock)" should be part of the task context)
-2. Identify project codes like BC32, IB15, CL47 and keep them with related tasks
-3. Consider timeframes mentioned (e.g., "complete by 11:00") as part of the task, not separate tasks
-4. Group related bullet points under their common project or context
-5. Distinguish between actual tasks/to-dos and informational statements
-6. Preserve the hierarchical relationship between main tasks and subtasks
-7. Ignore greetings, casual chat, or non-task content
-8. Be generous in identifying tasks - if something could be a task, include it
-
-OUTPUT FORMAT:
-Return a JSON object with a "tasks" array of task strings:
-{
-  "tasks": [
-    "Project X: Task description with timeframe",
-    "Context Y: Specific action item",
-    ...
-  ]
-}
-
-The user will provide the message content to analyze.`;
-
-    const userPrompt = `Extract tasks from the following Discord messages by ${username}:\n\n${messageContent}`;
-
-    logToFile(`Sending request to OpenAI with ${messageContent.length} characters of content`);
-
-    // Call GPT-4o (or fall back to GPT-4 if available)
-    const modelToUse = 'gpt-4o';
-    const response = await openai.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.2, // Low temperature for more consistent results
-      response_format: { type: 'json_object' }
-    });
-
-    // Extract and parse the tasks
-    const content = response.choices[0]?.message?.content || '';
-    logToFile(`Received response from OpenAI (${content.length} characters)`);
-    
-    try {
-      // Parse JSON response
-      const parsedResponse = JSON.parse(content);
-      
-      // Return the tasks array or empty array if not found
-      const tasks = parsedResponse.tasks || [];
-      
-      if (tasks.length > 0) {
-        logToFile(`Successfully extracted ${tasks.length} tasks from GPT response`);
-        tasks.forEach(task => logToFile(`GPT task: ${task}`));
-        return tasks;
-      } else {
-        logToFile(`GPT returned zero tasks, trying alternative parsing methods`);
-      }
-    } catch (parseError) {
-      logToFile(`Error parsing GPT response as JSON: ${parseError.message}`);
-      logToFile(`Response content: ${content}`);
-      
-      // Try to extract tasks with regex as a fallback
-      logToFile(`Attempting to extract tasks via regex pattern matching`);
-      
-      // Try to extract arrays of items that look like JSON arrays
-      const arrayMatch = content.match(/\[\s*"(.+?)"\s*(?:,\s*"(.+?)"\s*)*\]/gs);
-      if (arrayMatch) {
-        logToFile(`Found array-like structure in response`);
-        try {
-          const arrayContent = arrayMatch[0];
-          const parsedArray = JSON.parse(arrayContent);
-          if (Array.isArray(parsedArray) && parsedArray.length > 0) {
-            logToFile(`Successfully parsed array with ${parsedArray.length} tasks`);
-            return parsedArray;
-          }
-        } catch (arrayParseError) {
-          logToFile(`Error parsing array structure: ${arrayParseError.message}`);
-        }
-      }
-      
-      // Try to extract tasks using quotes
-      const taskMatches = content.match(/"([^"]+)"/g);
-      if (taskMatches && taskMatches.length > 0) {
-        const extractedTasks = taskMatches.map(match => match.replace(/^"|"$/g, ''));
-        logToFile(`Extracted ${extractedTasks.length} tasks using quote pattern matching`);
-        return extractedTasks;
-      }
-      
-      // Try to extract tasks using bullet points
-      const bulletMatches = content.match(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)(.+?)(?=\n|$)/gm);
-      if (bulletMatches && bulletMatches.length > 0) {
-        const extractedTasks = bulletMatches.map(match => 
-          match.replace(/(?:^|\n)(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)/, '').trim()
-        );
-        logToFile(`Extracted ${extractedTasks.length} tasks using bullet point pattern matching`);
-        return extractedTasks;
-      }
-      
-      // If we still can't extract tasks, use our regex task extractor
-      logToFile(`Falling back to standard content task extraction`);
-      return extractTasksFromContent(content);
-    }
-    
-    // If we got this far with no tasks, use the regular task extractor
-    logToFile(`No tasks found in GPT response, falling back to content task extraction`);
-    return extractTasksFromContent(messageContent);
-  } catch (error) {
-    logToFile(`Error calling OpenAI for task extraction: ${error.message}`);
-    logToFile(`Falling back to content task extraction due to API error`);
-    return extractTasksFromContent(messageContent);
-  }
-}
-
 // Function to extract tasks from message content
 function extractTasksFromContent(content) {
   const tasks = [];
-  logToFile(`Analyzing content for tasks: ${content.substring(0, 100)}...`);
   
-  // Check for numbered lists (1. Task, 2. Task) - more flexible pattern
-  const numberedItems = content.match(/(?:^|\n)\s*\d+\s*[\)\.]\s*(.+?)(?=\n\s*\d+\s*[\)\.]\s*|\n\s*$|$)/gs);
+  // Check for numbered lists (1. Task, 2. Task)
+  const numberedItems = content.match(/\d+\s*[\)\.](.+?)(?=\n\d+\s*[\)\.]\s|\n\s*$|$)/gs);
   if (numberedItems) {
-    logToFile(`Found ${numberedItems.length} numbered items`);
     numberedItems.forEach(item => {
-      const taskText = item.replace(/^\s*\d+\s*[\)\.]\s*/, '').trim();
-      if (taskText) {
-        logToFile(`Adding numbered task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^\d+\s*[\)\.]\s*/, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
-  // Check for dash or bullet lists (-, •, *, etc)
-  const bulletItems = content.match(/(?:^|\n)\s*[-•*]\s+(.+?)(?=\n\s*[-•*]\s+|\n\s*$|$)/gs);
+  // Check for dash or bullet lists (- Task, • Task)
+  const bulletItems = content.match(/[-•*]\s+(.+?)(?=\n[-•*]\s|\n\s*$|$)/gs);
   if (bulletItems) {
-    logToFile(`Found ${bulletItems.length} bullet items`);
     bulletItems.forEach(item => {
-      const taskText = item.replace(/^\s*[-•*]\s+/, '').trim();
-      if (taskText) {
-        logToFile(`Adding bullet task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^[-•*]\s+/, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
   // Look for explicit task markers like "TODO:", "TASK:", etc.
-  const explicitTasks = content.match(/(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*(.+?)(?=\n|$)/gi);
+  const explicitTasks = content.match(/(?:TODO|TASK|GOAL):\s*(.+?)(?=\n|$)/gi);
   if (explicitTasks) {
-    logToFile(`Found ${explicitTasks.length} explicit tasks`);
     explicitTasks.forEach(item => {
-      const taskText = item.replace(/^(?:TODO|TASK|GOAL|need to|needs to|have to|should)(?::|to)?\s*/i, '').trim();
-      if (taskText) {
-        logToFile(`Adding explicit task: ${taskText}`);
-        tasks.push(taskText);
-      }
+      const taskText = item.replace(/^(?:TODO|TASK|GOAL):\s*/i, '').trim();
+      if (taskText) tasks.push(taskText);
     });
   }
   
   // Look for "goals" format like "Today's goals:"
-  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan") || content.toLowerCase().includes("todo") || content.toLowerCase().includes("to do")) {
-    logToFile(`Found goals/plans/todos section`);
+  if (content.toLowerCase().includes("goal") || content.toLowerCase().includes("plan")) {
     // Extract lines that look like tasks after "goals" or "plans" header
-    const goalMatch = content.match(/(?:today'?s?\s+(?:goals?|plans?|todos?|to\s+dos?)|goals?|plans?|todos?|to\s+dos?|plan\s+for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
+    const goalMatch = content.match(/(?:today'?s?\s+goals?|goals?|plans?|plan for)\s*:?\s*(?:\n|$)([\s\S]*)/i);
     if (goalMatch && goalMatch[1]) {
       const goalSection = goalMatch[1].trim();
       
       // Split into lines and process each line
       const lines = goalSection.split('\n');
-      logToFile(`Found ${lines.length} lines in goals section`);
       lines.forEach(line => {
         // Clean up the line
         let taskText = line.trim()
-          .replace(/^\s*[-•*]\s+/, '') // Remove bullet points
-          .replace(/^\s*\d+\s*[\)\.]\s*/, '') // Remove numbering
-          .replace(/^\s*[✓✔]\s*/, ''); // Remove checkmarks
+          .replace(/^[-•*]\s+/, '') // Remove bullet points
+          .replace(/^\d+\s*[\)\.]\s*/, '') // Remove numbering
+          .replace(/^[✓✔]\s*/, ''); // Remove checkmarks
         
-        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for|todos?|to\s+dos?)/i) && taskText.length > 3) {
-          logToFile(`Adding goal/plan task: ${taskText}`);
+        if (taskText && !taskText.match(/^(today'?s?\s+goals?|goals?|plans?|plan for)/i)) {
           tasks.push(taskText);
         }
       });
@@ -4951,7 +4343,6 @@ function extractTasksFromContent(content) {
   // Special handling for format like "BC32: MGX DRAFT / Clip Selection Finish all MGX BY EOD"
   const projectTaskMatch = content.match(/\b(BC|IB|CL)\s*(\d{2})\s*:\s*([\s\S]*?)(?=\n\s*(?:\b(?:BC|IB|CL)|$)|$)/gi);
   if (projectTaskMatch) {
-    logToFile(`Found ${projectTaskMatch.length} project-specific task sections`);
     projectTaskMatch.forEach(match => {
       const projectCode = match.match(/\b(BC|IB|CL)\s*(\d{2})\b/i)[0].replace(/\s+/g, '').toUpperCase();
       
@@ -4959,53 +4350,21 @@ function extractTasksFromContent(content) {
       const taskContent = match.replace(/\b(BC|IB|CL)\s*(\d{2})\s*:/i, '').trim();
       
       // Split by line breaks, slashes or other common separators
-      const taskParts = taskContent.split(/\n|\/|;|,/);
+      const taskParts = taskContent.split(/\n|\/|;/);
       
       taskParts.forEach(part => {
         const taskText = part.trim();
         if (taskText) {
-          const fullTask = `${projectCode}: ${taskText}`;
-          logToFile(`Adding project task: ${fullTask}`);
-          tasks.push(fullTask);
+          tasks.push(`${projectCode}: ${taskText}`);
         }
       });
     });
   }
   
-  // Treat lines with action verbs at the beginning as potential tasks
-  const actionLines = content.match(/(?:^|\n)\s*(?:finish|update|create|write|review|check|fix|implement|add|remove|change|prepare)\s+[^.,;:\n]+/gi);
-  if (actionLines) {
-    logToFile(`Found ${actionLines.length} action verb lines`);
-    actionLines.forEach(line => {
-      const taskText = line.trim();
-      if (taskText && !tasks.includes(taskText) && taskText.length > 5) {
-        logToFile(`Adding action verb task: ${taskText}`);
-        tasks.push(taskText);
-      }
-    });
-  }
-  
-  // Also consider any short lines (between 15-100 chars) that aren't already included as potential tasks
-  // This is a fallback to catch casual task descriptions
-  const lines = content.split('\n');
-  lines.forEach(line => {
-    const trimmedLine = line.trim();
-    if (trimmedLine.length > 15 && trimmedLine.length < 100 && 
-        !tasks.includes(trimmedLine) && 
-        !trimmedLine.startsWith('http') && 
-        !trimmedLine.match(/^\[[\d:]+\]/) && // skip timestamps
-        trimmedLine.match(/[a-z]/i)) { // ensure it has at least one letter
-      logToFile(`Adding fallback task: ${trimmedLine}`);
-      tasks.push(trimmedLine);
-    }
-  });
-  
-  const uniqueTasks = Array.from(new Set(tasks.filter(task => task.length > 0)));
-  logToFile(`Extracted ${uniqueTasks.length} total tasks from content`);
-  return uniqueTasks;
+  return tasks.filter(task => task.length > 0);
 }
 
-// Function to create individual Notion task pages
+// Function to create a Notion page with task checkboxes
 async function createNotionTaskPage(authorData) {
   try {
     const { author, tasks, projectCode, rawMessages } = authorData;
@@ -5016,7 +4375,7 @@ async function createNotionTaskPage(authorData) {
       return null;
     }
     
-    // Name aliases mapping for Discord usernames to actual names
+    // Name aliases mapping
     const nameAliases = {
       'ayoub_prods': 'Ayoub',
       'yovcheff.': 'Yovcho',
@@ -5029,100 +4388,107 @@ async function createNotionTaskPage(authorData) {
     // Get the proper name using the alias mapping, or use the original username if no alias exists
     const properName = nameAliases[author.username.toLowerCase()] || author.username;
     
+    logToFile(`Creating Notion page with ${tasks.length} tasks for ${properName}`);
+    
     // Get today's date in ISO format for the Date property
     const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
+    
+    // Always use just the person's name without the project code
+    // as requested, we don't want "CL27 - Ayoub's tasks" but just "Ayoub's tasks"
+    const title = `${properName}'s tasks`;
     
     // Use the specific database ID for tasks
     const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
     
-    // Store created pages
-    const createdPages = [];
-    
-    // Create a Notion page for each task
-    for (const taskText of tasks) {
-      try {
-        logToFile(`Creating Notion page for task: "${taskText}" assigned to ${properName}`);
-        
-        // Create the Notion page for this individual task
-        const response = await notion.pages.create({
-          parent: {
-            database_id: TASKS_DB_ID
-          },
-          properties: {
-            // Set the task text as the title
-            title: {
-              title: [
-                {
-                  text: {
-                    content: taskText
-                  }
-                }
-              ]
-            },
-            // Set today's date in the Date field
-            Date: {
-              date: {
-                start: todayISO
-              }
-            },
-            // Assign the proper team member using the Assignee property
-            Assignee: {
-              select: {
-                name: properName
-              }
-            },
-            // Set initial Progress status to "To Do"
-            Progress: {
-              select: {
-                name: "To Do"
+    // Create the Notion page
+    const response = await notion.pages.create({
+      parent: {
+        database_id: TASKS_DB_ID
+      },
+      properties: {
+        title: {
+          title: [
+            {
+              text: {
+                content: title
               }
             }
-          },
-          // Add the original message as context in the page content
-          children: [
-            {
-              object: "block",
-              type: "heading_3",
-              heading_3: {
-                rich_text: [
-                  {
-                    text: {
-                      content: "Original Messages"
-                    }
-                  }
-                ]
-              }
-            },
-            ...rawMessages.map(msg => ({
-              object: "block",
-              type: "paragraph",
-              paragraph: {
-                rich_text: [
-                  {
-                    text: {
-                      content: `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`
-                    }
-                  }
-                ]
-              }
-            }))
           ]
-        });
-        
-        createdPages.push(response);
-        logToFile(`✅ Successfully created task page: "${taskText}" for ${properName}. Page ID: ${response.id}`);
-      }
-      catch (taskError) {
-        logToFile(`❌ Error creating task page for "${taskText}": ${taskError.message}`);
-        // Continue with other tasks even if one fails
-      }
-    }
+        },
+        // Add Date property with today's date
+        Date: {
+          date: {
+            start: todayISO
+          }
+        }
+      },
+      children: [
+        {
+          object: "block",
+          type: "heading_2",
+          heading_2: {
+            rich_text: [
+              {
+                text: {
+                  content: "Tasks"
+                }
+              }
+            ]
+          }
+        },
+        ...tasks.map(task => ({
+          object: "block",
+          type: "to_do",
+          to_do: {
+            rich_text: [
+              {
+                text: {
+                  content: task
+                }
+              }
+            ],
+            checked: false
+          }
+        })),
+        {
+          object: "block",
+          type: "divider",
+          divider: {}
+        },
+        {
+          object: "block",
+          type: "heading_3",
+          heading_3: {
+            rich_text: [
+              {
+                text: {
+                  content: "Original Messages"
+                }
+              }
+            ]
+          }
+        },
+        ...rawMessages.map(msg => ({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [
+              {
+                text: {
+                  content: `[${moment(msg.timestamp).tz(TZ).format('HH:mm')}] ${msg.content}`
+                }
+              }
+            ]
+          }
+        }))
+      ]
+    });
     
-    logToFile(`Created ${createdPages.length} individual task pages for ${properName}`);
-    return createdPages;
+    logToFile(`✅ Successfully created Notion page for ${properName} with ${tasks.length} tasks. Page ID: ${response.id}`);
+    return response;
     
   } catch (error) {
-    logToFile(`❌ Error creating task pages: ${error.message}`);
+    logToFile(`❌ Error creating Notion page: ${error.message}`);
     if (error.body) {
       logToFile(`Error details: ${JSON.stringify(error.body)}`);
     }
@@ -5130,431 +4496,65 @@ async function createNotionTaskPage(authorData) {
   }
 }
 
-// NOTE: The duplicate command handler for /extract-tasks was removed from here
-// This was causing the issue with tasks not being properly created
-// The main handler is already defined at line ~985
+// Find where the registerCommandsOnStartup function is being called
+// Right after this part: "// Register commands on startup"
+// add the following extra command registration:
 
+// Handle additional commands (before or after other slash command handlers)
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
 
+  const { commandName } = interaction;
+  
+  // Handle the /extract-tasks command
+  if (commandName === 'extract-tasks') {
+    try {
+      // Always use ephemeral replies for this command
+      await interaction.deferReply({ ephemeral: true });
+      
+      // Run the task extraction
+      await interaction.editReply('⏳ Extracting tasks from morning messages...');
+      
+      const result = await extractTasksFromMorningMessages();
+      
+      if (!result.success) {
+        return interaction.editReply(`❌ Error extracting tasks: ${result.error}`);
+      }
+      
+      if (result.messageCount === 0) {
+        return interaction.editReply('No messages found from this morning (since 7 AM).');
+      }
+      
+      // Create embed for response
+      const embed = new EmbedBuilder()
+        .setTitle('Task Extraction Complete')
+        .setColor(0x00AA00)
+        .setDescription(`I've extracted tasks from this morning's messages and created Notion pages with checkboxes.`)
+        .addFields(
+          { name: 'Messages Processed', value: `${result.messageCount}`, inline: true },
+          { name: 'Tasks Extracted', value: `${result.taskCount}`, inline: true },
+          { name: 'Notion Pages Created', value: `${result.pagesCreated}`, inline: true },
+          { name: 'Team Members', value: `${result.authors}`, inline: true }
+        )
+        .setTimestamp();
+      
+      // Send the response
+      await interaction.editReply({ 
+        content: '✅ Task extraction completed successfully!', 
+        embeds: [embed] 
+      });
+      
+    } catch (error) {
+      logToFile(`Error in /extract-tasks command: ${error.message}`);
+      await interaction.editReply(`❌ Error extracting tasks: ${error.message}`);
+    }
+  }
+  
+  // Other command handlers continue here...
+});
 
 // The duplicate extract-tasks command registration code below has been removed
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
-
-// Add this function after the findProjectByQuery function
-
-// Function to fetch project deadlines from Notion
-async function fetchProjectDeadlines(prefix = null, projectCode = null) {
-  try {
-    if (!notion) {
-      logToFile('Notion client not initialized');
-      return { success: false, error: 'Notion integration is not configured' };
-    }
-    
-    // Get database ID from environment variable or global variable
-    const databaseId = process.env.NOTION_DB_ID || process.env.NOTION_DATABASE_ID || DB;
-    
-    if (!databaseId) {
-      logToFile('ERROR: Notion database ID is undefined. Check your environment variables.');
-      return { success: false, error: 'Notion database ID is undefined' };
-    }
-    
-    logToFile(`Fetching project deadlines for ${projectCode || prefix || 'all projects'}`);
-    
-    // Create filter based on input
-    let filter = {};
-    
-    if (projectCode) {
-      // If a specific project code is provided, filter by that
-      filter = {
-        property: "Project name",
-        title: {
-          contains: projectCode
-        }
-      };
-      logToFile(`Filtering by project code: ${projectCode}`);
-    } else if (prefix) {
-      // If a prefix is provided (CL, IB, BC), filter by that
-      filter = {
-        property: "Project name",
-        title: {
-          contains: prefix
-        }
-      };
-      logToFile(`Filtering by prefix: ${prefix}`);
-    }
-    
-    // Query the database
-    const response = await notion.databases.query({
-      database_id: databaseId,
-      filter: Object.keys(filter).length > 0 ? filter : undefined,
-      sorts: [
-        {
-          property: "Date",
-          direction: "ascending"
-        }
-      ],
-      page_size: 100
-    });
-    
-    logToFile(`Found ${response.results.length} projects`);
-    
-    // Extract relevant information from each project
-    const projects = [];
-    
-    for (const page of response.results) {
-      try {
-        // Extract project code from title
-        const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
-        const codeMatch = projectName.match(/(CL|IB|BC)\d{2}/i);
-        const code = codeMatch ? codeMatch[0].toUpperCase() : projectName;
-        
-        // Skip if we can't extract a code and no specific code was requested
-        if (!code && !projectCode) continue;
-        
-        // Get various date properties
-        const mainDate = page.properties.Date?.date?.start || null;
-        const currentStageDate = page.properties["Date for current stage"]?.date?.start || null;
-        
-        // Format dates if they exist
-        const formattedMainDate = mainDate ? new Date(mainDate).toLocaleDateString('en-US', {
-          month: 'short', day: 'numeric', year: 'numeric'
-        }) : 'Not set';
-        
-        const formattedStageDate = currentStageDate ? new Date(currentStageDate).toLocaleDateString('en-US', {
-          month: 'short', day: 'numeric', year: 'numeric'
-        }) : 'Not set';
-        
-        // Get status
-        let status = 'Not set';
-        if (page.properties.Status?.status?.name) {
-          status = page.properties.Status.status.name;
-        } else if (page.properties.Status?.select?.name) {
-          status = page.properties.Status.select.name;
-        }
-        
-        // Add project to the result list
-        projects.push({
-          code,
-          name: projectName,
-          mainDeadline: mainDate,
-          formattedMainDeadline: formattedMainDate,
-          stageDeadline: currentStageDate,
-          formattedStageDeadline: formattedStageDate,
-          status,
-          notionUrl: getNotionPageUrl(page.id),
-          pageId: page.id
-        });
-      } catch (projectError) {
-        logToFile(`Error processing project: ${projectError.message}`);
-        // Continue with next project
-      }
-    }
-    
-    // Sort projects by main deadline
-    projects.sort((a, b) => {
-      // If both have deadlines, sort by date
-      if (a.mainDeadline && b.mainDeadline) {
-        return new Date(a.mainDeadline) - new Date(b.mainDeadline);
-      }
-      // If only one has a deadline, it comes first
-      if (a.mainDeadline) return -1;
-      if (b.mainDeadline) return 1;
-      // If neither has a deadline, sort by code
-      return a.code.localeCompare(b.code);
-    });
-    
-    return { success: true, projects };
-    
-  } catch (error) {
-    logToFile(`Error fetching project deadlines: ${error.message}`);
-    return { success: false, error: error.message };
-  }
-}
-
-// Function to update tasks based on end-of-day messages
-async function checkEndOfDayTaskUpdates() {
-  try {
-    logToFile(`=== Starting End-of-Day Task Update Check ===`);
-    
-    // Get the channel
-    const channel = client.channels.cache.get(MESSAGE_BACKUP_CHANNEL_ID);
-    if (!channel) {
-      logToFile(`❌ Error: Channel with ID ${MESSAGE_BACKUP_CHANNEL_ID} not found!`);
-      return { success: false, error: "Channel not found" };
-    }
-    
-    logToFile(`Found channel #${channel.name} (${channel.id})`);
-    
-    // Calculate today's time range in the configured timezone
-    const now = new Date();
-    const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
-    
-    // Set the time range (16:00 to 20:00)
-    const startTime = new Date(today);
-    startTime.setHours(16, 0, 0, 0);
-    
-    const endTime = new Date(today);
-    endTime.setHours(20, 0, 0, 0);
-    
-    // Convert to UTC for comparison with Discord timestamps
-    const utcStartTime = new Date(startTime.toLocaleString('en-US', { timeZone: 'UTC' }));
-    const utcEndTime = new Date(endTime.toLocaleString('en-US', { timeZone: 'UTC' }));
-    
-    // If current time is before 16:00, skip the check
-    if (now < utcStartTime) {
-      logToFile(`Current time is before 16:00 ${TZ}, skipping end-of-day task check`);
-      return { success: true, skipped: true };
-    }
-    
-    logToFile(`Collecting messages between ${utcStartTime.toISOString()} and ${utcEndTime.toISOString()} (16:00-20:00 in ${TZ})`);
-    
-    try {
-      // Fetch messages from the channel
-      const messages = await channel.messages.fetch({ limit: 100 });
-      
-      // Filter messages within the time range
-      const recentMessages = messages.filter(msg => {
-        const msgTime = new Date(msg.createdAt);
-        return msgTime >= utcStartTime && msgTime <= utcEndTime;
-      });
-      
-      logToFile(`Found ${recentMessages.size} messages sent between 16:00-20:00`);
-      
-      if (recentMessages.size === 0) {
-        logToFile(`No messages found in the specified time range.`);
-        return { success: true, messageCount: 0, updatedTasks: 0 };
-      }
-      
-      // Analyze messages to find completed tasks
-      // First, extract tasks by author
-      const tasksByAuthor = extractTasksByAuthor(recentMessages);
-      
-      // Need to query the Notion database to get all tasks for today
-      if (!notion) {
-        logToFile(`❌ Notion client not initialized`);
-        return { success: false, error: "Notion not initialized" };
-      }
-      
-      // Use the specific database ID for tasks
-      const TASKS_DB_ID = '1e787c20070a80319db0f8a08f255c3c';
-      
-      // Get today's date in ISO format
-      const todayISO = moment().tz(TZ).format('YYYY-MM-DD');
-      
-      // Query Notion for tasks created today
-      const taskResponse = await notion.databases.query({
-        database_id: TASKS_DB_ID,
-        filter: {
-          property: "Date",
-          date: {
-            equals: todayISO
-          }
-        }
-      });
-      
-      logToFile(`Found ${taskResponse.results.length} tasks created today in Notion`);
-      
-      // Check for task completion phrases in messages
-      const completionPhrases = [
-        "done", "completed", "finished", "fixed", "resolved", "complete",
-        "did it", "closed", "done with", "accomplished"
-      ];
-      
-      let tasksUpdated = 0;
-      
-      // For each task in Notion
-      for (const taskPage of taskResponse.results) {
-        // Get task title and assignee
-        const taskTitle = taskPage.properties.title?.title?.[0]?.text?.content || 
-                         taskPage.properties.Title?.title?.[0]?.text?.content || "";
-        
-        if (!taskTitle) continue;
-        
-        // Get current progress status
-        const currentProgress = taskPage.properties.Progress?.select?.name || "";
-        
-        // Skip if already marked as Done
-        if (currentProgress === "Done") continue;
-        
-        // Check if any message indicates this task is complete
-        const isCompleted = [...recentMessages.values()].some(msg => {
-          const content = msg.content.toLowerCase();
-          
-          // Check if the message contains the task name or a close match
-          const containsTaskReference = content.includes(taskTitle.toLowerCase()) || 
-                                       // Check for partial matches with at least 5 characters
-                                       (taskTitle.length > 5 && content.includes(taskTitle.substring(0, Math.floor(taskTitle.length * 0.7)).toLowerCase()));
-          
-          if (!containsTaskReference) return false;
-          
-          // Check if any completion phrase is in the message
-          return completionPhrases.some(phrase => content.includes(phrase.toLowerCase()));
-        });
-        
-        if (isCompleted) {
-          // Update the task status to Done
-          try {
-            await notion.pages.update({
-              page_id: taskPage.id,
-              properties: {
-                Progress: {
-                  select: {
-                    name: "Done"
-                  }
-                }
-              }
-            });
-            
-            logToFile(`✅ Updated task "${taskTitle}" to Done`);
-            tasksUpdated++;
-          } catch (updateError) {
-            logToFile(`❌ Error updating task "${taskTitle}": ${updateError.message}`);
-          }
-        }
-      }
-      
-      logToFile(`✅ End-of-day task check completed: Updated ${tasksUpdated} tasks to Done`);
-      
-      return {
-        success: true,
-        messageCount: recentMessages.size,
-        updatedTasks: tasksUpdated
-      };
-      
-    } catch (fetchError) {
-      logToFile(`❌ Error fetching messages: ${fetchError.message}`);
-      throw fetchError;
-    }
-  } catch (error) {
-    logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
-    console.error('Error checking end-of-day task updates:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Add this near the top of the file with other requires
-// path is already required at the top of the file
-
-// Add this after other client events but before client.login
-// Real-time message collection for knowledge assistant
-const BACKUPS_DIR = path.join(__dirname, 'backups');
-const RECENT_MESSAGES_LIMIT = 1000; // Keep the most recent messages in memory
-const recentMessages = [];
-
-// Check if backups directory exists
-if (!fs.existsSync(BACKUPS_DIR)) {
-  fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-  console.log(`Created backups directory: ${BACKUPS_DIR}`);
-}
-
-// Function to save recent messages to file periodically
-function saveRecentMessages() {
-  try {
-    // Only save if we have messages
-    if (recentMessages.length === 0) return;
-    
-    // Group messages by guild
-    const messagesByGuild = {};
-    recentMessages.forEach(msg => {
-      if (!messagesByGuild[msg.guildId]) {
-        messagesByGuild[msg.guildId] = {
-          guildId: msg.guildId,
-          guildName: msg.guildName,
-          backupDate: new Date().toISOString(),
-          messages: []
-        };
-      }
-      messagesByGuild[msg.guildId].messages.push(msg);
-    });
-    
-    // Save each guild's messages to a file
-    Object.values(messagesByGuild).forEach(guildData => {
-      const now = new Date();
-      const dateString = now.toISOString().split('T')[0]; // YYYY-MM-DD
-      const filename = `${guildData.guildName.replace(/[^a-z0-9]/gi, '_')}-realtime-${dateString}.json`;
-      const filePath = path.join(BACKUPS_DIR, filename);
-      
-      guildData.messageCount = guildData.messages.length;
-      fs.writeFileSync(filePath, JSON.stringify(guildData, null, 2));
-      console.log(`Saved ${guildData.messages.length} recent messages from ${guildData.guildName}`);
-    });
-    
-    // Clear the array after saving
-    recentMessages.length = 0;
-  } catch (error) {
-    console.error(`Error saving recent messages: ${error.message}`);
-  }
-}
-
-// Save messages every hour
-setInterval(saveRecentMessages, 60 * 60 * 1000);
-
-// Save messages when the bot shuts down
-process.on('SIGINT', () => {
-  console.log('Saving recent messages before shutdown...');
-  saveRecentMessages();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('Saving recent messages before shutdown...');
-  saveRecentMessages();
-  process.exit(0);
-});
-
-// Collect messages in real-time
-client.on('messageCreate', message => {
-  // Skip bot messages
-  if (message.author.bot) return;
-  
-  // Skip messages without content
-  if (!message.content.trim()) return;
-  
-  // Store important message information
-  const storedMessage = {
-    id: message.id,
-    content: message.content,
-    author: {
-      id: message.author.id,
-      username: message.author.username,
-      tag: message.author.tag
-    },
-    channelId: message.channel.id,
-    channelName: message.channel.name,
-    guildId: message.guild?.id,
-    guildName: message.guild?.name,
-    timestamp: message.createdAt.toISOString(),
-    attachments: Array.from(message.attachments.values()).map(a => a.url)
-  };
-  
-  // Add to recent messages array (prepend)
-  recentMessages.unshift(storedMessage);
-  
-  // Limit the array size
-  if (recentMessages.length > RECENT_MESSAGES_LIMIT) {
-    recentMessages.pop();
-  }
-});
-
-// Update the Knowledge Assistant to use real-time messages
-// This code should go in knowledge-assistant.js, but for demonstration:
-
-/* 
-// Add this function to knowledge-assistant.js
-function loadRecentMessages() {
-  try {
-    const recentMessagesFromBot = global.recentMessages || [];
-    return recentMessagesFromBot;
-  } catch (error) {
-    logToFile(`Error loading recent messages: ${error.message}`);
-    return [];
-  }
-}
-
-// Then modify answerQuestion to combine both recent and backed up messages
-*/
-
-// Expose the recent messages array globally for the knowledge assistant
-global.recentMessages = recentMessages;
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl };
