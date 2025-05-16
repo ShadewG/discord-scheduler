@@ -4,20 +4,23 @@ const path = require('path');
 
 // Initialize Notion client (ensure NOTION_KEY is available in your environment)
 const notion = process.env.NOTION_KEY ? new NotionClient({ auth: process.env.NOTION_KEY }) : null;
+if (notion) {
+  console.log('[NotionUtils] Notion client initialized successfully.');
+} else {
+  console.error('[NotionUtils] FAILED to initialize Notion client. NOTION_KEY might be missing or invalid.');
+}
 
 // Database IDs
 const PROJECTS_DATABASE_ID = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID;
 const TASKS_DATABASE_ID = '1e787c20070a80319db0f8a08f255c3c'; // As specified by user
+console.log(`[NotionUtils] Using PROJECTS_DATABASE_ID: ${PROJECTS_DATABASE_ID}`);
+console.log(`[NotionUtils] Using TASKS_DATABASE_ID: ${TASKS_DATABASE_ID}`);
 
 // Helper function for logging (if you have one, otherwise implement or remove)
 function logToFile(message) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] [NotionUtils] ${message}\n`;
-  // Assuming a logToFile function exists in your main bot file or a shared utility
-  // If not, you might want to console.log or use a simple fs.appendFileSync here
   try {
-    // This is a placeholder, adjust if your main logToFile is accessible differently
-    // or implement a local one.
     fs.appendFileSync(path.join(__dirname, 'bot.log'), logMessage);
   } catch (e) {
     console.log(logMessage.trim());
@@ -43,32 +46,36 @@ async function fetchActiveProjectsForUser(notionProjectOwnerName) {
     return [];
   }
 
+  const filter = {
+    and: [
+      {
+        property: 'Project Owner',
+        select: { 
+          equals: notionProjectOwnerName,
+        },
+      },
+      {
+        property: 'Status', 
+        status: { // Assumes 'Status' is a STATUS type property in Notion
+          does_not_equal: 'Done',
+        },
+      },
+        {
+        property: 'Status',
+        status: { // Assumes 'Status' is a STATUS type property in Notion
+          does_not_equal: 'Archived',
+        },
+      }
+    ],
+  };
+
   try {
-    logToFile(`Fetching projects for Project Owner: ${notionProjectOwnerName}`);
+    logToFile(`Fetching projects for Project Owner: ${notionProjectOwnerName} using DB ID: ${PROJECTS_DATABASE_ID}`);
+    logToFile(`Projects filter: ${JSON.stringify(filter, null, 2)}`);
+    
     const response = await notion.databases.query({
       database_id: PROJECTS_DATABASE_ID,
-      filter: {
-        and: [
-          {
-            property: 'Project Owner', // Confirmed as Select property by user
-            select: { // Changed from 'people' to 'select'
-              equals: notionProjectOwnerName,
-            },
-          },
-          {
-            property: 'Status',
-            status: {
-              does_not_equal: 'Done',
-            },
-          },
-           {
-            property: 'Status',
-            status: {
-              does_not_equal: 'Archived',
-            },
-          }
-        ],
-      },
+      filter: filter,
       sorts: [
         {
           property: 'Project name',
@@ -77,8 +84,13 @@ async function fetchActiveProjectsForUser(notionProjectOwnerName) {
       ],
     });
 
+    logToFile(`Raw projects response for ${notionProjectOwnerName} received ${response.results.length} items.`);
+    if (response.results.length > 0) {
+        logToFile(`First project raw properties for ${notionProjectOwnerName}: ${JSON.stringify(response.results[0].properties, null, 2)}`);
+    }
+
     const projects = response.results.map(page => {
-      const projectNameProperty = page.properties['Project name'] || page.properties['Name']; // Common names for title
+      const projectNameProperty = page.properties['Project name'] || page.properties['Name'];
       return {
         id: page.id,
         name: projectNameProperty?.title?.[0]?.plain_text || 'Unnamed Project',
@@ -89,7 +101,7 @@ async function fetchActiveProjectsForUser(notionProjectOwnerName) {
     logToFile(`Found ${projects.length} active projects for ${notionProjectOwnerName}.`);
     return projects;
   } catch (error) {
-    logToFile(`Error fetching projects for ${notionProjectOwnerName}: ${error.message}`);
+    logToFile(`Error fetching projects for ${notionProjectOwnerName}: ${error.message}\nStack: ${error.stack}`);
     console.error(`Error fetching projects for ${notionProjectOwnerName}:`, error);
     return [];
   }
@@ -114,30 +126,39 @@ async function fetchActiveTasksForUser(notionTaskAssigneeName) {
     return [];
   }
 
+  const filter = {
+    and: [
+      {
+        property: 'Assignee', 
+        select: { // Assumes 'Assignee' is a SELECT type property
+          equals: notionTaskAssigneeName,
+        },
+      },
+      {
+        property: 'Progress', 
+        select: { // Assumes 'Progress' is a SELECT type property
+          does_not_equal: 'Done',
+        },
+      },
+    ],
+  };
+
   try {
-    logToFile(`Fetching tasks for Assignee: ${notionTaskAssigneeName}`);
+    logToFile(`Fetching tasks for Assignee: ${notionTaskAssigneeName} using DB ID: ${TASKS_DATABASE_ID}`);
+    logToFile(`Tasks filter: ${JSON.stringify(filter, null, 2)}`);
+
     const response = await notion.databases.query({
       database_id: TASKS_DATABASE_ID,
-      filter: {
-        and: [
-          {
-            property: 'Assignee', // Assuming this is the correct property name
-            select: { // Or 'people' if it's a person property
-              equals: notionTaskAssigneeName,
-            },
-          },
-          {
-            property: 'Progress', // Assuming this is the status property for tasks
-            select: { // Or 'status' if it's a status property
-              does_not_equal: 'Done',
-            },
-          },
-        ],
-      },
+      filter: filter,
     });
 
+    logToFile(`Raw tasks response for ${notionTaskAssigneeName} received ${response.results.length} items.`);
+    if (response.results.length > 0) {
+        logToFile(`First task raw properties for ${notionTaskAssigneeName}: ${JSON.stringify(response.results[0].properties, null, 2)}`);
+    }
+
     const tasks = response.results.map(page => {
-      const taskNameProperty = page.properties['title'] || page.properties['Name'] || page.properties['Task']; // Common names for task title
+      const taskNameProperty = page.properties['title'] || page.properties['Name'] || page.properties['Task'];
       return {
         id: page.id,
         name: taskNameProperty?.title?.[0]?.plain_text || 'Unnamed Task',
@@ -148,7 +169,7 @@ async function fetchActiveTasksForUser(notionTaskAssigneeName) {
     logToFile(`Found ${tasks.length} active tasks for ${notionTaskAssigneeName}.`);
     return tasks;
   } catch (error) {
-    logToFile(`Error fetching tasks for ${notionTaskAssigneeName}: ${error.message}`);
+    logToFile(`Error fetching tasks for ${notionTaskAssigneeName}: ${error.message}\nStack: ${error.stack}`);
     console.error(`Error fetching tasks for ${notionTaskAssigneeName}:`, error);
     return [];
   }
