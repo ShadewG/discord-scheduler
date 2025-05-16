@@ -10,6 +10,7 @@ const TZ = 'Europe/Berlin';
 const moment = require('moment-timezone');
 const { fetchActiveProjectsForUser, fetchActiveTasksForUser } = require('./notion_utils'); // Import Notion utility functions
 const { OpenAI } = require('openai'); // Import OpenAI
+const { logToFile } = require('./log_utils');
 
 // Configure OpenAI client
 let openai = null;
@@ -30,84 +31,116 @@ try {
 const STAFF_AVAILABILITY = [
   {
     name: "Armin",
-    discordUserId: "186424377993068544", // Atom
-    notionProjectOwnerName: "Armin",
-    notionTaskAssigneeName: "Armin",
+    discordUserId: "1032968395670880256", // Added based on previous user input
+    notionProjectOwnerName: "Armin", // Assuming same name for Notion
+    notionTaskAssigneeName: "Armin", // Assuming same name for Notion
+    workHours: [
+      { day: "Mon", start: "9:00", end: "17:30" },
+      { day: "Tue", start: "9:00", end: "17:30" },
+      { day: "Wed", start: "9:00", end: "17:30" },
+      { day: "Thu", start: "9:00", end: "17:30" },
+      { day: "Fri", start: "9:00", end: "17:30" },
+    ],
     timezone: "Europe/Berlin",
-    startHour: 9,
-    endHour: 17.5,  // 17:30
-    daysOff: [0, 6] // Sunday, Saturday
   },
   {
     name: "Amin",
     discordUserId: "332227757717061653",
-    notionProjectOwnerName: "Amin",
+    notionProjectOwnerName: "Amin", 
     notionTaskAssigneeName: "Amin",
+    workHours: [
+      { day: "Mon", start: "7:00", end: "15:30" },
+      { day: "Tue", start: "7:00", end: "15:30" },
+      { day: "Wed", start: "7:00", end: "15:30" },
+      { day: "Thu", start: "7:00", end: "15:30" },
+      { day: "Fri", start: "7:00", end: "15:30" },
+    ],
     timezone: "Europe/Berlin",
-    startHour: 7,
-    endHour: 15.5,  // 15:30
-    daysOff: [0, 6]
   },
   {
     name: "Ayoub",
-    discordUserId: "1033050881798709378", // Updated
-    notionProjectOwnerName: "Ayoub", // Assuming this is correct
-    notionTaskAssigneeName: "Ayoub", // Assuming this is correct
+    discordUserId: "1033050881798709378", 
+    notionProjectOwnerName: "Ayoub",
+    notionTaskAssigneeName: "Ayoub",
+    workHours: [
+      { day: "Mon", start: "9:00", end: "17:30" },
+      { day: "Tue", start: "9:00", end: "17:30" },
+      { day: "Wed", start: "9:00", end: "17:30" },
+      { day: "Thu", start: "9:00", end: "17:30" },
+      { day: "Fri", start: "9:00", end: "17:30" },
+    ],
     timezone: "Europe/Berlin",
-    startHour: 9,
-    endHour: 17.5,  // 17:30
-    daysOff: [0, 6]
   },
   {
-    name: "Jokubas", // Wise
+    name: "Jokubas",
     discordUserId: "698791305840558181",
-    notionProjectOwnerName: "Wise",
-    notionTaskAssigneeName: "Wise",
-    timezone: "Europe/Berlin",
-    startHour: 9,
-    endHour: 17.5,  // 17:30
-    daysOff: [0, 6]
+    notionProjectOwnerName: "Wise", // Jokubas is Wise for Project Owner
+    notionTaskAssigneeName: "Wise", // Jokubas is Wise for Task Assignee
+    workHours: [
+      { day: "Mon", start: "9:00", end: "17:30" },
+      { day: "Tue", start: "9:00", end: "17:30" },
+      { day: "Wed", start: "9:00", end: "17:30" },
+      { day: "Thu", start: "9:00", end: "17:30" },
+      { day: "Fri", start: "9:00", end: "17:30" },
+    ],
+    timezone: "Europe/Vilnius",
   },
   {
-    name: "Dominik", // Represents Atom for Project Owner
+    name: "Dominik",
     discordUserId: "186424377993068544", // Atom's ID
-    notionProjectOwnerName: "Atom", // Updated
-    notionTaskAssigneeName: "Dominik", // Updated
+    notionProjectOwnerName: "Atom",   // Dominik is Atom for Project Owner
+    notionTaskAssigneeName: "Dominik", // Dominik is Dominik for Task Assignee
+    workHours: [
+      { day: "Mon", start: "9:00", end: "17:30" },
+      { day: "Tue", start: "9:00", end: "17:30" },
+      { day: "Wed", start: "9:00", end: "17:30" },
+      { day: "Thu", start: "9:00", end: "17:30" },
+      { day: "Fri", start: "9:00", end: "17:30" },
+    ],
     timezone: "Europe/Berlin",
-    startHour: 9,
-    endHour: 17.5,  // 17:30
-    daysOff: [0, 6]
   },
   {
     name: "Yovcho",
     discordUserId: "826463354598981643",
     notionProjectOwnerName: "Yovcho",
     notionTaskAssigneeName: "Yovcho",
-    timezone: "Europe/Berlin",
-    startHour: 9,
-    endHour: 17.5,  // 17:30
-    daysOff: [0, 6]
+    workHours: [
+      { day: "Mon", start: "9:00", end: "17:30" },
+      { day: "Tue", start: "9:00", end: "17:30" },
+      { day: "Wed", start: "9:00", end: "17:30" },
+      { day: "Thu", start: "9:00", end: "17:30" },
+      { day: "Fri", start: "9:00", end: "17:30" },
+    ],
+    timezone: "Europe/Sofia",
   },
   {
-    name: "Austin", // Represents Suki for Notion lookup
+    name: "Austin",
     discordUserId: "987596470272278569", // Suki's ID
-    notionProjectOwnerName: "Suki", // Updated
-    notionTaskAssigneeName: "Suki", // Updated
-    timezone: "Europe/Berlin",
-    startHour: 14.5, // 14:30
-    endHour: 23,
-    daysOff: [0, 6]
+    notionProjectOwnerName: "Suki",     // Austin is Suki for Notion
+    notionTaskAssigneeName: "Suki",     // Austin is Suki for Notion
+    workHours: [
+      { day: "Mon", start: "14:30", end: "23:00" },
+      { day: "Tue", start: "14:30", end: "23:00" },
+      { day: "Wed", start: "14:30", end: "23:00" },
+      { day: "Thu", start: "14:30", end: "23:00" },
+      { day: "Fri", start: "14:30", end: "23:00" },
+    ],
+    timezone: "America/Denver", // MDT, which is UTC-6
   },
   {
-    name: "Dreams", // Represents Nicholas Rice
-    discordUserId: "122104719513485314", // Updated
-    notionProjectOwnerName: "Nicholas Rice", // Updated
-    notionTaskAssigneeName: "Nicholas Rice", // Updated
-    timezone: "Europe/Berlin",
-    startHour: 17,
-    endHour: 23,
-    daysOff: [0, 6]
-  }
+    name: "Dreams", // Nicholas Rice
+    discordUserId: "122104719513485314",
+    notionProjectOwnerName: "Nicholas Rice", // Notion name is Nicholas Rice
+    notionTaskAssigneeName: "Nicholas Rice", // Notion name is Nicholas Rice
+    workHours: [
+      { day: "Mon", start: "17:00", end: "23:00" }, 
+      { day: "Tue", start: "17:00", end: "23:00" },
+      { day: "Wed", start: "17:00", end: "23:00" },
+      { day: "Thu", start: "17:00", end: "23:00" },
+      { day: "Fri", start: "17:00", end: "23:00" },
+    ],
+    timezone: "America/New_York", // EDT, which is UTC-4
+  },
 ];
 
 /**
@@ -167,17 +200,17 @@ function getCurrentDayOfWeek() {
  * @returns {boolean} True if staff is currently active
  */
 function isStaffActive(staff) {
-  const localTime = moment().tz(staff.timezone);
-  const dayOfWeek = localTime.day(); // 0-6, starting with Sunday
-  const hour = localTime.hour();
-  
-  // Check if today is a day off
-  if (staff.daysOff && staff.daysOff.includes(dayOfWeek)) {
-    return false;
+  const now = moment().tz(staff.timezone);
+  const currentDay = now.format("ddd"); // Mon, Tue, etc.
+  const currentTime = now.format("HH:mm");
+
+  const todayWorkHours = staff.workHours.find(wh => wh.day === currentDay);
+
+  if (!todayWorkHours) {
+    return false; // Not scheduled to work today
   }
-  
-  // Check if current hour is within working hours
-  return hour >= staff.startHour && hour < staff.endHour;
+
+  return currentTime >= todayWorkHours.start && currentTime <= todayWorkHours.end;
 }
 
 /**
@@ -187,22 +220,21 @@ function isStaffActive(staff) {
  */
 function getTimeLeftInShift(staff) {
   if (!isStaffActive(staff)) {
-    return "Offline";
+    return "Not currently working";
   }
-  
-  const localTime = moment().tz(staff.timezone);
-  const now = localTime.hour() * 60 + localTime.minute();
-  const shiftEnd = staff.endHour * 60;
-  const minutesLeft = shiftEnd - now;
-  
-  const hours = Math.floor(minutesLeft / 60);
-  const minutes = minutesLeft % 60;
-  
-  if (hours > 0) {
-    return `${hours}h ${minutes}m left`;
-  } else {
-    return `${minutes}m left`;
-  }
+
+  const now = moment().tz(staff.timezone);
+  const currentDay = now.format("ddd");
+  const todayWorkHours = staff.workHours.find(wh => wh.day === currentDay);
+
+  const endTime = moment.tz(`${now.format("YYYY-MM-DD")} ${todayWorkHours.end}`, staff.timezone);
+  const diff = moment.duration(endTime.diff(now));
+
+  const hours = Math.floor(diff.asHours());
+  const minutes = diff.minutes();
+
+  if (hours < 0 || minutes < 0) return "Shift ended"; // Should not happen if isStaffActive is true
+  return `${hours}h ${minutes}m left`;
 }
 
 /**
@@ -217,24 +249,24 @@ function createTimeProgressBar(staff) {
   const min = localTime.minute();
   
   // Not a working day
-  if (staff.daysOff && staff.daysOff.includes(dayOfWeek)) {
-    return `${staff.timezone}: Off today`;
+  if (staff.workHours.length === 0) {
+    return `${staff.timezone}: No schedule defined`;
   }
   
   // Get local time formatted
   const timeStr = localTime.format("HH:mm");
   
   // Calculate progress through shift
-  const totalMinutesInShift = (staff.endHour - staff.startHour) * 60;
-  const minutesSinceStart = (hour - staff.startHour) * 60 + min;
+  const totalMinutesInShift = (staff.workHours[staff.workHours.length - 1].end - staff.workHours[0].start) * 60;
+  const minutesSinceStart = (hour - staff.workHours[0].start) * 60 + min;
   
   // Handle times outside of working hours
-  if (hour < staff.startHour) {
-    return `${staff.timezone}: ${timeStr} (Starts at ${staff.startHour}:00)`;
+  if (hour < staff.workHours[0].start) {
+    return `${staff.timezone}: ${timeStr} (Starts at ${staff.workHours[0].start}:00)`;
   }
   
-  if (hour >= staff.endHour) {
-    return `${staff.timezone}: ${timeStr} (Ended at ${staff.endHour}:00)`;
+  if (hour >= staff.workHours[staff.workHours.length - 1].end) {
+    return `${staff.timezone}: ${timeStr} (Ended at ${staff.workHours[staff.workHours.length - 1].end}:00)`;
   }
   
   // Create progress bar
@@ -251,16 +283,19 @@ function createTimeProgressBar(staff) {
 
 // Format working hours for display 
 function formatWorkingHours(staff) {
-  // Get days string
-  const days = [0, 1, 2, 3, 4, 5, 6];
-  const workDays = days.filter(day => !staff.daysOff.includes(day));
+  const today = moment().tz(staff.timezone).format("ddd");
+  const workHoursToday = staff.workHours.find(wh => wh.day === today);
   
-  const dayNames = workDays.map(day => {
-    const daysList = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // Renamed to avoid conflict
-    return daysList[day];
-  }).join('-');
-  
-  return `${dayNames} ${staff.startHour}:00-${staff.endHour}:00`;
+  if (workHoursToday) {
+    return `${today} ${workHoursToday.start}-${workHoursToday.end} (${staff.timezone.split('/')[1].replace('_',' ')})`;
+  }
+  // Find the general pattern if today is not a workday (e.g., weekend)
+  if (staff.workHours.length > 0) {
+    const typicalDay = staff.workHours[0]; // Assume first entry is typical
+    const days = staff.workHours.map(wh => wh.day).join('-');
+    return `${days} ${typicalDay.start}-${typicalDay.end} (${staff.timezone.split('/')[1].replace('_',' ')})`;
+  }
+  return "No schedule defined";
 }
 
 /**
@@ -269,18 +304,35 @@ function formatWorkingHours(staff) {
  * @returns {Promise<Object>} An object with projects and tasks arrays.
  */
 async function getStaffWorkloadDetails(staff) {
-  if (!staff.notionProjectOwnerName && !staff.notionTaskAssigneeName) {
-    return { projects: [], tasks: [] }; // No Notion names configured
-  }
+  logToFile(`[Availability/getStaffWorkloadDetails] Processing staff: ${staff.name}, Discord ID: ${staff.discordUserId}`);
+  logToFile(`[Availability/getStaffWorkloadDetails] Notion Project Owner Name: '${staff.notionProjectOwnerName}', Notion Task Assignee Name: '${staff.notionTaskAssigneeName}'`);
 
   let projects = [];
-  if (staff.notionProjectOwnerName) {
-    projects = await fetchActiveProjectsForUser(staff.notionProjectOwnerName);
-  }
-
   let tasks = [];
-  if (staff.notionTaskAssigneeName) {
-    tasks = await fetchActiveTasksForUser(staff.notionTaskAssigneeName);
+
+  try {
+    if (staff.notionProjectOwnerName) {
+      logToFile(`[Availability/getStaffWorkloadDetails] Fetching projects for ${staff.name} using owner name: '${staff.notionProjectOwnerName}'`);
+      // Pass the whole staff object to fetchActiveProjectsForUser
+      projects = await fetchActiveProjectsForUser(staff);
+      logToFile(`[Availability/getStaffWorkloadDetails] Fetched ${projects.length} projects for ${staff.name}`);
+    } else {
+      logToFile(`[Availability/getStaffWorkloadDetails] Skipping project fetch for ${staff.name}: notionProjectOwnerName is missing.`);
+    }
+
+    if (staff.notionTaskAssigneeName) {
+      logToFile(`[Availability/getStaffWorkloadDetails] Fetching tasks for ${staff.name} using assignee name: '${staff.notionTaskAssigneeName}'`);
+      // Pass the whole staff object to fetchActiveTasksForUser
+      tasks = await fetchActiveTasksForUser(staff);
+      logToFile(`[Availability/getStaffWorkloadDetails] Fetched ${tasks.length} tasks for ${staff.name}`);
+    } else {
+      logToFile(`[Availability/getStaffWorkloadDetails] Skipping task fetch for ${staff.name}: notionTaskAssigneeName is missing.`);
+    }
+  } catch (error) {
+    logToFile(`[Availability/getStaffWorkloadDetails] Error fetching Notion data for ${staff.name}: ${error.message}\nStack: ${error.stack}`);
+    // Return empty arrays or rethrow, depending on desired error handling
+    projects = []; 
+    tasks = [];
   }
   
   return { projects, tasks };
@@ -288,35 +340,43 @@ async function getStaffWorkloadDetails(staff) {
 
 async function getAIAvailabilityAssessment(staffName, projects, tasks) {
   if (!openai) {
-    return "AI assessment unavailable (OpenAI client not initialized).";
+    logToFile('[Availability/getAIAssessment] OpenAI client not available. Skipping AI assessment.');
+    return "AI Assessment N/A (OpenAI not configured)";
   }
-  if (!projects && !tasks) {
-    return "No project/task data for AI assessment.";
+  if (projects.length === 0 && tasks.length === 0) {
+    return "Highly Available - No projects or tasks listed.";
   }
 
-  const projectNames = projects.map(p => p.name).join(', ') || 'None';
-  const taskNames = tasks.map(t => t.name).join('; ') || 'None'; // Using semicolon for tasks as they can be longer
+  const projectList = projects.map(p => `- ${p.name}`).join('\n');
+  const taskSummary = `Total active tasks: ${tasks.length}`;
 
-  const prompt = `User ${staffName} has the following workload:
-Active Projects: ${projectNames}
-Active Tasks: ${taskNames}
+  const prompt = `
+    User ${staffName} is currently working.
+    Active Projects:
+    ${projectList || "- None"}
+    Active Tasks Summary: ${taskSummary}
 
-Based on this, evaluate their current availability to take on a new high-priority project. Consider the number and potential nature of projects and tasks. Provide a concise availability assessment (e.g., 'Highly Available', 'Moderately Available', 'Limited Availability', 'Appears Overloaded') and a brief (10-15 words) reasoning. Format: [Assessment] - [Reasoning]`;
+    Based on this, assess their current availability for a new high-priority project. 
+    Consider both the number of projects and tasks. 
+    Provide a brief availability status (e.g., Highly Available, Moderately Available, Limited Availability, Potentially Overloaded) and a very short reasoning (1 sentence max).
+    Example: "Moderately Available - Handling a few projects and tasks."
+    Example: "Highly Available - Light current workload."
+    Example: "Limited Availability - Assigned to multiple projects and many tasks."
+  `;
 
   try {
+    logToFile(`[Availability/getAIAssessment] Getting AI assessment for ${staffName} with ${projects.length} projects and ${tasks.length} tasks.`);
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        { role: 'system', content: 'You are an assistant evaluating team member workload for project assignment.' },
-        { role: 'user', content: prompt }
-      ],
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 60,
       temperature: 0.3,
-      max_tokens: 80,
     });
-    return response.choices[0]?.message?.content.trim() || "AI assessment failed.";
+    logToFile(`[Availability/getAIAssessment] AI response for ${staffName}: ${response.choices[0].message.content.trim()}`);
+    return response.choices[0].message.content.trim();
   } catch (error) {
-    console.error(`[Availability] OpenAI error during assessment for ${staffName}: ${error.message}`);
-    return `AI assessment error: ${error.message.substring(0,100)}`;
+    logToFile(`[Availability/getAIAssessment] Error getting AI assessment for ${staffName}: ${error.message}`);
+    return "AI Assessment Error";
   }
 }
 
