@@ -1,3 +1,4 @@
+require('dotenv').config(); // Ensure environment variables are loaded
 const { Client: NotionClient } = require('@notionhq/client');
 const fs = require('fs');
 const path = require('path');
