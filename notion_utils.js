@@ -133,13 +133,13 @@ async function fetchActiveTasksForUser(staff) {
       },
     },
     {
-      property: "Progress",
+      property: "Status",
       status: {
         does_not_equal: "Done",
       },
     },
     {
-      property: "Progress",
+      property: "Status",
       status: {
         does_not_equal: "Archived",
       },
