@@ -47,65 +47,62 @@ logToFile(`[NotionUtils] Using TASKS_DATABASE_ID: ${TASKS_DATABASE_ID}`);
  * @returns {Promise<Array<Object>>} A list of project objects or an empty array.
  */
 async function fetchActiveProjectsForUser(staff) {
+  logToFile(`[NotionUtils] fetchActiveProjectsForUser called with staff: ${JSON.stringify(staff)}`);
   if (!notionUtilsClient) {
     logToFile('[NotionUtils] fetchActiveProjectsForUser: notionUtilsClient is not initialized!');
     return [];
   }
   if (!staff || (!staff.notionProjectOwnerName && !staff.notionTaskAssigneeName)) {
-    logToFile('[NotionUtils] fetchActiveProjectsForUser: Staff Notion names not provided.');
+    logToFile('[NotionUtils] fetchActiveProjectsForUser: Staff Notion names not provided or empty for projects.');
     return [];
   }
+  // Ensure we only proceed if notionProjectOwnerName is present for project fetching
+  if (!staff.notionProjectOwnerName) {
+    logToFile('[NotionUtils] fetchActiveProjectsForUser: staff.notionProjectOwnerName is missing. Cannot fetch projects based on owner.');
+    return [];
+  }
+
   const databaseId = PROJECTS_DATABASE_ID;
   const filterConditions = [];
 
-  if (staff.notionProjectOwnerName) {
-    filterConditions.push({
-      property: "Project Owner", // This is a "Select" property
-      select: {
-        equals: staff.notionProjectOwnerName,
-      },
-    });
-  }
-  // Add more conditions if needed, e.g., for status
-
-  // If no specific filters for project owner, maybe return all projects? Or handle as an error.
-  // For now, if no project owner name, and assuming we only want projects by that owner, return empty.
-  if (filterConditions.length === 0) {
-    logToFile('[NotionUtils] fetchActiveProjectsForUser: No project owner name, cannot filter projects.');
-    return [];
-  }
-  
-  // Example: Add a filter for "Status" not being "Done" or "Archived"
   filterConditions.push({
-    property: "Status", // Assuming "Status" is a Select or Status type property
-    status: { // or "select" if it's a Select type
-      does_not_equal: "Done", // Adjust as per your Notion "Status" property options
+    property: "Project Owner",
+    select: {
+      equals: staff.notionProjectOwnerName,
     },
   });
-   filterConditions.push({
+
+  filterConditions.push({
     property: "Status",
     status: {
-      does_not_equal: "Archived", // Adjust as per your Notion "Status" property options
+      does_not_equal: "Done",
+    },
+  });
+  filterConditions.push({
+    property: "Status",
+    status: {
+      does_not_equal: "Archived",
     },
   });
 
+  const fullFilter = { and: filterConditions };
+  logToFile(`[NotionUtils] Querying Projects DB (${databaseId}) for ${staff.name} (Owner: ${staff.notionProjectOwnerName}). Filter: ${JSON.stringify(fullFilter)}`);
+
   try {
-    logToFile(`[NotionUtils] Querying Projects DB (${databaseId}) for ${staff.name} (Owner: ${staff.notionProjectOwnerName})`);
     const response = await notionUtilsClient.databases.query({
       database_id: databaseId,
-      filter: {
-        and: filterConditions,
-      },
+      filter: fullFilter,
     });
-    logToFile(`[NotionUtils] Found ${response.results.length} projects for ${staff.name}`);
+    logToFile(`[NotionUtils] Projects query for ${staff.name} (Owner: ${staff.notionProjectOwnerName}) returned ${response.results.length} results.`);
+    if (response.results.length > 0) {
+      logToFile(`[NotionUtils] First project raw data for ${staff.name}: ID: ${response.results[0].id}, Properties: ${JSON.stringify(response.results[0].properties)}`);
+    }
     return response.results.map(page => ({
       id: page.id,
       name: page.properties["Project name"]?.title[0]?.plain_text || "Untitled Project",
-      // Add other relevant project properties here
     }));
   } catch (error) {
-    logToFile(`[NotionUtils] Error fetching projects for ${staff.name}: ${error.message}
-Stack: ${error.stack}`);
+    logToFile(`[NotionUtils] Error fetching projects for ${staff.name}: ${error.message}\nStack: ${error.stack}`);
     console.error(`[NotionUtils] Error fetching projects for ${staff.name}:`, error);
     return [];
   }
@@ -117,53 +114,56 @@ Stack: ${error.stack}`);
  * @returns {Promise<Array<Object>>} A list of task objects or an empty array.
  */
 async function fetchActiveTasksForUser(staff) {
+  logToFile(`[NotionUtils] fetchActiveTasksForUser called with staff: ${JSON.stringify(staff)}`);
   if (!notionUtilsClient) {
     logToFile('[NotionUtils] fetchActiveTasksForUser: notionUtilsClient is not initialized!');
     return [];
   }
-   if (!staff || !staff.notionTaskAssigneeName) {
-    logToFile('[NotionUtils] fetchActiveTasksForUser: Staff Notion task assignee name not provided.');
+  if (!staff || !staff.notionTaskAssigneeName) {
+    logToFile('[NotionUtils] fetchActiveTasksForUser: Staff Notion task assignee name not provided or empty.');
     return [];
   }
 
   const databaseId = TASKS_DATABASE_ID;
-  logToFile(`[NotionUtils] Querying Tasks DB (${databaseId}) for ${staff.name} (Assignee: ${staff.notionTaskAssigneeName})`);
+  const filterConditions = [
+    {
+      property: "Assignee",
+      select: {
+        equals: staff.notionTaskAssigneeName,
+      },
+    },
+    {
+      property: "Progress",
+      status: {
+        does_not_equal: "Done",
+      },
+    },
+    {
+      property: "Progress",
+      status: {
+        does_not_equal: "Archived",
+      },
+    }
+  ];
   
+  const fullFilter = { and: filterConditions };
+  logToFile(`[NotionUtils] Querying Tasks DB (${databaseId}) for ${staff.name} (Assignee: ${staff.notionTaskAssigneeName}). Filter: ${JSON.stringify(fullFilter)}`);
+
   try {
     const response = await notionUtilsClient.databases.query({
       database_id: databaseId,
-      filter: {
-        and: [
-          {
-            property: "Assignee", // This is a "Select" property
-            select: {
-              equals: staff.notionTaskAssigneeName,
-            },
-          },
-          {
-            property: "Progress", // Assuming "Progress" is a Select or Status property
-            status: { // or "select"
-              does_not_equal: "Done", // Filter out completed tasks
-            },
-          },
-           {
-            property: "Progress",
-            status: {
-              does_not_equal: "Archived",
-            },
-          }
-        ],
-      },
+      filter: fullFilter,
     });
-    logToFile(`[NotionUtils] Found ${response.results.length} tasks for ${staff.name}`);
+    logToFile(`[NotionUtils] Tasks query for ${staff.name} (Assignee: ${staff.notionTaskAssigneeName}) returned ${response.results.length} results.`);
+    if (response.results.length > 0) {
+      logToFile(`[NotionUtils] First task raw data for ${staff.name}: ID: ${response.results[0].id}, Properties: ${JSON.stringify(response.results[0].properties)}`);
+    }
     return response.results.map(page => ({
       id: page.id,
       name: page.properties["Task Name"]?.title[0]?.plain_text || page.properties["Name"]?.title[0]?.plain_text ||  page.properties.title?.title[0]?.plain_text || "Untitled Task",
-      // Add other relevant task properties
     }));
   } catch (error) {
-    logToFile(`[NotionUtils] Error fetching tasks for ${staff.name}: ${error.message}
-Stack: ${error.stack}`);
+    logToFile(`[NotionUtils] Error fetching tasks for ${staff.name}: ${error.message}\nStack: ${error.stack}`);
     console.error(`[NotionUtils] Error fetching tasks for ${staff.name}:`, error);
     return [];
   }
