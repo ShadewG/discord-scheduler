@@ -31,9 +31,9 @@ try {
 const STAFF_AVAILABILITY = [
   {
     name: "Armin",
-    discordUserId: "1032968395670880256", // Added based on previous user input
-    notionProjectOwnerName: "Armin", // Assuming same name for Notion
-    notionTaskAssigneeName: "Armin", // Assuming same name for Notion
+    discordUserId: "1032968395670880256",
+    notionProjectOwnerName: "Armin",
+    notionTaskAssigneeName: "Armin",
     workHours: [
       { day: "Mon", start: "9:00", end: "17:30" },
       { day: "Tue", start: "9:00", end: "17:30" },
@@ -47,7 +47,7 @@ const STAFF_AVAILABILITY = [
     name: "Amin",
     discordUserId: "332227757717061653",
     notionProjectOwnerName: "Amin", 
-    notionTaskAssigneeName: "Amin",
+    notionTaskAssigneeName: "Amino",
     workHours: [
       { day: "Mon", start: "7:00", end: "15:30" },
       { day: "Tue", start: "7:00", end: "15:30" },
@@ -74,8 +74,8 @@ const STAFF_AVAILABILITY = [
   {
     name: "Jokubas",
     discordUserId: "698791305840558181",
-    notionProjectOwnerName: "Wise", // Jokubas is Wise for Project Owner
-    notionTaskAssigneeName: "Wise", // Jokubas is Wise for Task Assignee
+    notionProjectOwnerName: "Wise", 
+    notionTaskAssigneeName: "Jokubas",
     workHours: [
       { day: "Mon", start: "9:00", end: "17:30" },
       { day: "Tue", start: "9:00", end: "17:30" },
@@ -87,9 +87,9 @@ const STAFF_AVAILABILITY = [
   },
   {
     name: "Dominik",
-    discordUserId: "186424377993068544", // Atom's ID
-    notionProjectOwnerName: "Atom",   // Dominik is Atom for Project Owner
-    notionTaskAssigneeName: "Dominik", // Dominik is Dominik for Task Assignee
+    discordUserId: "186424377993068544",
+    notionProjectOwnerName: "Atom",
+    notionTaskAssigneeName: "atomboy7",
     workHours: [
       { day: "Mon", start: "9:00", end: "17:30" },
       { day: "Tue", start: "9:00", end: "17:30" },
@@ -115,9 +115,9 @@ const STAFF_AVAILABILITY = [
   },
   {
     name: "Austin",
-    discordUserId: "987596470272278569", // Suki's ID
-    notionProjectOwnerName: "Suki",     // Austin is Suki for Notion
-    notionTaskAssigneeName: "Suki",     // Austin is Suki for Notion
+    discordUserId: "987596470272278569",
+    notionProjectOwnerName: "Suki",
+    notionTaskAssigneeName: "suki0832",
     workHours: [
       { day: "Mon", start: "14:30", end: "23:00" },
       { day: "Tue", start: "14:30", end: "23:00" },
@@ -125,13 +125,13 @@ const STAFF_AVAILABILITY = [
       { day: "Thu", start: "14:30", end: "23:00" },
       { day: "Fri", start: "14:30", end: "23:00" },
     ],
-    timezone: "America/Denver", // MDT, which is UTC-6
+    timezone: "America/Denver",
   },
   {
-    name: "Dreams", // Nicholas Rice
+    name: "Dreams",
     discordUserId: "122104719513485314",
-    notionProjectOwnerName: "Nicholas Rice", // Notion name is Nicholas Rice
-    notionTaskAssigneeName: "Nicholas Rice", // Notion name is Nicholas Rice
+    notionProjectOwnerName: "Nicholas Rice",
+    notionTaskAssigneeName: "Dreams",
     workHours: [
       { day: "Mon", start: "17:00", end: "23:00" }, 
       { day: "Tue", start: "17:00", end: "23:00" },
@@ -139,7 +139,7 @@ const STAFF_AVAILABILITY = [
       { day: "Thu", start: "17:00", end: "23:00" },
       { day: "Fri", start: "17:00", end: "23:00" },
     ],
-    timezone: "America/New_York", // EDT, which is UTC-4
+    timezone: "America/New_York",
   },
 ];
 
@@ -207,10 +207,14 @@ function isStaffActive(staff) {
   const todayWorkHours = staff.workHours.find(wh => wh.day === currentDay);
 
   if (!todayWorkHours) {
-    return false; // Not scheduled to work today
+    // logToFile(`[isStaffActive] ${staff.name} is not scheduled to work today (${currentDay}).`);
+    return false; 
   }
 
-  return currentTime >= todayWorkHours.start && currentTime <= todayWorkHours.end;
+  // logToFile(`[isStaffActive] Checking ${staff.name}: Now: ${currentTime} (${staff.timezone}), Today's Hours: ${todayWorkHours.start} - ${todayWorkHours.end}`);
+  const isActive = currentTime >= todayWorkHours.start && currentTime <= todayWorkHours.end;
+  // logToFile(`[isStaffActive] ${staff.name} active status: ${isActive}`);
+  return isActive;
 }
 
 /**
