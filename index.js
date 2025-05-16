@@ -40,7 +40,7 @@ try {
 const TZ = process.env.TIMEZONE || 'Europe/Berlin';
 
 // Import availability module
-const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours } = require('./availability');
+const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgressBar, formatWorkingHours, getStaffWorkloadDetails, getAIAvailabilityAssessment } = require('./availability');
 
 // Define timezone for all operations
 // const TZ = 'Europe/Berlin'; // Removed duplicate TZ declaration
@@ -1631,36 +1631,62 @@ client.on('interactionCreate', async interaction => {
     // Handle the /availability command
     else if (commandName === 'availability') {
       try {
-        // Check if ephemeral flag is set
         const ephemeral = true;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
-        // Current Berlin time
         const berlinTime = moment().tz('Europe/Berlin').format('dddd, MMMM D, YYYY HH:mm:ss');
         
-        // Create the embed
         const embed = new EmbedBuilder()
-          .setTitle('Team Availability')
-          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted below:`)
+          .setTitle('Team Availability & Workload')
+          .setDescription(`Current time in Berlin: **${berlinTime}**\nStaff currently working are highlighted. Workload from Notion. AI assessment of availability.`) // Updated description
           .setColor(0x00AAFF)
           .setTimestamp();
         
-        // Group staff by availability status
         const activeStaff = [];
         const inactiveStaff = [];
         
-        // Process each staff member
-        STAFF_AVAILABILITY.forEach(staff => {
+        for (const staff of STAFF_AVAILABILITY) {
           const isActive = isStaffActive(staff);
           const timeLeft = getTimeLeftInShift(staff);
           const workingHours = formatWorkingHours(staff);
+          let workloadInfo = 'Notion data unavailable';
+          let aiAssessment = 'N/A'; // Default AI assessment
+
+          if (staff.discordUserId && staff.discordUserId.startsWith('TODO')) {
+            workloadInfo = 'Discord ID missing for Notion lookup.';
+          } else if (staff.notionProjectOwnerName || staff.notionTaskAssigneeName) {
+            try {
+              const { projects, tasks } = await getStaffWorkloadDetails(staff);
+              let projectsString = 'No active projects.';
+              if (projects.length > 0) {
+                projectsString = projects.map(p => p.name).join(', ');
+                if (projectsString.length > 100) projectsString = projectsString.substring(0, 97) + "...";
+              }
+              workloadInfo = `Projects: ${projectsString}\nTasks: ${tasks.length} active`;
+
+              // Get AI assessment only for active staff with workload data
+              if (isActive && (projects.length > 0 || tasks.length > 0)) {
+                aiAssessment = await getAIAvailabilityAssessment(staff.name, projects, tasks);
+              } else if (isActive) {
+                aiAssessment = 'Highly Available - No projects or tasks listed.';
+              }
+
+            } catch (e) {
+              logToFile(`Error fetching workload for ${staff.name}: ${e.message}`);
+              workloadInfo = 'Error fetching Notion data.';
+            }
+          } else {
+            workloadInfo = 'Notion names not configured.';
+          }
           
           const staffInfo = {
             name: staff.name,
             isActive,
             timeLeft,
-            workingHours
+            workingHours,
+            workload: workloadInfo,
+            aiAssessment: isActive ? aiAssessment : 'N/A (Offline)', // AI assessment only for active staff
           };
           
           if (isActive) {
@@ -1668,35 +1694,32 @@ client.on('interactionCreate', async interaction => {
           } else {
             inactiveStaff.push(staffInfo);
           }
-        });
+        }
         
-        // Add active staff field with inline status
         if (activeStaff.length > 0) {
           const activeStaffText = activeStaff.map(staff => 
-            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}`
-          ).join('\n');
+            `**${staff.name}** (${staff.timeLeft}) - ${staff.workingHours}\n*Workload:* ${staff.workload}\n*AI Eval:* ${staff.aiAssessment}`
+          ).join('\n\n');
           
           embed.addFields({ name: '🟢 Currently Working', value: activeStaffText });
         } else {
           embed.addFields({ name: '🟢 Currently Working', value: 'No team members are currently working.' });
         }
         
-        // Add inactive staff field
         if (inactiveStaff.length > 0) {
           const inactiveStaffText = inactiveStaff.map(staff => 
-            `${staff.name} - ${staff.workingHours}`
-          ).join('\n');
+            `${staff.name} - ${staff.workingHours}\n*Workload:* ${staff.workload}\n*AI Eval:* ${staff.aiAssessment}` // Show N/A for offline
+          ).join('\n\n');
           
           embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText });
         }
         
         embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
         
-        // Send the embed
         await interaction.editReply({ embeds: [embed] });
         
       } catch (error) {
-        logToFile(`Error in /availability command: ${error.message}`);
+        logToFile(`Error in /availability command: ${error.message}\n${error.stack}`); // Added stack trace
         if (hasResponded) {
           await interaction.editReply(`❌ Error displaying availability: ${error.message}`);
         } else {

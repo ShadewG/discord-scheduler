@@ -8,11 +8,31 @@ const TZ = 'Europe/Berlin';
 
 // Staff availability module for showing team working hours
 const moment = require('moment-timezone');
+const { fetchActiveProjectsForUser, fetchActiveTasksForUser } = require('./notion_utils'); // Import Notion utility functions
+const { OpenAI } = require('openai'); // Import OpenAI
+
+// Configure OpenAI client
+let openai = null;
+try {
+  if (process.env.OPENAI_API_KEY) {
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+    console.log('[Availability] OpenAI client initialized successfully');
+  } else {
+    console.log('[Availability] ⚠️ OPENAI_API_KEY not found, AI assessment will be unavailable.');
+  }
+} catch (error) {
+  console.log(`[Availability] ❌ Error initializing OpenAI client: ${error.message}`);
+}
 
 // Staff availability data - name, timezone, and working hours (24-hour format)
 const STAFF_AVAILABILITY = [
   {
     name: "Armin",
+    discordUserId: "186424377993068544", // Atom
+    notionProjectOwnerName: "Armin",
+    notionTaskAssigneeName: "Armin",
     timezone: "Europe/Berlin",
     startHour: 9,
     endHour: 17.5,  // 17:30
@@ -20,6 +40,9 @@ const STAFF_AVAILABILITY = [
   },
   {
     name: "Amin",
+    discordUserId: "332227757717061653",
+    notionProjectOwnerName: "Amin",
+    notionTaskAssigneeName: "Amin",
     timezone: "Europe/Berlin",
     startHour: 7,
     endHour: 15.5,  // 15:30
@@ -27,20 +50,29 @@ const STAFF_AVAILABILITY = [
   },
   {
     name: "Ayoub",
+    discordUserId: "1033050881798709378", // Updated
+    notionProjectOwnerName: "Ayoub", // Assuming this is correct
+    notionTaskAssigneeName: "Ayoub", // Assuming this is correct
     timezone: "Europe/Berlin",
     startHour: 9,
     endHour: 17.5,  // 17:30
     daysOff: [0, 6]
   },
   {
-    name: "Jokubas",
+    name: "Jokubas", // Wise
+    discordUserId: "698791305840558181",
+    notionProjectOwnerName: "Wise",
+    notionTaskAssigneeName: "Wise",
     timezone: "Europe/Berlin",
     startHour: 9,
     endHour: 17.5,  // 17:30
     daysOff: [0, 6]
   },
   {
-    name: "Dominik",
+    name: "Dominik", // Represents Atom for Project Owner
+    discordUserId: "186424377993068544", // Atom's ID
+    notionProjectOwnerName: "Atom", // Updated
+    notionTaskAssigneeName: "Dominik", // Updated
     timezone: "Europe/Berlin",
     startHour: 9,
     endHour: 17.5,  // 17:30
@@ -48,20 +80,29 @@ const STAFF_AVAILABILITY = [
   },
   {
     name: "Yovcho",
+    discordUserId: "826463354598981643",
+    notionProjectOwnerName: "Yovcho",
+    notionTaskAssigneeName: "Yovcho",
     timezone: "Europe/Berlin",
     startHour: 9,
     endHour: 17.5,  // 17:30
     daysOff: [0, 6]
   },
   {
-    name: "Austin",
+    name: "Austin", // Represents Suki for Notion lookup
+    discordUserId: "987596470272278569", // Suki's ID
+    notionProjectOwnerName: "Suki", // Updated
+    notionTaskAssigneeName: "Suki", // Updated
     timezone: "Europe/Berlin",
     startHour: 14.5, // 14:30
     endHour: 23,
     daysOff: [0, 6]
   },
   {
-    name: "Nicholas Rice",
+    name: "Dreams", // Represents Nicholas Rice
+    discordUserId: "122104719513485314", // Updated
+    notionProjectOwnerName: "Nicholas Rice", // Updated
+    notionTaskAssigneeName: "Nicholas Rice", // Updated
     timezone: "Europe/Berlin",
     startHour: 17,
     endHour: 23,
@@ -215,11 +256,68 @@ function formatWorkingHours(staff) {
   const workDays = days.filter(day => !staff.daysOff.includes(day));
   
   const dayNames = workDays.map(day => {
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    return days[day];
+    const daysList = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; // Renamed to avoid conflict
+    return daysList[day];
   }).join('-');
   
   return `${dayNames} ${staff.startHour}:00-${staff.endHour}:00`;
+}
+
+/**
+ * Fetches Notion workload details (projects and tasks) for a staff member.
+ * @param {Object} staff - Staff member object from STAFF_AVAILABILITY.
+ * @returns {Promise<Object>} An object with projects and tasks arrays.
+ */
+async function getStaffWorkloadDetails(staff) {
+  if (!staff.notionProjectOwnerName && !staff.notionTaskAssigneeName) {
+    return { projects: [], tasks: [] }; // No Notion names configured
+  }
+
+  let projects = [];
+  if (staff.notionProjectOwnerName) {
+    projects = await fetchActiveProjectsForUser(staff.notionProjectOwnerName);
+  }
+
+  let tasks = [];
+  if (staff.notionTaskAssigneeName) {
+    tasks = await fetchActiveTasksForUser(staff.notionTaskAssigneeName);
+  }
+  
+  return { projects, tasks };
+}
+
+async function getAIAvailabilityAssessment(staffName, projects, tasks) {
+  if (!openai) {
+    return "AI assessment unavailable (OpenAI client not initialized).";
+  }
+  if (!projects && !tasks) {
+    return "No project/task data for AI assessment.";
+  }
+
+  const projectNames = projects.map(p => p.name).join(', ') || 'None';
+  const taskNames = tasks.map(t => t.name).join('; ') || 'None'; // Using semicolon for tasks as they can be longer
+
+  const prompt = `User ${staffName} has the following workload:
+Active Projects: ${projectNames}
+Active Tasks: ${taskNames}
+
+Based on this, evaluate their current availability to take on a new high-priority project. Consider the number and potential nature of projects and tasks. Provide a concise availability assessment (e.g., 'Highly Available', 'Moderately Available', 'Limited Availability', 'Appears Overloaded') and a brief (10-15 words) reasoning. Format: [Assessment] - [Reasoning]`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'You are an assistant evaluating team member workload for project assignment.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 80,
+    });
+    return response.choices[0]?.message?.content.trim() || "AI assessment failed.";
+  } catch (error) {
+    console.error(`[Availability] OpenAI error during assessment for ${staffName}: ${error.message}`);
+    return `AI assessment error: ${error.message.substring(0,100)}`;
+  }
 }
 
 module.exports = {
@@ -228,5 +326,7 @@ module.exports = {
   isStaffActive,
   getTimeLeftInShift,
   createTimeProgressBar,
-  formatWorkingHours
+  formatWorkingHours,
+  getStaffWorkloadDetails,
+  getAIAvailabilityAssessment, // Export the new function
 }; 
