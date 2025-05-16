@@ -5,6 +5,7 @@ const { OpenAI } = require('openai');
 const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
+const path = require('path'); // Re-add path module
 const { logToFile } = require('./log_utils'); // Require logToFile from the new utility file
 const axios = require('axios');
 const express = require('express');
