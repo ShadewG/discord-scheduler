@@ -23,6 +23,8 @@ NOTION_TOKEN=your_notion_integration_token
 NOTION_DB_ID=your_notion_database_id
 NOTION_WORKSPACE=your_notion_workspace_name (optional, for correct URL linking)
 OPENAI_API_KEY=your_openai_api_key
+FRAMEIO_TOKEN=your_frameio_api_token (optional)
+FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 TIMEZONE=your_timezone (e.g., Europe/Berlin)
 ```
 
