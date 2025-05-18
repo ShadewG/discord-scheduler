@@ -12,6 +12,8 @@ const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const points = require('./points');
+const rewards = require('./rewards.json');
 
 // Import knowledge assistant
 const { handleAskCommand } = require('./knowledge-assistant');
@@ -3841,6 +3843,46 @@ Example Output: {
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
       await handleAskCommand(interaction);
+    }
+
+    // Handle the /creds command
+    else if (commandName === 'creds') {
+      const { creds, xp, level } = points.getBalance(interaction.user.id);
+      await interaction.reply({
+        content: `You have **${creds}** Creds and **${xp} XP** (Level ${level}).`,
+        ephemeral: true
+      });
+    }
+
+    // Handle the /kudos command
+    else if (commandName === 'kudos') {
+      const target = interaction.options.getUser('user');
+      const amount = interaction.options.getInteger('amount');
+      const reason = interaction.options.getString('reason');
+      points.addCreds(target.id, amount, reason);
+      await interaction.reply({
+        content: `Awarded **${amount}** Creds to ${target} for "${reason}"`,
+        allowedMentions: { users: [target.id] }
+      });
+    }
+
+    // Handle the /shop command
+    else if (commandName === 'shop') {
+      const items = rewards.map(r => `**${r.name}** - ${r.cost} Creds`).join('\n');
+      await interaction.reply({ content: `Available rewards:\n${items}`, ephemeral: true });
+    }
+
+    // Handle the /redeem command
+    else if (commandName === 'redeem') {
+      const itemName = interaction.options.getString('item');
+      const reward = rewards.find(r => r.name.toLowerCase() === itemName.toLowerCase());
+      if (!reward) {
+        await interaction.reply({ content: 'Item not found.', ephemeral: true });
+      } else if (!points.spendCreds(interaction.user.id, reward.cost, `Redeemed ${reward.name}`)) {
+        await interaction.reply({ content: 'Not enough Creds.', ephemeral: true });
+      } else {
+        await interaction.reply({ content: `You redeemed **${reward.name}** for ${reward.cost} Creds!`, ephemeral: true });
+      }
     }
     
     // Other commands here

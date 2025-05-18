@@ -9,6 +9,7 @@ A powerful Discord bot that integrates with Notion to manage projects, schedule 
 - **Scheduled Reminders**: Automatically send reminders at scheduled times
 - **Meeting Coordination**: Schedule and coordinate meetings with team members
 - **Customizable Watchers**: Get notified when Notion properties change
+- **Creds 2.0 Economy**: Earn and spend Creds through `/kudos`, check balances with `/creds`, and redeem rewards from `/shop`.
 
 ## Environment Variables
 
@@ -58,6 +59,17 @@ The bot supports various slash commands:
 - `/schedule` - View the reminder schedule
 - `/notion` - Manage Notion status watchers
 - `/set` - Update properties on a Notion page
+
+## Creds 2.0
+
+Use the economy system to motivate your team:
+
+```
+/creds                // check your balance and XP
+/kudos @user 5 Great job!  // reward a teammate
+/shop                 // list available rewards
+/redeem "Vacation hour"   // spend your Creds
+```
 
 ## Custom Watchers
 
