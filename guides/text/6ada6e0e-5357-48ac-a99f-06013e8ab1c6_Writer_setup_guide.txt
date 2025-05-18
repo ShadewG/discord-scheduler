@@ -18,8 +18,3 @@ similar to viruses, such as altering system files.
  So to do this go to your windows defender settings - virus & threat protection - 
 manage settings - turn off real time protection. You can turn it on again once 
 the installation is done.
-Writer setup guide1
-
-Writer setup guide2
-
-Writer setup guide3
