@@ -168,7 +168,8 @@ function parseTime(timeStr) {
  * @returns {boolean} True if current time is within range
  */
 function isTimeInRange(startTime, endTime) {
-  const now = getCurrentBerlinTime();
+  // Use only the HH:mm portion of the current Berlin time
+  const now = moment().tz("Europe/Berlin").format("HH:mm");
   
   const start = parseTime(startTime);
   const end = parseTime(endTime);
