@@ -8,6 +8,8 @@ const cron = require('node-cron');
 const fs = require('fs'); // Re-add fs module
 const path = require('path');
 const { logToFile } = require('./log_utils');
+const { addCreds } = require('./utils');
+const { loadTasks, saveTasks } = require('./tasks');
 const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
@@ -5516,6 +5518,37 @@ async function checkEndOfDayTaskUpdates() {
         }
       }
       
+      // Check stored tasks from local record
+      const storedTasks = loadTasks();
+      for (const task of storedTasks) {
+        if (task.completed) continue;
+
+        const isDone = [...recentMessages.values()].some(msg => {
+          const content = msg.content.toLowerCase();
+          const refMatch = content.includes(task.text?.toLowerCase());
+          if (!refMatch) return false;
+          return completionPhrases.some(p => content.includes(p));
+        });
+
+        let summaryMsg = null;
+        try {
+          const taskChannel = client.channels.cache.get(task.channelId || channel.id);
+          if (taskChannel) {
+            summaryMsg = await taskChannel.messages.fetch(task.summaryMessageId);
+            await summaryMsg.react(isDone ? '✔️' : '❌');
+          }
+        } catch (reactErr) {
+          logToFile(`⚠️ Unable to react to summary message ${task.summaryMessageId}: ${reactErr.message}`);
+        }
+
+        if (isDone) {
+          addCreds(task.authorId, task.points || 0);
+          task.completed = true;
+          tasksUpdated++;
+        }
+      }
+      saveTasks(storedTasks);
+
       logToFile(`✅ End-of-day task check completed: Updated ${tasksUpdated} tasks to Done`);
       
       return {
