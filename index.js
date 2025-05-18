@@ -3859,6 +3859,8 @@ Example Output: {
           const attachments = [];
           attachments.push(new AttachmentBuilder(files.msgFile));
           attachments.push(new AttachmentBuilder(files.frameFile));
+          if (files.changelogFile) attachments.push(new AttachmentBuilder(files.changelogFile));
+          if (files.assignFile) attachments.push(new AttachmentBuilder(files.assignFile));
           await interaction.editReply({ content: '📄 Issue report generated', files: attachments });
         }
       } catch (error) {
@@ -3942,7 +3944,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -5272,7 +5274,7 @@ async function createNotionTaskPage(authorData) {
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
 
 // Add this function after the findProjectByQuery function
 
@@ -5696,11 +5698,49 @@ async function fetchChangelogSummary(timeframe) {
   }
 }
 
+// Fetch projects changed recently and list assignees
+async function fetchProjectAssignments(timeframe) {
+  if (!notion || !DB) return [];
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const resp = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        timestamp: 'last_edited_time',
+        last_edited_time: { on_or_after: since }
+      },
+      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
+      page_size: 50
+    });
+
+    return resp.results.map(p => {
+      const name = p.properties['Project name']?.title?.[0]?.plain_text || 'Untitled';
+      const codeMatch = name.match(/(CL|IB|BC)\d{2}/i);
+      const code = codeMatch ? codeMatch[0].toUpperCase() : name;
+      const owner = p.properties['Project Owner']?.people?.map(u => u.name).join(', ') ||
+                    p.properties['Project Owner']?.select?.name || 'Unassigned';
+      const editor = p.properties['Editor']?.people?.map(u => u.name).join(', ') ||
+                     p.properties['Editor']?.multi_select?.map(o => o.name).join(', ') || 'None';
+      const writer = p.properties['Writer']?.people?.map(u => u.name).join(', ') ||
+                     p.properties['Writer']?.multi_select?.map(o => o.name).join(', ') || 'None';
+      const status = p.properties.Status?.status?.name || p.properties.Status?.select?.name || 'Unknown';
+
+      return `${code} - ${status} | Owner: ${owner} | Editor: ${editor} | Writer: ${writer}`;
+    });
+  } catch (err) {
+    logToFile(`Error fetching project assignments: ${err.message}`);
+    return [];
+  }
+}
+
 // Compile messages and comments into text files
 async function generateIssueReport(timeframe = 'week') {
   try {
     const msgs = await collectMessagesForReport(timeframe);
     const frame = await fetchFrameioComments(timeframe);
+    const changelog = await fetchChangelogSummary(timeframe);
+    const assignments = await fetchProjectAssignments(timeframe);
 
     const dir = path.join(__dirname, 'issue-reports');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -5708,11 +5748,15 @@ async function generateIssueReport(timeframe = 'week') {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const msgFile = path.join(dir, `discord-${timestamp}.txt`);
     const frameFile = path.join(dir, `frameio-${timestamp}.txt`);
+    const changelogFile = path.join(dir, `changelog-${timestamp}.txt`);
+    const assignFile = path.join(dir, `assignments-${timestamp}.txt`);
 
     fs.writeFileSync(msgFile, msgs.join('\n'), 'utf8');
     fs.writeFileSync(frameFile, frame.join('\n'), 'utf8');
+    fs.writeFileSync(changelogFile, changelog, 'utf8');
+    fs.writeFileSync(assignFile, assignments.join('\n'), 'utf8');
 
-    return { msgFile, frameFile };
+    return { msgFile, frameFile, changelogFile, assignFile };
   } catch (err) {
     logToFile(`Error generating issue report: ${err.message}`);
     return null;
