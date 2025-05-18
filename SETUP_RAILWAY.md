@@ -12,7 +12,7 @@ To properly deploy your Discord bot to Railway and fix the Notion URL linking is
 | `NOTION_TOKEN` | Your Notion integration token | `secret_abcdefg123456789` |
 | `NOTION_DB_ID` | Your Notion database ID | `abcdefg123456789` |
 | `OPENAI_API_KEY` | Your OpenAI API key for AI functions | `sk-abcdefg123456789` |
-| `TZ` | Your timezone for scheduling | `Europe/Berlin` |
+| `TIMEZONE` | Your timezone for scheduling | `Europe/Berlin` |
 | `NOTION_WORKSPACE` | Your Notion workspace name (for correct URL linking) | `your-workspace` |
 
 ## How to Find Your Notion Workspace Name

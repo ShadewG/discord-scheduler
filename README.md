@@ -22,8 +22,12 @@ NOTION_TOKEN=your_notion_integration_token
 NOTION_DB_ID=your_notion_database_id
 NOTION_WORKSPACE=your_notion_workspace_name (optional, for correct URL linking)
 OPENAI_API_KEY=your_openai_api_key
-TZ=your_timezone (e.g., Europe/Berlin)
+TIMEZONE=your_timezone (e.g., Europe/Berlin)
 ```
+
+The bot primarily uses the `TIMEZONE` variable for scheduling. If your
+deployment platform relies on the standard `TZ` variable, you can set both to
+the same value.
 
 ## Deployment
 

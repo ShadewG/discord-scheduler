@@ -22,7 +22,7 @@ console.log(`- .env file ${result.error ? 'not loaded (using system env)' : 'loa
 console.log(`- DISCORD_TOKEN: ${process.env.DISCORD_TOKEN ? 'Set ✓' : 'Not set ✗'}`);
 console.log(`- CHANNEL_ID: ${process.env.CHANNEL_ID || 'Not set ✗'}`);
 console.log(`- ROLE_ID: ${process.env.ROLE_ID || 'Not set ✗'}`);
-console.log(`- TZ: ${process.env.TZ || 'Not set (using Europe/Berlin)'}`);
+console.log(`- TIMEZONE: ${process.env.TIMEZONE || process.env.TZ || 'Europe/Berlin'}`);
 console.log('\nStarting bot (press Ctrl+C to stop)...\n');
 
 // Start the bot
