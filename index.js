@@ -5642,20 +5642,20 @@ async function collectMessagesForReport(timeframe) {
 // Cached Frame.io account ID for reuse
 let cachedFrameioAccountId = null;
 
-// Helper to get Frame.io account ID from the API if not provided
-async function getFrameioAccountId() {
-  if (process.env.FRAMEIO_ACCOUNT_ID) return process.env.FRAMEIO_ACCOUNT_ID;
+// Helper to look up the Frame.io account ID using the API
+async function resolveFrameioAccountId() {
   if (cachedFrameioAccountId) return cachedFrameioAccountId;
   if (!process.env.FRAMEIO_TOKEN) return null;
   try {
     const resp = await axios.get('https://api.frame.io/v2/me', {
       headers: { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
     });
-    const accountId = resp.data.default_account_id || resp.data.accounts?.[0]?.id;
+    const accountId = resp.data.account_id;
     if (accountId) {
       cachedFrameioAccountId = accountId;
       return accountId;
     }
+    logToFile('Frame.io API response did not contain account_id');
   } catch (err) {
     logToFile(`Error fetching Frame.io account ID: ${err.message}`);
   }
@@ -5665,8 +5665,14 @@ async function getFrameioAccountId() {
 // Fetch comments from Frame.io if credentials are provided
 async function fetchFrameioComments(timeframe) {
   if (!process.env.FRAMEIO_TOKEN) return [];
-  const accountId = await getFrameioAccountId();
-  if (!accountId) return [];
+  let accountId = process.env.FRAMEIO_ACCOUNT_ID;
+  if (!accountId) {
+    accountId = await resolveFrameioAccountId();
+    if (!accountId) {
+      logToFile('Could not determine Frame.io account ID');
+      return [];
+    }
+  }
   const days = timeframe === 'month' ? 30 : 7;
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
