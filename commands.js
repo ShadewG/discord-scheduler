@@ -220,6 +220,14 @@ const commands = {
     
     // Add check-tasks command to manually run the end-of-day task check
     new SlashCommandBuilder().setName('check-tasks').setDescription('Check for completed tasks in recent messages'),
+
+    // Add issue-report command to compile logs from Discord and Frame.io
+    new SlashCommandBuilder().setName('issue-report').setDescription('Compile a report of recent messages')
+      .addStringOption(option =>
+        option.setName('timeframe').setDescription('Timeframe to analyze')
+          .setRequired(true)
+          .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
   ],
 
   // Economy commands
