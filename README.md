@@ -28,6 +28,11 @@ FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 TIMEZONE=your_timezone (e.g., Europe/Berlin)
 ```
 
+For Frame.io integration, provide:
+
+- `FRAMEIO_TOKEN` – your Frame.io API token
+- `FRAMEIO_ACCOUNT_ID` – your Frame.io account ID (auto-detected if omitted)
+
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
 deployment platform relies on the standard `TZ` variable, you can set both to
 the same value.
