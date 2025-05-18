@@ -221,6 +221,18 @@ const commands = {
     // Add check-tasks command to manually run the end-of-day task check
     new SlashCommandBuilder().setName('check-tasks').setDescription('Check for completed tasks in recent messages'),
   ],
+
+  // Economy commands
+  creds: [
+    new SlashCommandBuilder().setName('creds').setDescription('Show your Creds balance and XP'),
+    new SlashCommandBuilder().setName('kudos').setDescription('Give Creds to another user')
+      .addUserOption(option => option.setName('user').setDescription('Recipient').setRequired(true))
+      .addIntegerOption(option => option.setName('amount').setDescription('Amount of Creds').setRequired(true))
+      .addStringOption(option => option.setName('reason').setDescription('Reason').setRequired(true)),
+    new SlashCommandBuilder().setName('shop').setDescription('List reward shop items'),
+    new SlashCommandBuilder().setName('redeem').setDescription('Redeem a shop item')
+      .addStringOption(option => option.setName('item').setDescription('Item name').setRequired(true)),
+  ],
 };
 
 // Helper function to get all commands as a flat array
@@ -229,7 +241,8 @@ function getAllCommands() {
     ...commands.basic,
     ...commands.notion,
     ...commands.meetings,
-    ...commands.utility
+    ...commands.utility,
+    ...commands.creds
   ];
 }
 

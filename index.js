@@ -12,7 +12,7 @@ const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const app = express();
-const { addTask } = require('./taskPoints');
+
 
 // Import knowledge assistant
 const { handleAskCommand } = require('./knowledge-assistant');
@@ -68,7 +68,7 @@ let jobs = [
   { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** starts now — focus mode ON (9:20-11:00).` },
   { tag: 'Fika Break', cron: '0 11 * * 1-5', text: `🍪 <@&${TEAM_ROLE_ID}> **Fika Break** - Short break time! (11:00-11:20)`, notify: true },
   { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** continues — back to focused mode (11:20-13:00).` },
-  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** — enjoy! Back at 13:45.`, notify: true },
+  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽 <@&${TEAM_ROLE_ID}> **Lunch break** – enjoy! Back at 13:45.`, notify: true },
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
@@ -3844,6 +3844,46 @@ Example Output: {
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
       await handleAskCommand(interaction);
+    }
+
+    // Handle the /creds command
+    else if (commandName === 'creds') {
+      const { creds, xp, level } = points.getBalance(interaction.user.id);
+      await interaction.reply({
+        content: `You have **${creds}** Creds and **${xp} XP** (Level ${level}).`,
+        ephemeral: true
+      });
+    }
+
+    // Handle the /kudos command
+    else if (commandName === 'kudos') {
+      const target = interaction.options.getUser('user');
+      const amount = interaction.options.getInteger('amount');
+      const reason = interaction.options.getString('reason');
+      points.addCreds(target.id, amount, reason);
+      await interaction.reply({
+        content: `Awarded **${amount}** Creds to ${target} for "${reason}"`,
+        allowedMentions: { users: [target.id] }
+      });
+    }
+
+    // Handle the /shop command
+    else if (commandName === 'shop') {
+      const items = rewards.map(r => `**${r.name}** - ${r.cost} Creds`).join('\n');
+      await interaction.reply({ content: `Available rewards:\n${items}`, ephemeral: true });
+    }
+
+    // Handle the /redeem command
+    else if (commandName === 'redeem') {
+      const itemName = interaction.options.getString('item');
+      const reward = rewards.find(r => r.name.toLowerCase() === itemName.toLowerCase());
+      if (!reward) {
+        await interaction.reply({ content: 'Item not found.', ephemeral: true });
+      } else if (!points.spendCreds(interaction.user.id, reward.cost, `Redeemed ${reward.name}`)) {
+        await interaction.reply({ content: 'Not enough Creds.', ephemeral: true });
+      } else {
+        await interaction.reply({ content: `You redeemed **${reward.name}** for ${reward.cost} Creds!`, ephemeral: true });
+      }
     }
     
     // Other commands here

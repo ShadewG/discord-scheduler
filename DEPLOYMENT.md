@@ -18,7 +18,7 @@ Before deploying, make sure you have:
    - `DISCORD_TOKEN`
    - `CHANNEL_ID`
    - `ROLE_ID`
-   - `TZ`
+   - `TIMEZONE`
 5. Deploy the project
 
 ## Option 2: Deploy on Repl.it
@@ -29,7 +29,7 @@ Before deploying, make sure you have:
    - `DISCORD_TOKEN`
    - `CHANNEL_ID`
    - `ROLE_ID`
-   - `TZ`
+   - `TIMEZONE`
 4. Use the "Run" button to start your bot
 5. Set up Repl.it's "Always On" feature to keep your bot running
 
@@ -44,7 +44,7 @@ Before deploying, make sure you have:
    - `DISCORD_TOKEN`
    - `CHANNEL_ID`
    - `ROLE_ID`
-   - `TZ`
+   - `TIMEZONE`
 7. Deploy the service
 
 ## Option 4: Deploy on Fly.io
@@ -57,7 +57,7 @@ Before deploying, make sure you have:
    fly secrets set DISCORD_TOKEN=your_token_here
    fly secrets set CHANNEL_ID=your_channel_id
    fly secrets set ROLE_ID=your_role_id
-   fly secrets set TZ=Europe/Berlin
+   fly secrets set TIMEZONE=Europe/Berlin
    ```
 5. Deploy: `fly deploy`
 
