@@ -12,8 +12,7 @@ const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const app = express();
-const points = require('./points');
-const rewards = require('./rewards.json');
+
 
 // Import knowledge assistant
 const { handleAskCommand } = require('./knowledge-assistant');
@@ -60,6 +59,8 @@ const MESSAGE_BACKUP_CHANNEL_ID = '1296549507357741086'; // Channel to backup me
 
 // Team mention role ID
 const TEAM_ROLE_ID = '1364657163598823474';
+// To-do list channel ID
+const TODO_CHANNEL_ID = process.env.TODO_CHANNEL_ID;
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
@@ -4689,6 +4690,29 @@ async function extractTasksFromMorningMessages() {
       const totalTasks = Object.values(tasksByAuthor).reduce(
         (sum, user) => sum + user.tasks.length, 0
       );
+
+      // Estimate points for each task and store
+      let summaryLines = [];
+      for (const [authorId, authorData] of Object.entries(tasksByAuthor)) {
+        for (const desc of authorData.tasks) {
+          const points = await estimateTaskPoints(desc);
+          addTask({
+            id: Date.now().toString() + Math.random().toString(16).slice(2, 6),
+            userId: authorId,
+            description: desc,
+            points,
+            completed: false
+          });
+          summaryLines.push(`• (${points} pts) ${desc} — <@${authorId}>`);
+        }
+      }
+
+      if (TODO_CHANNEL_ID) {
+        const todoChannel = client.channels.cache.get(TODO_CHANNEL_ID);
+        if (todoChannel && summaryLines.length > 0) {
+          await todoChannel.send(`**Today's Tasks**\n` + summaryLines.join('\n'));
+        }
+      }
       
       logToFile(`✅ Task extraction completed: Created ${totalPagesCreated} individual Notion task pages for ${authorCount} team members (${totalTasks} total tasks)`);
       
@@ -5055,6 +5079,31 @@ function extractTasksFromContent(content) {
   const uniqueTasks = Array.from(new Set(tasks.filter(task => task.length > 0)));
   logToFile(`Extracted ${uniqueTasks.length} total tasks from content`);
   return uniqueTasks;
+}
+
+// Estimate story points for a task using GPT-4o
+async function estimateTaskPoints(description) {
+  if (!openai) return 1;
+
+  try {
+    const systemPrompt = 'You estimate effort for short tasks with a number 1-5.';
+    const userPrompt = `Task: "${description}"`;
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' }
+    });
+    const content = response.choices[0]?.message?.content || '{}';
+    const parsed = JSON.parse(content);
+    return parsed.points || 1;
+  } catch (err) {
+    logToFile(`Error estimating points: ${err.message}`);
+    return 1;
+  }
 }
 
 // Function to create individual Notion task pages
