@@ -175,8 +175,17 @@ function createProgressBar(current, total, size = 10, filledChar = '█', emptyC
   const percentage = Math.min(Math.max(current / total, 0), 1);
   const filledCount = Math.round(size * percentage);
   const emptyCount = size - filledCount;
-  
+
   return filledChar.repeat(filledCount) + emptyChar.repeat(emptyCount);
+}
+
+// Simple credits system stored in credits.json
+function addCreds(userId, amount) {
+  const creditsFile = path.join(__dirname, 'credits.json');
+  const data = readJsonFile(creditsFile, {});
+  data[userId] = (data[userId] || 0) + amount;
+  writeJsonFile(creditsFile, data);
+  logToFile(`[Creds] Added ${amount} to ${userId}. Total: ${data[userId]}`);
 }
 
 module.exports = {
@@ -186,5 +195,6 @@ module.exports = {
   createEmbed,
   readJsonFile,
   writeJsonFile,
-  createProgressBar
+  createProgressBar,
+  addCreds
 };
