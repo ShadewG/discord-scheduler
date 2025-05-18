@@ -65,7 +65,7 @@ let jobs = [
   { tag: 'Deep Work AM', cron: '20 9 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** starts now — focus mode ON (9:20-11:00).` },
   { tag: 'Fika Break', cron: '0 11 * * 1-5', text: `🍪 <@&${TEAM_ROLE_ID}> **Fika Break** - Short break time! (11:00-11:20)`, notify: true },
   { tag: 'Deep Work Continue', cron: '20 11 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work** continues — back to focused mode (11:20-13:00).` },
-  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽️ <@&${TEAM_ROLE_ID}> **Lunch break** — enjoy! Back at 13:45.`, notify: true },
+  { tag: 'Lunch Break', cron: '0 13 * * 1-5', text: `🍽 <@&${TEAM_ROLE_ID}> **Lunch break** – enjoy! Back at 13:45.`, notify: true },
   { tag: 'Planning Huddle', cron: '45 13 * * 1-5', text: `📋 <@&${TEAM_ROLE_ID}> **Planning Huddle** - Quick team sync (13:45-14:00).`, notify: true },
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
