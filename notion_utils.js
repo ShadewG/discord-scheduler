@@ -63,7 +63,20 @@ async function fetchActiveProjectsForUser(staff) {
   }
 
   const databaseId = PROJECTS_DATABASE_ID;
-  const filterConditions = [];
+  const filterConditions = [
+  {
+    property: "Status",
+    status: {
+      does_not_equal: "Done",
+    },
+  },
+  {
+    property: "Status",
+    status: {
+      does_not_equal: "Archived",
+    },
+  }
+];
 
   filterConditions.push({
     property: "Project Owner",
@@ -125,43 +138,64 @@ async function fetchActiveTasksForUser(staff) {
   }
 
   const databaseId = TASKS_DATABASE_ID;
-  const filterConditions = [
-    {
-      property: "Assignee",
-      select: {
-        equals: staff.notionTaskAssigneeName,
-      },
+const filterConditions = [
+  {
+    property: "Status",
+    status: {
+      does_not_equal: "Done",
     },
-    {
-      property: "Status",
-      status: {
-        does_not_equal: "Done",
-      },
+  },
+  {
+    property: "Status",
+    status: {
+      does_not_equal: "Archived",
     },
-    {
-      property: "Status",
-      status: {
-        does_not_equal: "Archived",
-      },
-    }
-  ];
+  }
+];
   
   const fullFilter = { and: filterConditions };
-  logToFile(`[NotionUtils] Querying Tasks DB (${databaseId}) for ${staff.name} (Assignee: ${staff.notionTaskAssigneeName}). Filter: ${JSON.stringify(fullFilter)}`);
+  logToFile(`[NotionUtils] Querying Tasks DB (${databaseId}) for ${staff.name}. Filter: ${JSON.stringify(fullFilter)}`);
 
+  const allResults = [];
+  let cursor = undefined;
   try {
-    const response = await notionUtilsClient.databases.query({
-      database_id: databaseId,
-      filter: fullFilter,
-    });
-    logToFile(`[NotionUtils] Tasks query for ${staff.name} (Assignee: ${staff.notionTaskAssigneeName}) returned ${response.results.length} results.`);
-    if (response.results.length > 0) {
-      logToFile(`[NotionUtils] First task raw data for ${staff.name}: ID: ${response.results[0].id}, Properties: ${JSON.stringify(response.results[0].properties)}`);
+    do {
+      const response = await notionUtilsClient.databases.query({
+        database_id: databaseId,
+        filter: fullFilter,
+        start_cursor: cursor,
+      });
+      allResults.push(...response.results);
+      cursor = response.has_more ? response.next_cursor : undefined;
+    } while (cursor);
+
+    logToFile(`[NotionUtils] Tasks query for ${staff.name} returned ${allResults.length} results before assignee filtering.`);
+    if (allResults.length > 0) {
+      logToFile(`[NotionUtils] First task raw data for ${staff.name}: ID: ${allResults[0].id}, Properties: ${JSON.stringify(allResults[0].properties)}`);
     }
-    return response.results.map(page => ({
+
+    const tasks = allResults.filter(page => {
+      const assigneeProp = page.properties["Assignee"];
+      if (!assigneeProp) return false;
+      if (assigneeProp.type === "select") {
+        return assigneeProp.select?.name?.toLowerCase() === staff.notionTaskAssigneeName.toLowerCase();
+      } else if (assigneeProp.type === "multi_select") {
+        return assigneeProp.multi_select.some(opt => opt.name.toLowerCase() === staff.notionTaskAssigneeName.toLowerCase());
+      } else if (assigneeProp.type === "people") {
+        return assigneeProp.people.some(p => p.name.toLowerCase() === staff.notionTaskAssigneeName.toLowerCase());
+      }
+      return false;
+    }).map(page => ({
       id: page.id,
-      name: page.properties["Task Name"]?.title[0]?.plain_text || page.properties["Name"]?.title[0]?.plain_text ||  page.properties.title?.title[0]?.plain_text || "Untitled Task",
+      name: page.properties["Task Name"]?.title?.[0]?.plain_text ||
+            page.properties["Name"]?.title?.[0]?.plain_text ||
+            page.properties.title?.title?.[0]?.plain_text ||
+            "Untitled Task",
+      status: page.properties["Status"]?.status?.name || null,
     }));
+
+    logToFile(`[NotionUtils] After assignee filtering found ${tasks.length} tasks for ${staff.name}.`);
+    return tasks;
   } catch (error) {
     logToFile(`[NotionUtils] Error fetching tasks for ${staff.name}: ${error.message}\nStack: ${error.stack}`);
     console.error(`[NotionUtils] Error fetching tasks for ${staff.name}:`, error);
