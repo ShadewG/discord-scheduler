@@ -58,6 +58,7 @@ The bot supports various slash commands:
 - `/schedule` - View the reminder schedule
 - `/notion` - Manage Notion status watchers
 - `/set` - Update properties on a Notion page
+- `/issue-report <timeframe>` - Compile recent Discord messages and Frame.io comments into text files
 
 ## Custom Watchers
 

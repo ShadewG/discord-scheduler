@@ -1,6 +1,6 @@
 // Discord Bot for Insanity
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, AttachmentBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
 const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
@@ -3836,7 +3836,36 @@ Example Output: {
         }
       }
     }
-    
+
+    // Handle the /issue-report command
+    else if (commandName === 'issue-report') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        const timeframe = interaction.options.getString('timeframe') || 'week';
+        await interaction.editReply('⏳ Generating issue report...');
+
+        const files = await generateIssueReport(timeframe);
+        if (!files) {
+          await interaction.editReply('❌ Failed to generate report');
+        } else {
+          const attachments = [];
+          attachments.push(new AttachmentBuilder(files.msgFile));
+          attachments.push(new AttachmentBuilder(files.frameFile));
+          await interaction.editReply({ content: '📄 Issue report generated', files: attachments });
+        }
+      } catch (error) {
+        logToFile(`Error in /issue-report command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error generating report: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error generating report: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
@@ -3868,7 +3897,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -5150,7 +5179,7 @@ async function createNotionTaskPage(authorData) {
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
 
 // Add this function after the findProjectByQuery function
 
@@ -5441,6 +5470,128 @@ async function checkEndOfDayTaskUpdates() {
     logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
     console.error('Error checking end-of-day task updates:', error);
     return { success: false, error: error.message };
+  }
+}
+
+// Collect recent messages from all text channels within the given timeframe
+async function collectMessagesForReport(timeframe) {
+  const days = timeframe === 'month' ? 30 : 7;
+  const start = Date.now() - days * 24 * 60 * 60 * 1000;
+  const messages = [];
+  const MAX_MESSAGES = 1000; // cap per channel
+
+  for (const channel of client.channels.cache.values()) {
+    if (!channel.isTextBased() || channel.isThread()) continue;
+    let lastId;
+    let fetchedCount = 0;
+    try {
+      while (fetchedCount < MAX_MESSAGES) {
+        const options = { limit: Math.min(100, MAX_MESSAGES - fetchedCount) };
+        if (lastId) options.before = lastId;
+        const fetched = await channel.messages.fetch(options);
+        if (fetched.size === 0) break;
+        for (const msg of fetched.values()) {
+          if (msg.createdTimestamp < start) {
+            fetchedCount = MAX_MESSAGES;
+            break;
+          }
+          if (msg.content) {
+            const ts = new Date(msg.createdTimestamp).toISOString();
+            messages.push(`[${channel.name}] ${ts} ${msg.author.username}: ${msg.content}`);
+          }
+        }
+        fetchedCount += fetched.size;
+        const last = fetched.last();
+        if (!last || last.createdTimestamp < start) break;
+        lastId = last.id;
+        if (fetched.size < 100) break;
+      }
+    } catch (err) {
+      logToFile(`Error fetching messages from ${channel.id}: ${err.message}`);
+    }
+  }
+  return messages;
+}
+
+// Placeholder: fetch comments from Frame.io if credentials are provided
+async function fetchFrameioComments(timeframe) {
+  if (!process.env.FRAMEIO_TOKEN || !process.env.FRAMEIO_ACCOUNT_ID) return [];
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+  try {
+    const url = `https://api.frame.io/v2/accounts/${process.env.FRAMEIO_ACCOUNT_ID}/comments`;
+    const resp = await axios.get(url, { headers });
+    const comments = [];
+    for (const c of resp.data) {
+      if (new Date(c.created_at).getTime() < since) continue;
+      let fileName = c.asset?.name;
+      if (!fileName && c.asset_id) {
+        try {
+          const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
+          fileName = asset.data.name;
+        } catch {}
+      }
+      comments.push(`[${fileName || 'Unknown'}] ${c.text}`);
+      if (comments.length >= 1000) break;
+    }
+    return comments;
+  } catch (err) {
+    logToFile(`Error fetching Frame.io comments: ${err.message}`);
+    return [];
+  }
+}
+
+// Fetch recent changelog entries from Notion
+async function fetchChangelogSummary(timeframe) {
+  if (!notion || !CHANGELOG_DB) return '';
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const resp = await notion.databases.query({
+      database_id: CHANGELOG_DB,
+      filter: {
+        property: 'Changed At',
+        date: { on_or_after: since }
+      },
+      sorts: [{ property: 'Changed At', direction: 'descending' }],
+      page_size: 50
+    });
+    return resp.results
+      .map(p => {
+        const title = p.properties.Title?.title?.[0]?.plain_text || 'Untitled';
+        const status = p.properties['New Status']?.status?.name ||
+                       p.properties.Status?.status?.name || 'Unknown';
+        const date = p.properties['Changed At']?.date?.start || p.created_time;
+        return `${title} - ${status} (${date})`;
+      })
+      .join('\n');
+  } catch (err) {
+    logToFile(`Error fetching changelog: ${err.message}`);
+    return '';
+  }
+}
+
+// Compile messages and comments into text files
+async function generateIssueReport(timeframe = 'week') {
+  try {
+    const msgs = await collectMessagesForReport(timeframe);
+    const frame = await fetchFrameioComments(timeframe);
+
+    const dir = path.join(__dirname, 'issue-reports');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const msgFile = path.join(dir, `discord-${timestamp}.txt`);
+    const frameFile = path.join(dir, `frameio-${timestamp}.txt`);
+
+    fs.writeFileSync(msgFile, msgs.join('\n'), 'utf8');
+    fs.writeFileSync(frameFile, frame.join('\n'), 'utf8');
+
+    return { msgFile, frameFile };
+  } catch (err) {
+    logToFile(`Error generating issue report: ${err.message}`);
+    return null;
   }
 }
 
