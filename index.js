@@ -3859,6 +3859,8 @@ Example Output: {
           const attachments = [];
           attachments.push(new AttachmentBuilder(files.msgFile));
           attachments.push(new AttachmentBuilder(files.frameFile));
+          if (files.changelogFile) attachments.push(new AttachmentBuilder(files.changelogFile));
+          if (files.assignFile) attachments.push(new AttachmentBuilder(files.assignFile));
           await interaction.editReply({ content: '📄 Issue report generated', files: attachments });
         }
       } catch (error) {
@@ -3942,7 +3944,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -5272,7 +5274,7 @@ async function createNotionTaskPage(authorData) {
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
 
 // Add this function after the findProjectByQuery function
 
@@ -5637,14 +5639,39 @@ async function collectMessagesForReport(timeframe) {
   return messages;
 }
 
-// Placeholder: fetch comments from Frame.io if credentials are provided
+// Cached Frame.io account ID for reuse
+let cachedFrameioAccountId = null;
+
+// Helper to get Frame.io account ID from the API if not provided
+async function getFrameioAccountId() {
+  if (process.env.FRAMEIO_ACCOUNT_ID) return process.env.FRAMEIO_ACCOUNT_ID;
+  if (cachedFrameioAccountId) return cachedFrameioAccountId;
+  if (!process.env.FRAMEIO_TOKEN) return null;
+  try {
+    const resp = await axios.get('https://api.frame.io/v2/me', {
+      headers: { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
+    });
+    const accountId = resp.data.default_account_id || resp.data.accounts?.[0]?.id;
+    if (accountId) {
+      cachedFrameioAccountId = accountId;
+      return accountId;
+    }
+  } catch (err) {
+    logToFile(`Error fetching Frame.io account ID: ${err.message}`);
+  }
+  return null;
+}
+
+// Fetch comments from Frame.io if credentials are provided
 async function fetchFrameioComments(timeframe) {
-  if (!process.env.FRAMEIO_TOKEN || !process.env.FRAMEIO_ACCOUNT_ID) return [];
+  if (!process.env.FRAMEIO_TOKEN) return [];
+  const accountId = await getFrameioAccountId();
+  if (!accountId) return [];
   const days = timeframe === 'month' ? 30 : 7;
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
   try {
-    const url = `https://api.frame.io/v2/accounts/${process.env.FRAMEIO_ACCOUNT_ID}/comments`;
+    const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
     const resp = await axios.get(url, { headers });
     const comments = [];
     for (const c of resp.data) {
@@ -5666,7 +5693,103 @@ async function fetchFrameioComments(timeframe) {
   }
 }
 
-// Fetch recent changelog entries from Notion
+// Generate a detailed changelog text for a single project
+async function generateProjectChangelog(code) {
+  try {
+    const project = await findProjectByQuery(code);
+    if (!project) return '';
+    const page = project.page;
+    let statusChanges = [];
+    let currentStatus = 'Unknown';
+    if (page.properties.Status?.status?.name) {
+      currentStatus = page.properties.Status.status.name;
+      statusChanges.push({ status: currentStatus, date: new Date(page.last_edited_time) });
+    }
+
+    const response = await notion.databases.query({
+      database_id: CHANGELOG_DB,
+      filter: { property: 'Title', title: { contains: code } },
+      sorts: [{ property: 'Changed At', direction: 'ascending' }],
+      page_size: 100
+    });
+
+    for (const related of response.results) {
+      if (related.id === page.id) continue;
+      let pageStatus = null;
+      const props = ['New Status', 'Status', 'status', 'Stage', 'Pipeline Stage'];
+      for (const prop of props) {
+        const val = related.properties[prop];
+        if (val && (val.status?.name || val.select?.name)) {
+          pageStatus = val.status?.name || val.select?.name;
+          break;
+        }
+      }
+      if (pageStatus) {
+        const dateVal = related.properties['Changed At']?.date?.start || related.created_time;
+        statusChanges.push({ status: pageStatus, date: new Date(dateVal) });
+      }
+    }
+
+    if (statusChanges.length === 0) {
+      statusChanges.push({ status: 'Created', date: new Date(page.created_time) });
+      if (page.last_edited_time !== page.created_time) {
+        statusChanges.push({ status: currentStatus, date: new Date(page.last_edited_time) });
+      }
+    }
+
+    statusChanges.sort((a, b) => a.date - b.date);
+    const unique = [];
+    let last = null;
+    for (const ch of statusChanges) {
+      if (ch.status !== last) { unique.push(ch); last = ch.status; }
+    }
+    statusChanges = unique;
+    for (let i = 1; i < statusChanges.length; i++) {
+      const diff = Math.round((statusChanges[i].date - statusChanges[i-1].date) / (1000 * 60 * 60 * 24));
+      statusChanges[i].daysSincePrevious = diff;
+    }
+
+    const projectName = page.properties['Title']?.title?.[0]?.plain_text ||
+                        page.properties['Project name']?.title?.[0]?.plain_text || code;
+    const lines = [`Status history for ${code} - ${projectName}`, '', `Current Status: ${currentStatus}`];
+    statusChanges.forEach((change, idx) => {
+      const dateStr = change.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const days = change.daysSincePrevious ? ` (${change.daysSincePrevious} day${change.daysSincePrevious !== 1 ? 's' : ''})` : '';
+      lines.push(`${idx + 1}. ${change.status}`);
+      lines.push(`📅 ${dateStr}${days}`);
+    });
+
+    if (statusChanges.length >= 2) {
+      lines.push('⏳ Complete Timeline');
+      let timeline = '';
+      statusChanges.forEach((change, i) => {
+        const dateStr = change.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const days = change.daysSincePrevious ? ` (${change.daysSincePrevious} day${change.daysSincePrevious !== 1 ? 's' : ''})` : '';
+        const bar = i > 0 ? `↓ ─────${days}\n` : '';
+        timeline += `${bar}${change.status},\n- ${dateStr}\n`;
+      });
+      lines.push(timeline.trim());
+
+      const totalDays = Math.round((statusChanges[statusChanges.length - 1].date - statusChanges[0].date) / (1000 * 60 * 60 * 24));
+      lines.push("⏱️ Total Time in Pipeline");
+      lines.push(`${totalDays} days`);
+
+      if (statusChanges.length > 2) {
+        const totalTracked = statusChanges.reduce((sum, ch) => sum + (ch.daysSincePrevious || 0), 0);
+        const avg = (totalTracked / (statusChanges.length - 1)).toFixed(1);
+        lines.push('📊 Average Time Per Stage');
+        lines.push(`${avg} days`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch (err) {
+    logToFile(`Error generating changelog for ${code}: ${err.message}`);
+    return '';
+  }
+}
+
+// Fetch recent changelog entries for projects in the given timeframe
 async function fetchChangelogSummary(timeframe) {
   if (!notion || !CHANGELOG_DB) return '';
   const days = timeframe === 'month' ? 30 : 7;
@@ -5674,25 +5797,63 @@ async function fetchChangelogSummary(timeframe) {
   try {
     const resp = await notion.databases.query({
       database_id: CHANGELOG_DB,
-      filter: {
-        property: 'Changed At',
-        date: { on_or_after: since }
-      },
+      filter: { property: 'Changed At', date: { on_or_after: since } },
       sorts: [{ property: 'Changed At', direction: 'descending' }],
       page_size: 50
     });
-    return resp.results
-      .map(p => {
-        const title = p.properties.Title?.title?.[0]?.plain_text || 'Untitled';
-        const status = p.properties['New Status']?.status?.name ||
-                       p.properties.Status?.status?.name || 'Unknown';
-        const date = p.properties['Changed At']?.date?.start || p.created_time;
-        return `${title} - ${status} (${date})`;
-      })
-      .join('\n');
+
+    const codes = new Set();
+    resp.results.forEach(p => {
+      const title = p.properties.Title?.title?.[0]?.plain_text || '';
+      const match = title.match(/(CL|IB|BC)\d{2}/i);
+      if (match) codes.add(match[0].toUpperCase());
+    });
+
+    const summaries = [];
+    for (const code of codes) {
+      const text = await generateProjectChangelog(code);
+      if (text) summaries.push(`Changelog for ${code}\n${text}`);
+    }
+    return summaries.join('\n\n');
   } catch (err) {
     logToFile(`Error fetching changelog: ${err.message}`);
     return '';
+  }
+}
+
+// Fetch projects changed recently and list assignees
+async function fetchProjectAssignments(timeframe) {
+  if (!notion || !DB) return [];
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const resp = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        timestamp: 'last_edited_time',
+        last_edited_time: { on_or_after: since }
+      },
+      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
+      page_size: 50
+    });
+
+    return resp.results.map(p => {
+      const name = p.properties['Project name']?.title?.[0]?.plain_text || 'Untitled';
+      const codeMatch = name.match(/(CL|IB|BC)\d{2}/i);
+      const code = codeMatch ? codeMatch[0].toUpperCase() : name;
+      const owner = p.properties['Project Owner']?.people?.map(u => u.name).join(', ') ||
+                    p.properties['Project Owner']?.select?.name || 'Unassigned';
+      const editor = p.properties['Editor']?.people?.map(u => u.name).join(', ') ||
+                     p.properties['Editor']?.multi_select?.map(o => o.name).join(', ') || 'None';
+      const writer = p.properties['Writer']?.people?.map(u => u.name).join(', ') ||
+                     p.properties['Writer']?.multi_select?.map(o => o.name).join(', ') || 'None';
+      const status = p.properties.Status?.status?.name || p.properties.Status?.select?.name || 'Unknown';
+
+      return `${code} - ${status} | Owner: ${owner} | Editor: ${editor} | Writer: ${writer}`;
+    });
+  } catch (err) {
+    logToFile(`Error fetching project assignments: ${err.message}`);
+    return [];
   }
 }
 
@@ -5701,6 +5862,8 @@ async function generateIssueReport(timeframe = 'week') {
   try {
     const msgs = await collectMessagesForReport(timeframe);
     const frame = await fetchFrameioComments(timeframe);
+    const changelog = await fetchChangelogSummary(timeframe);
+    const assignments = await fetchProjectAssignments(timeframe);
 
     const dir = path.join(__dirname, 'issue-reports');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -5708,11 +5871,15 @@ async function generateIssueReport(timeframe = 'week') {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const msgFile = path.join(dir, `discord-${timestamp}.txt`);
     const frameFile = path.join(dir, `frameio-${timestamp}.txt`);
+    const changelogFile = path.join(dir, `changelog-${timestamp}.txt`);
+    const assignFile = path.join(dir, `assignments-${timestamp}.txt`);
 
     fs.writeFileSync(msgFile, msgs.join('\n'), 'utf8');
     fs.writeFileSync(frameFile, frame.join('\n'), 'utf8');
+    fs.writeFileSync(changelogFile, changelog, 'utf8');
+    fs.writeFileSync(assignFile, assignments.join('\n'), 'utf8');
 
-    return { msgFile, frameFile };
+    return { msgFile, frameFile, changelogFile, assignFile };
   } catch (err) {
     logToFile(`Error generating issue report: ${err.message}`);
     return null;
