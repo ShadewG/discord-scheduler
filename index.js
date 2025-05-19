@@ -1736,7 +1736,7 @@ client.on('interactionCreate', async interaction => {
           embed.addFields({ name: '⚪ Not Working', value: inactiveStaffText.substring(0, 1020) });
         }
         
-        embed.setFooter({ text: 'All times are in Europe/Berlin timezone' });
+        embed.setFooter({ text: 'All working hours converted to Europe/Berlin timezone' });
         
         logToFile('[AvailabilityCommand] Sending reply.');
         await interaction.editReply({ embeds: [embed] });
