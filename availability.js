@@ -294,17 +294,26 @@ function createTimeProgressBar(staff) {
 
 // Format working hours for display 
 function formatWorkingHours(staff) {
-  const today = moment().tz(staff.timezone).format("ddd");
-  const workHoursToday = staff.workHours.find(wh => wh.day === today);
-  
+  const berlinNow = moment().tz(TZ);
+  const staffNow = berlinNow.clone().tz(staff.timezone);
+  const todayStaff = staffNow.format("ddd");
+  const workHoursToday = staff.workHours.find(wh => wh.day === todayStaff);
+
   if (workHoursToday) {
-    return `${today} ${workHoursToday.start}-${workHoursToday.end} (${staff.timezone.split('/')[1].replace('_',' ')})`;
+    const startBerlin = moment.tz(`${staffNow.format("YYYY-MM-DD")} ${workHoursToday.start}`, staff.timezone).tz(TZ);
+    const endBerlin = moment.tz(`${staffNow.format("YYYY-MM-DD")} ${workHoursToday.end}`, staff.timezone).tz(TZ);
+    const startStr = startBerlin.format("ddd HH:mm");
+    const endStr = endBerlin.isSame(startBerlin, "day") ? endBerlin.format("HH:mm") : endBerlin.format("ddd HH:mm");
+    return `${startStr}-${endStr} (Berlin)`;
   }
-  // Find the general pattern if today is not a workday (e.g., weekend)
+
+  // If today is not a workday, show a typical schedule converted to Berlin time
   if (staff.workHours.length > 0) {
-    const typicalDay = staff.workHours[0]; // Assume first entry is typical
+    const typicalDay = staff.workHours[0];
+    const startBerlin = moment.tz(`2024-01-01 ${typicalDay.start}`, staff.timezone).tz(TZ).format("HH:mm");
+    const endBerlin = moment.tz(`2024-01-01 ${typicalDay.end}`, staff.timezone).tz(TZ).format("HH:mm");
     const days = staff.workHours.map(wh => wh.day).join('-');
-    return `${days} ${typicalDay.start}-${typicalDay.end} (${staff.timezone.split('/')[1].replace('_',' ')})`;
+    return `${days} ${startBerlin}-${endBerlin} (Berlin)`;
   }
   return "No schedule defined";
 }
