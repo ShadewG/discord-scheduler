@@ -75,7 +75,8 @@ let jobs = [
   { tag: 'Deep Work PM', cron: '0 14 * * 1-5', text: `🧠 <@&${TEAM_ROLE_ID}> **Deep Work PM** - Project execution and reviews (14:00-17:00).` },
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
   { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
-  { tag: 'End-of-Day Task Check', cron: '0 18 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
+  { tag: 'Morning Task Extraction', cron: '5 11 * * 1-5', text: '', extractTasks: true }, // Automatically extract tasks
+  { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -430,6 +431,9 @@ function createScheduleEmbed() {
 const TOKEN = process.env.DISCORD_TOKEN;
 const NOTION_KEY = process.env.NOTION_TOKEN || process.env.NOTION_KEY; // Support both naming conventions
 const DB = process.env.NOTION_DATABASE_ID || process.env.NOTION_DB_ID; // Support both naming conventions
+const NOTION_WORKSPACE = process.env.NOTION_WORKSPACE;
+const NOTION_TASKS_URL = process.env.NOTION_TASKS_URL ||
+  (DB ? `https://www.notion.so/${NOTION_WORKSPACE ? `${NOTION_WORKSPACE}/` : ''}${DB.replace(/-/g, '')}` : null);
 const CHANGELOG_DB = process.env.NOTION_CHANGELOG_DB_ID; // No hardcoded fallback - rely on environment variable
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID;
@@ -450,6 +454,7 @@ console.log(`- DISCORD_TOKEN: ${TOKEN ? '✅ Set' : '❌ Missing'}`);
 console.log(`- NOTION_KEY: ${NOTION_KEY ? '✅ Set' : '❌ Missing'}`);
 console.log(`- NOTION_DATABASE_ID: ${DB ? `✅ Set (${DB.substring(0, 6)}...)` : '❌ Missing'}`);
 console.log(`- NOTION_CHANGELOG_DB_ID: ${CHANGELOG_DB ? `✅ Set (${CHANGELOG_DB.substring(0, 6)}...)` : '❌ Missing'}`);
+console.log(`- NOTION_TASKS_URL: ${NOTION_TASKS_URL ? '✅ Set' : '❌ Missing (will use default)'}`);
 console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
 
 // Validate required environment variables
@@ -1065,7 +1070,7 @@ client.on('interactionCreate', async interaction => {
         }
         
         if (result.messageCount === 0) {
-          return interaction.editReply('No messages found from this morning (since 7 AM).');
+          return interaction.editReply('No messages found from this morning (since 8 AM).');
         }
         
         // Create embed for response
@@ -1080,6 +1085,10 @@ client.on('interactionCreate', async interaction => {
             { name: 'Team Members', value: `${result.authors}`, inline: true }
           )
           .setTimestamp();
+
+        if (NOTION_TASKS_URL) {
+          embed.addFields({ name: 'Notion Database', value: `[View Tasks](${NOTION_TASKS_URL})` });
+        }
         
         // Send the response
         await interaction.editReply({ 
@@ -3985,6 +3994,18 @@ function scheduleAllJobs() {
           await backupChannelMessages();
           return;
         }
+
+        // Special handling for automatic task extraction
+        if (job.extractTasks) {
+          logToFile(`Starting automatic task extraction`);
+          const result = await extractTasksFromMorningMessages();
+          if (result.success) {
+            logToFile(`Automatic task extraction complete. Messages: ${result.messageCount}, tasks: ${result.taskCount}`);
+          } else {
+            logToFile(`❌ Error in automatic task extraction: ${result.error || 'Unknown error'}`);
+          }
+          return;
+        }
         
         // Special handling for the task update job
         if (job.updateTasks) {
@@ -4408,24 +4429,24 @@ async function backupChannelMessages() {
     
     logToFile(`Found channel #${channel.name} (${channel.id})`);
     
-    // Calculate today's 7 AM in the configured timezone
+    // Calculate today's 8 AM in the configured timezone
     const now = new Date();
     const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
-    today.setHours(7, 0, 0, 0);
+    today.setHours(8, 0, 0, 0);
     
     // Convert to UTC for comparison with Discord timestamps
     const startTime = new Date(today.toLocaleString('en-US', { timeZone: 'UTC' }));
     
-    logToFile(`Collecting messages since ${startTime.toISOString()} (7 AM in ${TZ})`);
+    logToFile(`Collecting messages since ${startTime.toISOString()} (8 AM in ${TZ})`);
     
     try {
       // Fetch the last 100 messages from the channel
       const messages = await channel.messages.fetch({ limit: 100 });
       
-      // Filter messages sent after 7 AM today
+      // Filter messages sent after 8 AM today
       const recentMessages = messages.filter(msg => new Date(msg.createdAt) >= startTime);
-      
-      logToFile(`Found ${recentMessages.size} messages sent since 7 AM`);
+
+      logToFile(`Found ${recentMessages.size} messages sent since 8 AM`);
       
       if (recentMessages.size === 0) {
         logToFile(`No new messages to backup.`);
@@ -4531,7 +4552,7 @@ async function backupChannelMessages() {
             // Save the AI summary
             const summaryFilePath = path.join(__dirname, 'backups', `summary_${dateStr}.md`);
             const summaryHeader = `# Daily Message Summary - ${new Date().toLocaleDateString('en-US', { timeZone: TZ })}\n\n`;
-            const channelInfo = `**Channel:** #${channel.name}\n**Time Period:** 7:00 AM - 11:00 AM ${TZ}\n**Message Count:** ${formattedMessages.length}\n\n`;
+            const channelInfo = `**Channel:** #${channel.name}\n**Time Period:** 8:00 AM - 11:00 AM ${TZ}\n**Message Count:** ${formattedMessages.length}\n\n`;
             
             fs.writeFileSync(summaryFilePath, summaryHeader + channelInfo + summary);
             logToFile(`✅ Successfully created AI summary at ${summaryFilePath}`);
@@ -4542,7 +4563,7 @@ async function backupChannelMessages() {
                 .setTitle('Morning Message Summary')
                 .setDescription('AI-generated summary of this morning\'s conversation')
                 .setColor(0x00AAFF)
-                .addFields({ name: 'Time Period', value: '7:00 AM - 11:00 AM', inline: true })
+                .addFields({ name: 'Time Period', value: '8:00 AM - 11:00 AM', inline: true })
                 .addFields({ name: 'Message Count', value: `${formattedMessages.length}`, inline: true })
                 .setTimestamp();
               
@@ -4656,24 +4677,24 @@ async function extractTasksFromMorningMessages() {
     
     logToFile(`Found channel #${channel.name} (${channel.id})`);
     
-    // Calculate today's 7 AM in the configured timezone
+    // Calculate today's 8 AM in the configured timezone
     const now = new Date();
     const today = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
-    today.setHours(7, 0, 0, 0);
+    today.setHours(8, 0, 0, 0);
     
     // Convert to UTC for comparison with Discord timestamps
     const startTime = new Date(today.toLocaleString('en-US', { timeZone: 'UTC' }));
     
-    logToFile(`Collecting messages since ${startTime.toISOString()} (7 AM in ${TZ})`);
+    logToFile(`Collecting messages since ${startTime.toISOString()} (8 AM in ${TZ})`);
     
     try {
       // Fetch the last 100 messages from the channel
       const messages = await channel.messages.fetch({ limit: 100 });
       
-      // Filter messages sent after 7 AM today
+      // Filter messages sent after 8 AM today
       const recentMessages = messages.filter(msg => new Date(msg.createdAt) >= startTime);
-      
-      logToFile(`Found ${recentMessages.size} messages sent since 7 AM`);
+
+      logToFile(`Found ${recentMessages.size} messages sent since 8 AM`);
       
       if (recentMessages.size === 0) {
         logToFile(`No new messages to process.`);
@@ -4743,7 +4764,11 @@ async function extractTasksFromMorningMessages() {
       if (TODO_CHANNEL_ID) {
         const todoChannel = client.channels.cache.get(TODO_CHANNEL_ID);
         if (todoChannel && summaryLines.length > 0) {
-          await todoChannel.send(`**Today's Tasks**\n` + summaryLines.join('\n'));
+          let message = `**Today's Tasks**\n` + summaryLines.join('\n');
+          if (NOTION_TASKS_URL) {
+            message += `\n\n<${NOTION_TASKS_URL}>`;
+          }
+          await todoChannel.send(message);
         }
       }
       
