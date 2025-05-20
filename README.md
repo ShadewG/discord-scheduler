@@ -25,6 +25,7 @@ NOTION_WORKSPACE=your_notion_workspace_name (optional, for correct URL linking)
 OPENAI_API_KEY=your_openai_api_key
 FRAMEIO_TOKEN=your_frameio_api_token (optional)
 FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
+FRAMEIO_ROOT_ASSET_ID=your_frameio_project_root_id (optional; all projects scanned if omitted)
 TIMEZONE=your_timezone (e.g., Europe/Berlin)
 ```
 
@@ -32,6 +33,7 @@ For Frame.io integration, provide:
 
 - `FRAMEIO_TOKEN` – your Frame.io API token
 - `FRAMEIO_ACCOUNT_ID` – your Frame.io account ID (auto-detected if omitted)
+- `FRAMEIO_ROOT_ASSET_ID` – specific project root ID to scrape (optional; all projects are scanned if omitted)
 
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
 deployment platform relies on the standard `TZ` variable, you can set both to
