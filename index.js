@@ -3882,6 +3882,42 @@ Example Output: {
       }
     }
 
+    // Handle the /frameio command for testing Frame.io connectivity
+    else if (commandName === 'frameio') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        const timeframe = interaction.options.getString('timeframe') || 'week';
+        const comments = await fetchFrameioComments(timeframe, { throwErrors: true });
+
+        if (!comments || comments.length === 0) {
+          await interaction.editReply('No Frame.io comments found in the selected timeframe.');
+          return;
+        }
+
+        const text = comments.join('\n');
+        if (text.length > 1900) {
+          const dir = path.join(__dirname, 'issue-reports');
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const filePath = path.join(dir, `frameio-test-${timestamp}.txt`);
+          fs.writeFileSync(filePath, text, 'utf8');
+          await interaction.editReply({ content: `Fetched ${comments.length} comments`, files: [new AttachmentBuilder(filePath)] });
+        } else {
+          await interaction.editReply(`Fetched ${comments.length} comments:\n${text}`);
+        }
+      } catch (error) {
+        logToFile(`Error in /frameio command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
@@ -5708,43 +5744,15 @@ async function collectFrameioComments(assetId, since, headers, comments) {
   }
 }
 
-// Get root asset IDs for all projects on the account
-async function getAllProjectRoots(accountId, headers) {
-  const resp = await axios.get(`https://api.frame.io/v2/accounts/${accountId}/projects`, { headers });
-  const roots = [];
-  for (const project of resp.data) {
-    if (project.root_asset_id) roots.push(project.root_asset_id);
-  }
-  return roots;
-}
 
-// Fetch comments from Frame.io if credentials are provided
-async function fetchFrameioComments(timeframe) {
-  if (!process.env.FRAMEIO_TOKEN) return [];
   const days = timeframe === 'month' ? 30 : 7;
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
 
-  let rootAssets = [];
 
-  // Prefer a specific root asset if provided
-  if (process.env.FRAMEIO_ROOT_ASSET_ID) {
-    rootAssets.push(process.env.FRAMEIO_ROOT_ASSET_ID);
-  } else {
-    let accountId = process.env.FRAMEIO_ACCOUNT_ID;
-    if (!accountId) {
-      accountId = await resolveFrameioAccountId();
-      if (!accountId) {
-        logToFile('Could not determine Frame.io account ID');
-        return [];
       }
     }
-    try {
-      rootAssets = await getAllProjectRoots(accountId, headers);
-    } catch (err) {
-      logToFile(`Error fetching Frame.io projects: ${err.message}`);
-      return [];
-    }
+
   }
 
   const comments = [];
