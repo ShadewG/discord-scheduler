@@ -234,6 +234,11 @@ const commands = {
       .addStringOption(option =>
         option.setName('timeframe').setDescription('Timeframe to fetch')
           .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
+      .addStringOption(option => option.setName('project').setDescription('Project/root asset ID to fetch'))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+
+    // Command to list Frame.io projects
+    new SlashCommandBuilder().setName('frameio-projects').setDescription('List Frame.io projects')
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
   ],
 

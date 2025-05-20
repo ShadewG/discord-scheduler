@@ -3890,7 +3890,8 @@ Example Output: {
         hasResponded = true;
 
         const timeframe = interaction.options.getString('timeframe') || 'week';
-        const comments = await fetchFrameioComments(timeframe, { throwErrors: true });
+        const project = interaction.options.getString('project') || undefined;
+        const comments = await fetchFrameioComments(timeframe, { throwErrors: true, project });
 
         if (!comments || comments.length === 0) {
           await interaction.editReply('No Frame.io comments found in the selected timeframe.');
@@ -3910,6 +3911,31 @@ Example Output: {
         }
       } catch (error) {
         logToFile(`Error in /frameio command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
+    // Handle the /frameio-projects command to list projects
+    else if (commandName === 'frameio-projects') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        const projects = await listFrameioProjects();
+        if (!projects || projects.length === 0) {
+          await interaction.editReply('No Frame.io projects found.');
+          return;
+        }
+
+        const text = projects.map(p => `${p.name} - ${p.root}`).join('\n');
+        await interaction.editReply(text.length > 1900 ? text.slice(0, 1900) : text);
+      } catch (error) {
+        logToFile(`Error in /frameio-projects command: ${error.message}`);
         if (hasResponded) {
           await interaction.editReply(`❌ ${error.message}`);
         } else {
@@ -5740,23 +5766,110 @@ async function collectFrameioComments(assetId, since, headers, comments) {
     } else if (asset.type === 'folder' || asset.type === 'version_stack') {
       await collectFrameioComments(asset.id, since, headers, comments);
       if (comments.length >= 1000) return;
-
-      }
     }
-
   }
+}
 
-  const comments = [];
-  for (const root of rootAssets) {
+// Retrieve all projects for the Frame.io account
+async function listFrameioProjects() {
+  if (!process.env.FRAMEIO_TOKEN) return [];
+  let accountId = process.env.FRAMEIO_ACCOUNT_ID;
+  if (!accountId) {
+    accountId = await resolveFrameioAccountId();
+    if (!accountId) {
+      logToFile('Could not determine Frame.io account ID');
+      return [];
+    }
+  }
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+  try {
+    const url = `https://api.frame.io/v2/accounts/${accountId}/projects`;
+    const resp = await axios.get(url, { headers });
+    return resp.data.map(p => ({ id: p.id, name: p.name, root: p.root_asset_id }));
+  } catch (err) {
+    logToFile(`Error fetching Frame.io projects: ${err.message}`);
+    return [];
+  }
+}
+
+// Get root asset IDs for all projects on the account
+async function getAllProjectRoots(accountId, headers) {
+  const resp = await axios.get(`https://api.frame.io/v2/accounts/${accountId}/projects`, { headers });
+  const roots = [];
+  for (const project of resp.data) {
+    if (project.root_asset_id) roots.push(project.root_asset_id);
+  }
+  return roots;
+}
+
+// Fetch comments from Frame.io if credentials are provided
+async function fetchFrameioComments(timeframe, options = {}) {
+  const { throwErrors = false, project } = options;
+  if (!process.env.FRAMEIO_TOKEN) {
+    const err = new Error('FRAMEIO_TOKEN not configured');
+    if (throwErrors) throw err; else { logToFile(err.message); return []; }
+  }
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+
+  // Prefer crawling a specific project if a root asset ID is provided
+  const rootAsset = project || process.env.FRAMEIO_ROOT_ASSET_ID;
+  if (rootAsset) {
     try {
-      await collectFrameioComments(root, since, headers, comments);
+      const comments = [];
+      await collectFrameioComments(rootAsset, since, headers, comments);
+      return comments;
     } catch (err) {
       logToFile(`Error fetching Frame.io comments: ${err.message}`);
+      if (throwErrors) throw err; else return [];
     }
-    if (comments.length >= 1000) break;
   }
 
-  return comments;
+  // Fallback to account-wide comments using the account ID
+  let accountId = process.env.FRAMEIO_ACCOUNT_ID;
+  if (!accountId) {
+    accountId = await resolveFrameioAccountId();
+    if (!accountId) {
+      logToFile('Could not determine Frame.io account ID');
+      if (throwErrors) throw new Error('Could not determine Frame.io account ID');
+      return [];
+    }
+  }
+  try {
+    const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
+    const resp = await axios.get(url, { headers });
+    const comments = [];
+    for (const c of resp.data) {
+      if (new Date(c.created_at).getTime() < since) continue;
+      let fileName = c.asset?.name;
+      if (!fileName && c.asset_id) {
+        try {
+          const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
+          fileName = asset.data.name;
+        } catch {}
+      }
+      comments.push(`[${fileName || 'Unknown'}] ${c.text}`);
+      if (comments.length >= 1000) break;
+    }
+    return comments;
+  } catch (err) {
+    logToFile(`Error fetching Frame.io comments: ${err.message}`);
+    if (err.response && err.response.status === 404) {
+      try {
+        const roots = await getAllProjectRoots(accountId, headers);
+        const comments = [];
+        for (const r of roots) {
+          await collectFrameioComments(r, since, headers, comments);
+          if (comments.length >= 1000) break;
+        }
+        return comments;
+      } catch (inner) {
+        logToFile(`Error during fallback project scan: ${inner.message}`);
+      }
+    }
+    if (throwErrors) throw err; else return [];
+  }
 }
 
 // Generate a detailed changelog text for a single project
