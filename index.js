@@ -5740,23 +5740,91 @@ async function collectFrameioComments(assetId, since, headers, comments) {
     } else if (asset.type === 'folder' || asset.type === 'version_stack') {
       await collectFrameioComments(asset.id, since, headers, comments);
       if (comments.length >= 1000) return;
-
-      }
     }
-
   }
+}
 
-  const comments = [];
-  for (const root of rootAssets) {
+// Get root asset IDs for all projects on the account
+async function getAllProjectRoots(accountId, headers) {
+  const resp = await axios.get(`https://api.frame.io/v2/accounts/${accountId}/projects`, { headers });
+  const roots = [];
+  for (const project of resp.data) {
+    if (project.root_asset_id) roots.push(project.root_asset_id);
+  }
+  return roots;
+}
+
+// Fetch comments from Frame.io if credentials are provided
+async function fetchFrameioComments(timeframe, options = {}) {
+  const { throwErrors = false } = options;
+  if (!process.env.FRAMEIO_TOKEN) {
+    const err = new Error('FRAMEIO_TOKEN not configured');
+    if (throwErrors) throw err; else { logToFile(err.message); return []; }
+  }
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+
+  // Prefer crawling a specific project if a root asset ID is provided
+  const rootAsset = process.env.FRAMEIO_ROOT_ASSET_ID;
+  if (rootAsset) {
     try {
-      await collectFrameioComments(root, since, headers, comments);
+      const comments = [];
+      await collectFrameioComments(rootAsset, since, headers, comments);
+      return comments;
     } catch (err) {
       logToFile(`Error fetching Frame.io comments: ${err.message}`);
+      if (throwErrors) throw err; else return [];
     }
-    if (comments.length >= 1000) break;
   }
 
-  return comments;
+  // Attempt to fetch comments account-wide first
+  let accountId = process.env.FRAMEIO_ACCOUNT_ID;
+  if (!accountId) {
+    accountId = await resolveFrameioAccountId();
+    if (!accountId) {
+      logToFile('Could not determine Frame.io account ID');
+      if (throwErrors) throw new Error('Could not determine Frame.io account ID');
+      return [];
+    }
+  }
+  try {
+    const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
+    const resp = await axios.get(url, { headers });
+    const comments = [];
+    for (const c of resp.data) {
+      if (new Date(c.created_at).getTime() < since) continue;
+      let fileName = c.asset?.name;
+      if (!fileName && c.asset_id) {
+        try {
+          const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
+          fileName = asset.data.name;
+        } catch {}
+      }
+      comments.push(`[${fileName || 'Unknown'}] ${c.text}`);
+      if (comments.length >= 1000) break;
+    }
+    return comments;
+  } catch (err) {
+    logToFile(`Error fetching Frame.io comments: ${err.message}`);
+    const status = err.response?.status;
+    if (status && status !== 404) {
+      if (throwErrors) throw err; else return [];
+    }
+    // 404 or unknown endpoint - fallback to project scan
+    try {
+      const roots = await getAllProjectRoots(accountId, headers);
+      const comments = [];
+      for (const root of roots) {
+        await collectFrameioComments(root, since, headers, comments);
+        if (comments.length >= 1000) break;
+      }
+      return comments;
+    } catch (fallbackErr) {
+      logToFile(`Error crawling Frame.io projects: ${fallbackErr.message}`);
+      if (throwErrors) throw fallbackErr; else return [];
+    }
+  }
 }
 
 // Generate a detailed changelog text for a single project
