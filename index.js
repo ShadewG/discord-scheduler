@@ -5662,9 +5662,48 @@ async function resolveFrameioAccountId() {
   return null;
 }
 
+// Recursively collect comments from a Frame.io project
+async function collectFrameioComments(assetId, since, headers, comments) {
+  const resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+  for (const asset of resp.data) {
+    if (asset.type === 'file') {
+      if (asset.comment_count > 0) {
+        const cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+        for (const c of cr.data) {
+          if (new Date(c.created_at).getTime() >= since) {
+            comments.push(`[${asset.name}] ${c.text}`);
+            if (comments.length >= 1000) return;
+          }
+        }
+      }
+    } else if (asset.type === 'folder' || asset.type === 'version_stack') {
+      await collectFrameioComments(asset.id, since, headers, comments);
+      if (comments.length >= 1000) return;
+    }
+  }
+}
+
 // Fetch comments from Frame.io if credentials are provided
 async function fetchFrameioComments(timeframe) {
   if (!process.env.FRAMEIO_TOKEN) return [];
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+
+  // Prefer crawling a specific project if a root asset ID is provided
+  const rootAsset = process.env.FRAMEIO_ROOT_ASSET_ID;
+  if (rootAsset) {
+    try {
+      const comments = [];
+      await collectFrameioComments(rootAsset, since, headers, comments);
+      return comments;
+    } catch (err) {
+      logToFile(`Error fetching Frame.io comments: ${err.message}`);
+      return [];
+    }
+  }
+
+  // Fallback to account-wide comments using the account ID
   let accountId = process.env.FRAMEIO_ACCOUNT_ID;
   if (!accountId) {
     accountId = await resolveFrameioAccountId();
@@ -5673,9 +5712,6 @@ async function fetchFrameioComments(timeframe) {
       return [];
     }
   }
-  const days = timeframe === 'month' ? 30 : 7;
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
-  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
   try {
     const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
     const resp = await axios.get(url, { headers });
