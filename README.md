@@ -35,6 +35,10 @@ For Frame.io integration, provide:
 - `FRAMEIO_ACCOUNT_ID` – your Frame.io account ID (auto-detected if omitted)
 - `FRAMEIO_ROOT_ASSET_ID` – root asset ID of the project for comment scraping
 
+If you encounter a 404 error when using the Frame.io commands, double-check that
+`FRAMEIO_ACCOUNT_ID` and `FRAMEIO_ROOT_ASSET_ID` contain valid IDs from your
+Frame.io workspace.
+
 
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
 deployment platform relies on the standard `TZ` variable, you can set both to

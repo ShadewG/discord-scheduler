@@ -7,7 +7,7 @@ const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
 const fs = require('fs'); // Re-add fs module
 const path = require('path');
-const { logToFile } = require('./log_utils');
+const { logToFile, frameioErrorMessage } = require('./log_utils');
 const { addCreds } = require('./utils');
 const { loadTasks, saveTasks } = require('./tasks');
 const axios = require('axios');
@@ -5718,18 +5718,29 @@ async function resolveFrameioAccountId() {
     }
     logToFile('Frame.io API response did not contain account_id');
   } catch (err) {
-    logToFile(`Error fetching Frame.io account ID: ${err.message}`);
+    const msg = frameioErrorMessage(err, 'Fetching Frame.io account ID');
+    logToFile(msg);
   }
   return null;
 }
 
 // Recursively collect comments from a Frame.io project
 async function collectFrameioComments(assetId, since, headers, comments) {
-  const resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+  let resp;
+  try {
+    resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+  } catch (err) {
+    throw new Error(frameioErrorMessage(err, `Frame.io asset ${assetId}`));
+  }
   for (const asset of resp.data) {
     if (asset.type === 'file') {
       if (asset.comment_count > 0) {
-        const cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+        let cr;
+        try {
+          cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+        } catch (err) {
+          throw new Error(frameioErrorMessage(err, `Comments for asset ${asset.id}`));
+        }
         for (const c of cr.data) {
           if (new Date(c.created_at).getTime() >= since) {
             comments.push(`[${asset.name}] ${c.text}`);
@@ -5763,8 +5774,9 @@ async function fetchFrameioComments(timeframe, options = {}) {
       await collectFrameioComments(rootAsset, since, headers, comments);
       return comments;
     } catch (err) {
-      logToFile(`Error fetching Frame.io comments: ${err.message}`);
-      if (throwErrors) throw err; else return [];
+      const msg = frameioErrorMessage(err, 'Fetching Frame.io comments');
+      logToFile(msg);
+      if (throwErrors) throw new Error(msg); else return [];
     }
   }
 
@@ -5789,15 +5801,18 @@ async function fetchFrameioComments(timeframe, options = {}) {
         try {
           const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
           fileName = asset.data.name;
-        } catch {}
+        } catch (err) {
+          logToFile(frameioErrorMessage(err, `Fetching asset ${c.asset_id}`));
+        }
       }
       comments.push(`[${fileName || 'Unknown'}] ${c.text}`);
       if (comments.length >= 1000) break;
     }
     return comments;
   } catch (err) {
-    logToFile(`Error fetching Frame.io comments: ${err.message}`);
-    if (throwErrors) throw err; else return [];
+    const msg = frameioErrorMessage(err, 'Fetching Frame.io comments');
+    logToFile(msg);
+    if (throwErrors) throw new Error(msg); else return [];
   }
 }
 
