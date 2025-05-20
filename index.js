@@ -5740,15 +5740,6 @@ async function collectFrameioComments(assetId, since, headers, comments) {
     } else if (asset.type === 'folder' || asset.type === 'version_stack') {
       await collectFrameioComments(asset.id, since, headers, comments);
       if (comments.length >= 1000) return;
-    }
-  }
-}
-
-
-  const days = timeframe === 'month' ? 30 : 7;
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
-  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
-
 
       }
     }

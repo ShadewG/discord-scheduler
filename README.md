@@ -33,6 +33,7 @@ For Frame.io integration, provide:
 
 - `FRAMEIO_TOKEN` – your Frame.io API token
 - `FRAMEIO_ACCOUNT_ID` – your Frame.io account ID (auto-detected if omitted)
+- `FRAMEIO_ROOT_ASSET_ID` – root asset ID of the project for comment scraping
 
 
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
