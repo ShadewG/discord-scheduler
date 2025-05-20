@@ -228,6 +228,13 @@ const commands = {
           .setRequired(true)
           .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+
+    // Simple command to test Frame.io connectivity
+    new SlashCommandBuilder().setName('frameio').setDescription('Fetch recent Frame.io comments')
+      .addStringOption(option =>
+        option.setName('timeframe').setDescription('Timeframe to fetch')
+          .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
   ],
 
   // Economy commands

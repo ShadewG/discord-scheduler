@@ -3873,6 +3873,42 @@ Example Output: {
       }
     }
 
+    // Handle the /frameio command for testing Frame.io connectivity
+    else if (commandName === 'frameio') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        const timeframe = interaction.options.getString('timeframe') || 'week';
+        const comments = await fetchFrameioComments(timeframe, { throwErrors: true });
+
+        if (!comments || comments.length === 0) {
+          await interaction.editReply('No Frame.io comments found in the selected timeframe.');
+          return;
+        }
+
+        const text = comments.join('\n');
+        if (text.length > 1900) {
+          const dir = path.join(__dirname, 'issue-reports');
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const filePath = path.join(dir, `frameio-test-${timestamp}.txt`);
+          fs.writeFileSync(filePath, text, 'utf8');
+          await interaction.editReply({ content: `Fetched ${comments.length} comments`, files: [new AttachmentBuilder(filePath)] });
+        } else {
+          await interaction.editReply(`Fetched ${comments.length} comments:\n${text}`);
+        }
+      } catch (error) {
+        logToFile(`Error in /frameio command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
@@ -5662,20 +5698,61 @@ async function resolveFrameioAccountId() {
   return null;
 }
 
+// Recursively collect comments from a Frame.io project
+async function collectFrameioComments(assetId, since, headers, comments) {
+  const resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+  for (const asset of resp.data) {
+    if (asset.type === 'file') {
+      if (asset.comment_count > 0) {
+        const cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+        for (const c of cr.data) {
+          if (new Date(c.created_at).getTime() >= since) {
+            comments.push(`[${asset.name}] ${c.text}`);
+            if (comments.length >= 1000) return;
+          }
+        }
+      }
+    } else if (asset.type === 'folder' || asset.type === 'version_stack') {
+      await collectFrameioComments(asset.id, since, headers, comments);
+      if (comments.length >= 1000) return;
+    }
+  }
+}
+
 // Fetch comments from Frame.io if credentials are provided
-async function fetchFrameioComments(timeframe) {
-  if (!process.env.FRAMEIO_TOKEN) return [];
+async function fetchFrameioComments(timeframe, options = {}) {
+  const { throwErrors = false } = options;
+  if (!process.env.FRAMEIO_TOKEN) {
+    const err = new Error('FRAMEIO_TOKEN not configured');
+    if (throwErrors) throw err; else { logToFile(err.message); return []; }
+  }
+  const days = timeframe === 'month' ? 30 : 7;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
+
+  // Prefer crawling a specific project if a root asset ID is provided
+  const rootAsset = process.env.FRAMEIO_ROOT_ASSET_ID;
+  if (rootAsset) {
+    try {
+      const comments = [];
+      await collectFrameioComments(rootAsset, since, headers, comments);
+      return comments;
+    } catch (err) {
+      logToFile(`Error fetching Frame.io comments: ${err.message}`);
+      if (throwErrors) throw err; else return [];
+    }
+  }
+
+  // Fallback to account-wide comments using the account ID
   let accountId = process.env.FRAMEIO_ACCOUNT_ID;
   if (!accountId) {
     accountId = await resolveFrameioAccountId();
     if (!accountId) {
       logToFile('Could not determine Frame.io account ID');
+      if (throwErrors) throw new Error('Could not determine Frame.io account ID');
       return [];
     }
   }
-  const days = timeframe === 'month' ? 30 : 7;
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
-  const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
   try {
     const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
     const resp = await axios.get(url, { headers });
@@ -5695,7 +5772,7 @@ async function fetchFrameioComments(timeframe) {
     return comments;
   } catch (err) {
     logToFile(`Error fetching Frame.io comments: ${err.message}`);
-    return [];
+    if (throwErrors) throw err; else return [];
   }
 }
 
