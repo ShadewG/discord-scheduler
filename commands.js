@@ -230,12 +230,15 @@ const commands = {
       .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
 
     // Simple command to test Frame.io connectivity
-    new SlashCommandBuilder().setName('frameio').setDescription('Fetch recent Frame.io comments')
-      .addStringOption(option =>
-        option.setName('timeframe').setDescription('Timeframe to fetch')
-          .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
-      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
-  ],
+      new SlashCommandBuilder().setName('frameio').setDescription('Fetch recent Frame.io comments')
+        .addStringOption(option =>
+          option.setName('timeframe').setDescription('Timeframe to fetch')
+            .addChoices({ name: 'Week', value: 'week' }, { name: 'Month', value: 'month' }))
+        .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+
+      // Simple command to DM a specific user
+      new SlashCommandBuilder().setName('noad').setDescription('Send a friendly DM to a specific user'),
+    ],
 
   // Economy commands
   creds: [
