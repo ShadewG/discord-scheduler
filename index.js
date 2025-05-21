@@ -3918,6 +3918,23 @@ Example Output: {
       }
     }
 
+    // Handle the /noad command
+    else if (commandName === 'noad') {
+      try {
+        const userId = '493294607258484776';
+        const user = await client.users.fetch(userId);
+        await user.send('ur cool');
+        await interaction.reply({ content: `DM sent to <@${userId}>`, ephemeral: true });
+      } catch (error) {
+        logToFile(`Error in /noad command: ${error.message}`);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        } else if (interaction.deferred) {
+          await interaction.editReply(`❌ ${error.message}`);
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
