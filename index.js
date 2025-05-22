@@ -1195,7 +1195,7 @@ client.on('interactionCreate', async interaction => {
           }
         }
         
-        const dueDate = properties.Date?.date?.start || 'No Due Date';
+        const dueDate = properties["Upload Date"]?.date?.start || 'No Due Date';
         const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
         const editors = properties.Editor?.multi_select?.map(e => e.name).join(', ') || 'None';
         
@@ -1986,7 +1986,7 @@ client.on('interactionCreate', async interaction => {
           }
           
           if (extractedData.due_date) {
-            propertiesToUpdate['Date'] = {
+            propertiesToUpdate['Upload Date'] = {
               date: { start: extractedData.due_date }
             };
           }
@@ -2165,7 +2165,7 @@ properties that match the Notion database structure below.
 
 NOTION DATABASE STRUCTURE:
 1. Date Properties
-   • Date (Date): Primary due date
+   • Upload Date (Date): Primary upload/due date
    • Date for current stage (Date): Date for the current workflow stage
 
 2. Category (Select)
@@ -2206,11 +2206,11 @@ INSTRUCTIONS:
 5. For select fields, use exact option names from the list provided.
 6. If unsure about a property, don't include it rather than guessing.
 
-Example Input: "Change status to Clip Selection and set the editor to Sarah and due date to next Friday"
+Example Input: "Change status to Clip Selection and set the editor to Sarah and upload date to next Friday"
 Example Output: {
   "Status": "Clip Selection",
   "Editor": "Sarah",
-  "Date": "2023-06-02"
+  "Upload Date": "2023-06-02"
 }
 `;
         
@@ -2290,9 +2290,11 @@ Example Output: {
               notionProperties[propertyKey] = { select: { name: value } };
               break;
               
+            case 'Upload Date':
             case 'Date':
             case 'Date for current stage':
-              notionProperties[propertyKey] = { date: { start: value } };
+              const dateKey = propertyKey === 'Date' ? 'Upload Date' : propertyKey;
+              notionProperties[dateKey] = { date: { start: value } };
               break;
               
             case 'Script':
@@ -2640,7 +2642,7 @@ Example Output: {
               if (isNaN(date.getTime())) {
                 throw new Error('Invalid date format');
               }
-              notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
+              notionProperties['Upload Date'] = { date: { start: date.toISOString().split('T')[0] } };
             } catch (e) {
               await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
               return;
@@ -5420,25 +5422,32 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       logToFile(`Filtering by prefix: ${prefix}`);
     }
     
-    // Query the database
-    const response = await notion.databases.query({
-      database_id: databaseId,
-      filter: Object.keys(filter).length > 0 ? filter : undefined,
-      sorts: [
-        {
-          property: "Date",
-          direction: "ascending"
-        }
-      ],
-      page_size: 100
-    });
-    
-    logToFile(`Found ${response.results.length} projects`);
-    
+    // Query the database with pagination to fetch all projects
+    let startCursor = undefined;
+    const results = [];
+    do {
+      const resp = await notion.databases.query({
+        database_id: databaseId,
+        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        sorts: [
+          {
+            property: "Upload Date",
+            direction: "ascending"
+          }
+        ],
+        page_size: 100,
+        start_cursor: startCursor
+      });
+      results.push(...resp.results);
+      startCursor = resp.has_more ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    logToFile(`Found ${results.length} projects`);
+
     // Extract relevant information from each project
     const projects = [];
     
-    for (const page of response.results) {
+    for (const page of results) {
       try {
         // Extract project code from title
         const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
@@ -5449,7 +5458,7 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
         if (!code && !projectCode) continue;
         
         // Get various date properties
-        const mainDate = page.properties.Date?.date?.start || null;
+        const mainDate = page.properties["Upload Date"]?.date?.start || null;
         const currentStageDate = page.properties["Date for current stage"]?.date?.start || null;
         
         // Format dates if they exist
@@ -5582,7 +5591,7 @@ async function checkEndOfDayTaskUpdates() {
       const taskResponse = await notion.databases.query({
         database_id: TASKS_DB_ID,
         filter: {
-          property: "Date",
+          property: "Upload Date",
           date: {
             equals: todayISO
           }
