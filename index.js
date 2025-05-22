@@ -5894,8 +5894,40 @@ async function resolveFrameioAccountId() {
   return null;
 }
 
-// Recursively collect comments from a Frame.io project
-async function collectFrameioComments(assetId, since, headers, comments) {
+// Cache for asset lookups when building folder paths
+const frameioAssetCache = {};
+
+// Fetch details for a single asset with caching
+async function getFrameioAsset(assetId, headers) {
+  if (frameioAssetCache[assetId]) return frameioAssetCache[assetId];
+  try {
+    const resp = await axiosGetWithRetry(
+      `https://api.frame.io/v2/assets/${assetId}`,
+      headers
+    );
+    frameioAssetCache[assetId] = resp.data;
+    return resp.data;
+  } catch (err) {
+    throw new Error(frameioErrorMessage(err, `Frame.io asset ${assetId}`));
+  }
+}
+
+// Build the full folder path for an asset
+async function buildFrameioPath(assetId, rootId, headers) {
+  const parts = [];
+  let current = assetId;
+  while (current && current !== rootId) {
+    const asset = await getFrameioAsset(current, headers);
+    if (current !== assetId && (asset.type === 'folder' || asset.type === 'version_stack' || asset.type === 'file')) {
+      parts.push(asset.name);
+    }
+    current = asset.parent_id;
+  }
+  return parts.length ? '/' + parts.reverse().join('/') : '/';
+}
+
+// Recursively collect comments from a Frame.io project, limited to recent files
+async function collectFrameioComments(assetId, since, headers, comments, rootId) {
   let resp;
   try {
     resp = await axiosGetWithRetry(
@@ -5907,6 +5939,8 @@ async function collectFrameioComments(assetId, since, headers, comments) {
   }
   for (const asset of resp.data) {
     if (asset.type === 'file') {
+      const updated = Date.parse(asset.updated_at);
+      if (!Number.isNaN(updated) && updated < since) continue;
       if (asset.comment_count > 0) {
         let cr;
         try {
@@ -5917,15 +5951,17 @@ async function collectFrameioComments(assetId, since, headers, comments) {
         } catch (err) {
           throw new Error(frameioErrorMessage(err, `Comments for asset ${asset.id}`));
         }
+        const folder = await buildFrameioPath(asset.id, rootId, headers);
         for (const c of cr.data) {
-          if (new Date(c.created_at).getTime() >= since) {
-            comments.push(`[${asset.name}] ${c.text}`);
+          const created = Date.parse(c.created_at);
+          if (!Number.isNaN(created) && created >= since) {
+            comments.push(`[${folder}${asset.name}] ${c.text}`);
             if (comments.length >= 1000) return;
           }
         }
       }
     } else if (asset.type === 'folder' || asset.type === 'version_stack') {
-      await collectFrameioComments(asset.id, since, headers, comments);
+      await collectFrameioComments(asset.id, since, headers, comments, rootId);
       if (comments.length >= 1000) return;
     }
   }
@@ -5943,11 +5979,15 @@ async function fetchFrameioComments(timeframe, options = {}) {
   const headers = { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` };
 
   // Prefer crawling a specific project if a root asset ID is provided
-  const rootAsset = process.env.FRAMEIO_ROOT_ASSET_ID;
-  if (rootAsset) {
+  const rootEnv = process.env.FRAMEIO_ROOT_ASSET_ID;
+  if (rootEnv) {
     try {
       const comments = [];
-      await collectFrameioComments(rootAsset, since, headers, comments);
+      const roots = rootEnv.split(',').map(r => r.trim()).filter(Boolean);
+      for (const r of roots) {
+        await collectFrameioComments(r, since, headers, comments, r);
+        if (comments.length >= 1000) break;
+      }
       return comments;
     } catch (err) {
       const msg = frameioErrorMessage(err, 'Fetching Frame.io comments');
