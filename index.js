@@ -2047,7 +2047,7 @@ client.on('interactionCreate', async interaction => {
     else if (commandName === 'link') {
       try {
         // Check if ephemeral flag is set
-        const ephemeral = true;
+        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
         await interaction.deferReply({ ephemeral });
         hasResponded = true;
         
