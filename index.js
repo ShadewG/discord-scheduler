@@ -3696,6 +3696,67 @@ Example Output: {
         }
       }
     }
+
+    // Handle the /export command
+    else if (commandName === 'export') {
+      try {
+        const format = interaction.options.getString('format');
+        const includeHistory = interaction.options.getBoolean('include_history') || false;
+        const ephemeral = true;
+
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured.');
+          return;
+        }
+
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+
+        const codeMatch = channel.name.toLowerCase().match(/(ib|cl|bc)\d{2}/i);
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project.');
+          return;
+        }
+
+        const projectCode = codeMatch[0].toUpperCase();
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+
+        const props = project.page.properties;
+        const data = {
+          code: projectCode,
+          name: project.name,
+          status: props.Status?.status?.name || props.Status?.select?.name || 'Unknown',
+          due_date: props['Upload Date']?.date?.start || 'Unknown',
+          notion_url: getNotionPageUrl(project.page.id)
+        };
+
+        if (includeHistory) data.last_edited = project.page.last_edited_time;
+
+        const filePath = exportProjectData(data, format);
+
+        const dm = await interaction.user.createDM();
+        await dm.send({ content: `Here is the ${format.toUpperCase()} export for ${projectCode}`, files: [new AttachmentBuilder(filePath)] });
+
+        await interaction.editReply('✅ Export completed! Check your DMs.');
+      } catch (error) {
+        logToFile(`Error in /export command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error exporting project: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error exporting project: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
     
     // Handle the /remind command
     else if (commandName === 'remind') {
@@ -6098,6 +6159,32 @@ async function generateIssueReport(timeframe = 'week') {
     logToFile(`Error generating issue report: ${err.message}`);
     return null;
   }
+}
+
+// Export basic project data to a file
+function exportProjectData(data, format) {
+  const dir = path.join(__dirname, 'exports');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const code = data.code || 'project';
+  let filePath;
+
+  if (format === 'json') {
+    filePath = path.join(dir, `${code}-${timestamp}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } else if (format === 'csv') {
+    filePath = path.join(dir, `${code}-${timestamp}.csv`);
+    const keys = Object.keys(data);
+    const csv = keys.join(',') + '\n' +
+      keys.map(k => '"' + String(data[k] ?? '').replace(/"/g, '""') + '"').join(',');
+    fs.writeFileSync(filePath, csv, 'utf8');
+  } else {
+    filePath = path.join(dir, `${code}-${timestamp}.txt`);
+    const text = Object.entries(data).map(([k, v]) => `${k}: ${v}`).join('\n');
+    fs.writeFileSync(filePath, text, 'utf8');
+  }
+
+  return filePath;
 }
 
 // Add this near the top of the file with other requires
