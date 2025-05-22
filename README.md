@@ -63,21 +63,6 @@ Frame.io workspace.
    The returned JSON includes a `root_asset_id`. Use this value as
    `FRAMEIO_ROOT_ASSET_ID`.
 
-### Exporting recent comments
-
-This repository includes a helper script to fetch comments from the last 30
-days and save them to `frameio_recent_comments.json`.
-
-Run it after setting the environment variables described above:
-
-```bash
-FRAMEIO_TOKEN=... FRAMEIO_ROOT_ASSET_ID=... \
-python scripts/export-frameio-comments.py
-```
-
-The script outputs each comment with the file path and a direct link to the
-asset in Frame.io.
-
 
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
 deployment platform relies on the standard `TZ` variable, you can set both to

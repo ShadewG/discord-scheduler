@@ -18,6 +18,23 @@ const cors = require('cors');
 const app = express();
 const { commands } = require('./commands');
 
+// Simple helper for rate-limited GET requests with retries
+async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await axios.get(url, { headers });
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 && attempt < retries - 1) {
+        const wait = backoff * (attempt + 1);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 
 // Import knowledge assistant
 const { handleAskCommand } = require('./knowledge-assistant');
@@ -1986,7 +2003,7 @@ client.on('interactionCreate', async interaction => {
           }
           
           if (extractedData.due_date) {
-            propertiesToUpdate['Date'] = {
+            propertiesToUpdate['Upload Date'] = {
               date: { start: extractedData.due_date }
             };
           }
@@ -2165,7 +2182,7 @@ properties that match the Notion database structure below.
 
 NOTION DATABASE STRUCTURE:
 1. Date Properties
-   • Date (Date): Primary due date
+   • Upload Date (Date): Primary upload/due date
    • Date for current stage (Date): Date for the current workflow stage
 
 2. Category (Select)
@@ -2293,7 +2310,8 @@ Example Output: {
             case 'Upload Date':
             case 'Date':
             case 'Date for current stage':
-              notionProperties[propertyKey] = { date: { start: value } };
+              const dateKey = propertyKey === 'Date' ? 'Upload Date' : propertyKey;
+              notionProperties[dateKey] = { date: { start: value } };
               break;
               
             case 'Script':
@@ -2641,7 +2659,7 @@ Example Output: {
               if (isNaN(date.getTime())) {
                 throw new Error('Invalid date format');
               }
-              notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
+              notionProperties['Upload Date'] = { date: { start: date.toISOString().split('T')[0] } };
             } catch (e) {
               await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
               return;
@@ -3695,6 +3713,67 @@ Example Output: {
         }
       }
     }
+
+    // Handle the /export command
+    else if (commandName === 'export') {
+      try {
+        const format = interaction.options.getString('format');
+        const includeHistory = interaction.options.getBoolean('include_history') || false;
+        const ephemeral = true;
+
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured.');
+          return;
+        }
+
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+
+        const codeMatch = channel.name.toLowerCase().match(/(ib|cl|bc)\d{2}/i);
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project.');
+          return;
+        }
+
+        const projectCode = codeMatch[0].toUpperCase();
+        const project = await findProjectByQuery(projectCode);
+        if (!project) {
+          await interaction.editReply(`❌ Could not find project with code "${projectCode}" in Notion database.`);
+          return;
+        }
+
+        const props = project.page.properties;
+        const data = {
+          code: projectCode,
+          name: project.name,
+          status: props.Status?.status?.name || props.Status?.select?.name || 'Unknown',
+          due_date: props['Upload Date']?.date?.start || 'Unknown',
+          notion_url: getNotionPageUrl(project.page.id)
+        };
+
+        if (includeHistory) data.last_edited = project.page.last_edited_time;
+
+        const filePath = exportProjectData(data, format);
+
+        const dm = await interaction.user.createDM();
+        await dm.send({ content: `Here is the ${format.toUpperCase()} export for ${projectCode}`, files: [new AttachmentBuilder(filePath)] });
+
+        await interaction.editReply('✅ Export completed! Check your DMs.');
+      } catch (error) {
+        logToFile(`Error in /export command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error exporting project: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error exporting project: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
     
     // Handle the /remind command
     else if (commandName === 'remind') {
@@ -3984,6 +4063,69 @@ Example Output: {
         content: `Awarded **${amount}** Creds to ${target} for "${reason}"`,
         allowedMentions: { users: [target.id] }
       });
+    }
+
+    // Handle the /dashboard command
+    else if (commandName === 'dashboard') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
+
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+
+        const projectCode = codeMatch[0].toUpperCase();
+        const result = await fetchProjectDeadlines(null, projectCode);
+
+        if (!result.success || !result.projects || result.projects.length === 0) {
+          await interaction.editReply(`❌ Could not fetch information for project ${projectCode}.`);
+          return;
+        }
+
+        const project = result.projects[0];
+        const embed = new EmbedBuilder()
+          .setTitle(`📊 Dashboard for ${project.code}`)
+          .setColor(0x00AAFF)
+          .addFields(
+            { name: 'Status', value: project.status || 'Unknown', inline: true },
+            { name: 'Main Deadline', value: project.formattedMainDeadline || 'Not set', inline: true },
+            { name: 'Stage Deadline', value: project.formattedStageDeadline || 'Not set', inline: true }
+          )
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('Open in Notion')
+            .setStyle(ButtonStyle.Link)
+            .setURL(project.notionUrl)
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      } catch (error) {
+        logToFile(`Error in /dashboard command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error generating dashboard: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error generating dashboard: ${error.message}`, ephemeral: true });
+        }
+      }
     }
 
     // Handle the /shop command
@@ -5421,25 +5563,11 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       logToFile(`Filtering by prefix: ${prefix}`);
     }
     
-    // Query the database
-    const response = await notion.databases.query({
-      database_id: databaseId,
-      filter: Object.keys(filter).length > 0 ? filter : undefined,
-      sorts: [
-        {
-          property: "Upload Date",
-          direction: "ascending"
-        }
-      ],
-      page_size: 100
-    });
-    
-    logToFile(`Found ${response.results.length} projects`);
-    
+
     // Extract relevant information from each project
     const projects = [];
     
-    for (const page of response.results) {
+    for (const page of results) {
       try {
         // Extract project code from title
         const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
@@ -5749,9 +5877,10 @@ async function resolveFrameioAccountId() {
   if (cachedFrameioAccountId) return cachedFrameioAccountId;
   if (!process.env.FRAMEIO_TOKEN) return null;
   try {
-    const resp = await axios.get('https://api.frame.io/v2/me', {
-      headers: { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
-    });
+    const resp = await axiosGetWithRetry(
+      'https://api.frame.io/v2/me',
+      { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
+    );
     const accountId = resp.data.account_id;
     if (accountId) {
       cachedFrameioAccountId = accountId;
@@ -5769,7 +5898,10 @@ async function resolveFrameioAccountId() {
 async function collectFrameioComments(assetId, since, headers, comments) {
   let resp;
   try {
-    resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+    resp = await axiosGetWithRetry(
+      `https://api.frame.io/v2/assets/${assetId}/children`,
+      headers
+    );
   } catch (err) {
     throw new Error(frameioErrorMessage(err, `Frame.io asset ${assetId}`));
   }
@@ -5778,7 +5910,10 @@ async function collectFrameioComments(assetId, since, headers, comments) {
       if (asset.comment_count > 0) {
         let cr;
         try {
-          cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+          cr = await axiosGetWithRetry(
+            `https://api.frame.io/v2/assets/${asset.id}/comments`,
+            headers
+          );
         } catch (err) {
           throw new Error(frameioErrorMessage(err, `Comments for asset ${asset.id}`));
         }
@@ -5833,14 +5968,17 @@ async function fetchFrameioComments(timeframe, options = {}) {
   }
   try {
     const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
-    const resp = await axios.get(url, { headers });
+    const resp = await axiosGetWithRetry(url, headers);
     const comments = [];
     for (const c of resp.data) {
       if (new Date(c.created_at).getTime() < since) continue;
       let fileName = c.asset?.name;
       if (!fileName && c.asset_id) {
         try {
-          const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
+          const asset = await axiosGetWithRetry(
+            `https://api.frame.io/v2/assets/${c.asset_id}`,
+            headers
+          );
           fileName = asset.data.name;
         } catch (err) {
           logToFile(frameioErrorMessage(err, `Fetching asset ${c.asset_id}`));
@@ -6048,6 +6186,32 @@ async function generateIssueReport(timeframe = 'week') {
     logToFile(`Error generating issue report: ${err.message}`);
     return null;
   }
+}
+
+// Export basic project data to a file
+function exportProjectData(data, format) {
+  const dir = path.join(__dirname, 'exports');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const code = data.code || 'project';
+  let filePath;
+
+  if (format === 'json') {
+    filePath = path.join(dir, `${code}-${timestamp}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } else if (format === 'csv') {
+    filePath = path.join(dir, `${code}-${timestamp}.csv`);
+    const keys = Object.keys(data);
+    const csv = keys.join(',') + '\n' +
+      keys.map(k => '"' + String(data[k] ?? '').replace(/"/g, '""') + '"').join(',');
+    fs.writeFileSync(filePath, csv, 'utf8');
+  } else {
+    filePath = path.join(dir, `${code}-${timestamp}.txt`);
+    const text = Object.entries(data).map(([k, v]) => `${k}: ${v}`).join('\n');
+    fs.writeFileSync(filePath, text, 'utf8');
+  }
+
+  return filePath;
 }
 
 // Add this near the top of the file with other requires
