@@ -10,10 +10,13 @@ const path = require('path');
 const { logToFile, frameioErrorMessage } = require('./log_utils');
 const { addCreds } = require('./utils');
 const { loadTasks, saveTasks, addTask } = require('./tasks');
+const points = require('./points');
+const rewards = require('./rewards.json');
 const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const { commands } = require('./commands');
 
 
 // Import knowledge assistant
@@ -900,24 +903,25 @@ client.once('ready', () => {
   
   // Register commands on startup
   try {
-    const { registerCommandsOnStartup } = require('./auto-register-commands');
+    const { registerCommandsOnStartup, registerCommandsToGuild } = require('./auto-register-commands');
     registerCommandsOnStartup(client, TOKEN)
       .then(() => console.log('Commands registered successfully'))
       .catch(error => {
         console.error('Error registering commands:', error);
         logToFile(`Error registering commands: ${error.message}`);
       });
-      
+
     // Register specific commands to BODYCAM server
-    const { registerCommandsToGuild } = require('./auto-register-commands');
     const BODYCAM_SERVER_ID = '1290489132522672182';
     const CATEGORIES_TO_INCLUDE = ['basic', 'notion', 'utility'];
+    const FILES_SERVER_ID = '626755121501437957';
+    const CREDIT_COMMANDS = ['creds'];
     
     // Check if the BODYCAM server exists in the bot's guilds
     const bodycamGuild = client.guilds.cache.get(BODYCAM_SERVER_ID);
     if (bodycamGuild) {
       logToFile(`Found BODYCAM server: ${bodycamGuild.name} (${bodycamGuild.id})`);
-      
+
       // Register specific command categories to BODYCAM server
       registerCommandsToGuild(client, TOKEN, BODYCAM_SERVER_ID, CATEGORIES_TO_INCLUDE)
         .then(success => {
@@ -932,6 +936,25 @@ client.once('ready', () => {
         });
     } else {
       logToFile(`⚠️ BODYCAM server with ID ${BODYCAM_SERVER_ID} not found in bot's guilds`);
+    }
+
+    // Register credit commands to FILES server
+    const filesGuild = client.guilds.cache.get(FILES_SERVER_ID);
+    if (filesGuild) {
+      logToFile(`Found FILES server: ${filesGuild.name} (${filesGuild.id})`);
+      registerCommandsToGuild(client, TOKEN, FILES_SERVER_ID, CREDIT_COMMANDS)
+        .then(success => {
+          if (success) {
+            logToFile(`✅ Successfully registered Creds commands to FILES server`);
+          } else {
+            logToFile(`❌ Failed to register Creds commands to FILES server`);
+          }
+        })
+        .catch(error => {
+          logToFile(`Error registering Creds commands to FILES server: ${error.message}`);
+        });
+    } else {
+      logToFile(`⚠️ FILES server with ID ${FILES_SERVER_ID} not found in bot's guilds`);
     }
   } catch (error) {
     console.error('Error registering commands:', error);
@@ -2798,26 +2821,26 @@ Example Output: {
     // Handle the /help command
     else if (commandName === 'help') {
       try {
-        // Create embed
         const embed = new EmbedBuilder()
           .setTitle('Insanity Discord Bot Help')
-          .setDescription('Here are the available commands and how to use them:')
-          .setColor(0x0099FF)
-          .addFields(
-            { name: '/where [query]', value: 'Find project info by code or name. Shows links, status, and people.' },
-            { name: '/availability', value: 'See who is currently working and their remaining time.' },
-            { name: '/link', value: 'Get the Notion link for the current channel\'s project.' },
-            { name: '/analyze [messages]', value: 'Analyze recent messages to extract project info and update Notion.' },
-            { name: '/sync [text]', value: 'Update Notion with properties from your text (format: "Status: Ready, Editor: Name").' },
-            { name: '/schedule [task]', value: 'Schedule a task or reminder for the channel.' },
-            { name: '/help', value: 'Show this help message.' }
-          )
+          .setDescription('Here are the available commands:')
+          .setColor(0x0099FF);
+
+        for (const [category, cmds] of Object.entries(commands)) {
+          const value = cmds
+            .map(c => `/${c.name} - ${c.description}`)
+            .join('\n');
+          const name = category.charAt(0).toUpperCase() + category.slice(1);
+          embed.addFields({ name, value });
+        }
+
+        embed
           .setFooter({ text: 'Use the ephemeral option on commands to make responses only visible to you' })
           .setTimestamp();
-        
+
         await interaction.reply({ embeds: [embed], ephemeral: true });
         hasResponded = true;
-        
+
       } catch (error) {
         logToFile(`Error in /help command: ${error.message}`);
         if (!hasResponded) {
