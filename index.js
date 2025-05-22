@@ -18,6 +18,23 @@ const cors = require('cors');
 const app = express();
 const { commands } = require('./commands');
 
+// Simple helper for rate-limited GET requests with retries
+async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await axios.get(url, { headers });
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 && attempt < retries - 1) {
+        const wait = backoff * (attempt + 1);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 
 // Import knowledge assistant
 const { handleAskCommand } = require('./knowledge-assistant');
@@ -5749,9 +5766,10 @@ async function resolveFrameioAccountId() {
   if (cachedFrameioAccountId) return cachedFrameioAccountId;
   if (!process.env.FRAMEIO_TOKEN) return null;
   try {
-    const resp = await axios.get('https://api.frame.io/v2/me', {
-      headers: { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
-    });
+    const resp = await axiosGetWithRetry(
+      'https://api.frame.io/v2/me',
+      { Authorization: `Bearer ${process.env.FRAMEIO_TOKEN}` }
+    );
     const accountId = resp.data.account_id;
     if (accountId) {
       cachedFrameioAccountId = accountId;
@@ -5769,7 +5787,10 @@ async function resolveFrameioAccountId() {
 async function collectFrameioComments(assetId, since, headers, comments) {
   let resp;
   try {
-    resp = await axios.get(`https://api.frame.io/v2/assets/${assetId}/children`, { headers });
+    resp = await axiosGetWithRetry(
+      `https://api.frame.io/v2/assets/${assetId}/children`,
+      headers
+    );
   } catch (err) {
     throw new Error(frameioErrorMessage(err, `Frame.io asset ${assetId}`));
   }
@@ -5778,7 +5799,10 @@ async function collectFrameioComments(assetId, since, headers, comments) {
       if (asset.comment_count > 0) {
         let cr;
         try {
-          cr = await axios.get(`https://api.frame.io/v2/assets/${asset.id}/comments`, { headers });
+          cr = await axiosGetWithRetry(
+            `https://api.frame.io/v2/assets/${asset.id}/comments`,
+            headers
+          );
         } catch (err) {
           throw new Error(frameioErrorMessage(err, `Comments for asset ${asset.id}`));
         }
@@ -5833,14 +5857,17 @@ async function fetchFrameioComments(timeframe, options = {}) {
   }
   try {
     const url = `https://api.frame.io/v2/accounts/${accountId}/comments`;
-    const resp = await axios.get(url, { headers });
+    const resp = await axiosGetWithRetry(url, headers);
     const comments = [];
     for (const c of resp.data) {
       if (new Date(c.created_at).getTime() < since) continue;
       let fileName = c.asset?.name;
       if (!fileName && c.asset_id) {
         try {
-          const asset = await axios.get(`https://api.frame.io/v2/assets/${c.asset_id}`, { headers });
+          const asset = await axiosGetWithRetry(
+            `https://api.frame.io/v2/assets/${c.asset_id}`,
+            headers
+          );
           fileName = asset.data.name;
         } catch (err) {
           logToFile(frameioErrorMessage(err, `Fetching asset ${c.asset_id}`));

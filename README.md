@@ -39,6 +39,30 @@ If you encounter a 404 error when using the Frame.io commands, double-check that
 `FRAMEIO_ACCOUNT_ID` and `FRAMEIO_ROOT_ASSET_ID` contain valid IDs from your
 Frame.io workspace.
 
+### Getting Frame.io IDs
+
+1. Log in to [developer.frame.io](https://developer.frame.io/) and create a
+   developer token. Save this value as `FRAMEIO_TOKEN`.
+2. Retrieve your **Account ID** by running:
+
+   ```bash
+   curl -H "Authorization: Bearer $FRAMEIO_TOKEN" https://api.frame.io/v2/me
+   ```
+
+   Copy the `account_id` field from the response and store it in
+   `FRAMEIO_ACCOUNT_ID`.
+3. Open the project you want the bot to read comments from in your browser. The
+   URL contains the project ID (the string after `/projects/`). Request that
+   project via the API to find its root asset:
+
+   ```bash
+   curl -H "Authorization: Bearer $FRAMEIO_TOKEN" \
+     https://api.frame.io/v2/projects/<project_id>
+   ```
+
+   The returned JSON includes a `root_asset_id`. Use this value as
+   `FRAMEIO_ROOT_ASSET_ID`.
+
 
 The bot primarily uses the `TIMEZONE` variable for scheduling. If your
 deployment platform relies on the standard `TZ` variable, you can set both to
