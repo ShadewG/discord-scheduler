@@ -3986,6 +3986,69 @@ Example Output: {
       });
     }
 
+    // Handle the /dashboard command
+    else if (commandName === 'dashboard') {
+      try {
+        const ephemeral = interaction.options.getBoolean('ephemeral') || false;
+        await interaction.deferReply({ ephemeral });
+        hasResponded = true;
+
+        if (!notion) {
+          await interaction.editReply('❌ Notion integration is not configured. Please ask an administrator to set up the Notion API token and database ID.');
+          return;
+        }
+
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply('❌ This command can only be used in a text channel.');
+          return;
+        }
+
+        const channelName = channel.name.toLowerCase();
+        const codeMatch = channelName.match(/(ib|cl|bc)\d{2}/i);
+
+        if (!codeMatch) {
+          await interaction.editReply('❌ This channel does not appear to be linked to a project. Channel name should contain a project code like IB23, CL45, etc.');
+          return;
+        }
+
+        const projectCode = codeMatch[0].toUpperCase();
+        const result = await fetchProjectDeadlines(null, projectCode);
+
+        if (!result.success || !result.projects || result.projects.length === 0) {
+          await interaction.editReply(`❌ Could not fetch information for project ${projectCode}.`);
+          return;
+        }
+
+        const project = result.projects[0];
+        const embed = new EmbedBuilder()
+          .setTitle(`📊 Dashboard for ${project.code}`)
+          .setColor(0x00AAFF)
+          .addFields(
+            { name: 'Status', value: project.status || 'Unknown', inline: true },
+            { name: 'Main Deadline', value: project.formattedMainDeadline || 'Not set', inline: true },
+            { name: 'Stage Deadline', value: project.formattedStageDeadline || 'Not set', inline: true }
+          )
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('Open in Notion')
+            .setStyle(ButtonStyle.Link)
+            .setURL(project.notionUrl)
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      } catch (error) {
+        logToFile(`Error in /dashboard command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ Error generating dashboard: ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ Error generating dashboard: ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /shop command
     else if (commandName === 'shop') {
       const items = rewards.map(r => `**${r.name}** - ${r.cost} Creds`).join('\n');
