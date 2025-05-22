@@ -5422,27 +5422,6 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       logToFile(`Filtering by prefix: ${prefix}`);
     }
     
-    // Query the database with pagination to fetch all projects
-    let startCursor = undefined;
-    const results = [];
-    do {
-      const resp = await notion.databases.query({
-        database_id: databaseId,
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
-        sorts: [
-          {
-            property: "Upload Date",
-            direction: "ascending"
-          }
-        ],
-        page_size: 100,
-        start_cursor: startCursor
-      });
-      results.push(...resp.results);
-      startCursor = resp.has_more ? resp.next_cursor : undefined;
-    } while (startCursor);
-
-    logToFile(`Found ${results.length} projects`);
 
     // Extract relevant information from each project
     const projects = [];
