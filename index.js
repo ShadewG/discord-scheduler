@@ -1986,7 +1986,7 @@ client.on('interactionCreate', async interaction => {
           }
           
           if (extractedData.due_date) {
-            propertiesToUpdate['Date'] = {
+            propertiesToUpdate['Upload Date'] = {
               date: { start: extractedData.due_date }
             };
           }
@@ -2165,7 +2165,7 @@ properties that match the Notion database structure below.
 
 NOTION DATABASE STRUCTURE:
 1. Date Properties
-   • Date (Date): Primary due date
+   • Upload Date (Date): Primary upload/due date
    • Date for current stage (Date): Date for the current workflow stage
 
 2. Category (Select)
@@ -2293,7 +2293,8 @@ Example Output: {
             case 'Upload Date':
             case 'Date':
             case 'Date for current stage':
-              notionProperties[propertyKey] = { date: { start: value } };
+              const dateKey = propertyKey === 'Date' ? 'Upload Date' : propertyKey;
+              notionProperties[dateKey] = { date: { start: value } };
               break;
               
             case 'Script':
@@ -2641,7 +2642,7 @@ Example Output: {
               if (isNaN(date.getTime())) {
                 throw new Error('Invalid date format');
               }
-              notionProperties['Date'] = { date: { start: date.toISOString().split('T')[0] } };
+              notionProperties['Upload Date'] = { date: { start: date.toISOString().split('T')[0] } };
             } catch (e) {
               await interaction.editReply(`❌ Invalid date format: "${value}". Please use a valid date format (e.g., "2023-05-15" or "May 15, 2023").`);
               return;
@@ -5421,25 +5422,11 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       logToFile(`Filtering by prefix: ${prefix}`);
     }
     
-    // Query the database
-    const response = await notion.databases.query({
-      database_id: databaseId,
-      filter: Object.keys(filter).length > 0 ? filter : undefined,
-      sorts: [
-        {
-          property: "Upload Date",
-          direction: "ascending"
-        }
-      ],
-      page_size: 100
-    });
-    
-    logToFile(`Found ${response.results.length} projects`);
-    
+
     // Extract relevant information from each project
     const projects = [];
     
-    for (const page of response.results) {
+    for (const page of results) {
       try {
         // Extract project code from title
         const projectName = page.properties["Project name"]?.title?.[0]?.plain_text || "Unknown";
