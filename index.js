@@ -1195,7 +1195,7 @@ client.on('interactionCreate', async interaction => {
           }
         }
         
-        const dueDate = properties.Date?.date?.start || 'No Due Date';
+        const dueDate = properties["Upload Date"]?.date?.start || 'No Due Date';
         const lead = properties.Lead?.people?.map(p => p.name).join(', ') || 'No Lead';
         const editors = properties.Editor?.multi_select?.map(e => e.name).join(', ') || 'None';
         
@@ -2206,11 +2206,11 @@ INSTRUCTIONS:
 5. For select fields, use exact option names from the list provided.
 6. If unsure about a property, don't include it rather than guessing.
 
-Example Input: "Change status to Clip Selection and set the editor to Sarah and due date to next Friday"
+Example Input: "Change status to Clip Selection and set the editor to Sarah and upload date to next Friday"
 Example Output: {
   "Status": "Clip Selection",
   "Editor": "Sarah",
-  "Date": "2023-06-02"
+  "Upload Date": "2023-06-02"
 }
 `;
         
@@ -2290,6 +2290,7 @@ Example Output: {
               notionProperties[propertyKey] = { select: { name: value } };
               break;
               
+            case 'Upload Date':
             case 'Date':
             case 'Date for current stage':
               notionProperties[propertyKey] = { date: { start: value } };
@@ -5426,7 +5427,7 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       filter: Object.keys(filter).length > 0 ? filter : undefined,
       sorts: [
         {
-          property: "Date",
+          property: "Upload Date",
           direction: "ascending"
         }
       ],
@@ -5449,7 +5450,7 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
         if (!code && !projectCode) continue;
         
         // Get various date properties
-        const mainDate = page.properties.Date?.date?.start || null;
+        const mainDate = page.properties["Upload Date"]?.date?.start || null;
         const currentStageDate = page.properties["Date for current stage"]?.date?.start || null;
         
         // Format dates if they exist
@@ -5582,7 +5583,7 @@ async function checkEndOfDayTaskUpdates() {
       const taskResponse = await notion.databases.query({
         database_id: TASKS_DB_ID,
         filter: {
-          property: "Date",
+          property: "Upload Date",
           date: {
             equals: todayISO
           }
