@@ -1581,6 +1581,12 @@ client.on('interactionCreate', async interaction => {
           
           // Categorize projects
           projects.forEach(project => {
+            // Skip projects that are already uploaded
+            const statusLower = project.status ? project.status.toLowerCase() : '';
+            if (statusLower.includes('uploaded')) {
+              return;
+            }
+
             if (!project.mainDeadline) {
               noDueDate.push(project);
               return;
@@ -5562,7 +5568,22 @@ async function fetchProjectDeadlines(prefix = null, projectCode = null) {
       };
       logToFile(`Filtering by prefix: ${prefix}`);
     }
-    
+
+    // Query the database for projects
+    const response = await notion.databases.query({
+      database_id: databaseId,
+      filter: Object.keys(filter).length > 0 ? filter : undefined,
+      sorts: [
+        {
+          property: "Upload Date",
+          direction: "ascending"
+        }
+      ],
+      page_size: 100
+    });
+
+    const results = response.results;
+    logToFile(`Found ${results.length} projects`);
 
     // Extract relevant information from each project
     const projects = [];
