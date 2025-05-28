@@ -247,6 +247,10 @@ const commands = {
       new SlashCommandBuilder().setName('video').setDescription('Create a video with Runway from an image and prompt')
         .addAttachmentOption(option => option.setName('image').setDescription('Input image').setRequired(true))
         .addStringOption(option => option.setName('prompt').setDescription('Prompt for the video').setRequired(true)),
+
+      // Generate an image using the GPT image API
+      new SlashCommandBuilder().setName('create').setDescription('Create an image with the RED-MONOLITH style')
+        .addStringOption(option => option.setName('prompt').setDescription('Prompt for the image').setRequired(true)),
     ],
 
   // Economy commands
