@@ -18,6 +18,7 @@ const cors = require('cors');
 const app = express();
 const { commands } = require('./commands');
 const { initEmailForwarder } = require('./email_forwarder');
+const GmailPoller = require('./email_poller');
 
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
@@ -122,6 +123,10 @@ const TEAM_ROLE_ID = '1364657163598823474';
 const TODO_CHANNEL_ID = process.env.TODO_CHANNEL_ID;
 // Email forwarding channel ID
 const EMAIL_CHANNEL_ID = process.env.EMAIL_CHANNEL_ID;
+const ENABLE_GMAIL_POLLER = process.env.ENABLE_GMAIL_POLLER === 'true';
+const GMAIL_CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH || path.join(process.cwd(), 'credentials.json');
+const GMAIL_TOKEN_PATH = process.env.GMAIL_TOKEN_PATH || path.join(process.cwd(), 'token.json');
+const GMAIL_POLL_INTERVAL = parseInt(process.env.GMAIL_POLL_INTERVAL, 10) || 5;
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
@@ -876,7 +881,7 @@ function findBestPropertyMatch(propertyPage, targetName) {
 }
 
 // When the client is ready, run this code
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log('Bot is ready!');
   logToFile('Bot started successfully');
   
@@ -1024,6 +1029,17 @@ client.once('ready', () => {
   
   // Check next execution times
   checkAllNextExecutionTimes();
+
+  // Start Gmail polling if enabled
+  if (ENABLE_GMAIL_POLLER && EMAIL_CHANNEL_ID) {
+    try {
+      const emailPoller = new GmailPoller(client, EMAIL_CHANNEL_ID, GMAIL_CREDENTIALS_PATH, GMAIL_TOKEN_PATH);
+      await emailPoller.initialize();
+      emailPoller.startPolling(GMAIL_POLL_INTERVAL);
+    } catch (error) {
+      logToFile(`Failed to start Gmail polling: ${error.message}`);
+    }
+  }
   
   // Start a health check interval to monitor the schedule system
   startScheduleHealthCheck();
