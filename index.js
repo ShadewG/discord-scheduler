@@ -4191,7 +4191,7 @@ Example Output: {
         let videoUrl;
         let attempts = 0;
 
-        while (!['SUCCEEDED', 'FAILED'].includes(status) && attempts < 30) {
+        while (!['SUCCEEDED', 'FAILED'].includes(status?.toUpperCase()) && attempts < 30) {
           await new Promise(r => setTimeout(r, 5000));
           const poll = await axios.get(`https://api.dev.runwayml.com/v1/tasks/${id}`, {
             headers: {
@@ -4200,13 +4200,19 @@ Example Output: {
             }
           });
           status = poll.data.status;
-          if (status === 'SUCCEEDED') {
-            videoUrl = poll.data.output?.[0] || poll.data.output?.url || poll.data.output;
+          if (status && status.toUpperCase() === 'SUCCEEDED') {
+            videoUrl =
+              poll.data.output?.[0] ||
+              poll.data.output?.url ||
+              poll.data.output_url ||
+              poll.data.result?.[0] ||
+              poll.data.result?.url ||
+              poll.data.result;
           }
           attempts++;
         }
 
-        if (status !== 'succeeded' || !videoUrl) {
+        if (status?.toUpperCase() !== 'SUCCEEDED' || !videoUrl) {
           await interaction.editReply('❌ Video generation failed.');
           return;
         }
