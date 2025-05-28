@@ -106,6 +106,9 @@ const { STAFF_AVAILABILITY, isStaffActive, getTimeLeftInShift, createTimeProgres
 // Map of active jobs
 const activeJobs = new Map();
 
+// Track the last image response ID for each user to allow follow-up edits
+const lastImageResponses = new Map();
+
 // Schedule notification channel ID
 const SCHEDULE_CHANNEL_ID = '1364301344508477541'; // Daily Work Schedule channel
 const SCHEDULE_ROLE_ID = '1364657163598823474'; // Role ID to notify for scheduled meetings
@@ -4192,6 +4195,7 @@ Example Output: {
         hasResponded = true;
 
         const userPrompt = interaction.options.getString('prompt');
+        const attachmentOpt = interaction.options.getAttachment('image');
 
         if (!openai) {
           await interaction.editReply('❌ OpenAI API not configured.');
@@ -4200,25 +4204,54 @@ Example Output: {
 
         const stylePrompt = `${RED_MONOLITH_STYLE}\n${userPrompt}`;
 
-        const response = await openai.images.generate({
-          model: 'dall-e-3',
-          prompt: stylePrompt,
-          n: 1,
-          // Use the widest orientation supported by the API to approximate 16:9
-          // (1792x1024 is very close to 1.77 : 1)
-          size: '1792x1024'
-        });
+        const input = [{ role: 'user', content: [{ type: 'input_text', text: stylePrompt }] }];
 
-        const imageUrl = response.data[0]?.url;
+        if (attachmentOpt && attachmentOpt.contentType && attachmentOpt.contentType.startsWith('image/')) {
+          const imgResp = await axios.get(attachmentOpt.url, { responseType: 'arraybuffer' });
+          const base64 = Buffer.from(imgResp.data).toString('base64');
+          input[0].content.push({ type: 'input_image', image_url: `data:${attachmentOpt.contentType};base64,${base64}` });
+        }
 
-        if (!imageUrl) {
+        const params = {
+          model: 'gpt-4o',
+          input,
+          tools: [{
+            type: 'image_generation',
+            partial_images: 2,
+            size: '1536x1024',
+            quality: 'high'
+          }],
+          stream: true
+        };
+
+        const previousId = lastImageResponses.get(interaction.user.id);
+        if (previousId) params.previous_response_id = previousId;
+
+        const stream = await openai.responses.create(params);
+
+        let finalBuffer = null;
+        let responseId = null;
+
+        for await (const event of stream) {
+          if (event.type === 'response.image_generation_call.partial_image') {
+            const idx = event.partial_image_index;
+            const buf = Buffer.from(event.partial_image_b64, 'base64');
+            const partAttachment = new AttachmentBuilder(buf, { name: `partial_${idx}.png` });
+            await interaction.followUp({ content: `⏳ Partial image ${idx + 1}`, files: [partAttachment], ephemeral: true });
+          } else if (event.type === 'response.image_generation_call') {
+            responseId = event.id;
+            finalBuffer = Buffer.from(event.result, 'base64');
+          }
+        }
+
+        if (!finalBuffer) {
           await interaction.editReply('❌ Image generation failed.');
           return;
         }
 
-        const imageResp = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-        const attachment = new AttachmentBuilder(Buffer.from(imageResp.data), { name: 'image.png' });
-        await interaction.editReply({ content: '🖼️ Generated image:', files: [attachment] });
+        lastImageResponses.set(interaction.user.id, responseId);
+        const attachment = new AttachmentBuilder(finalBuffer, { name: 'image.png' });
+        await interaction.editReply({ content: `🖼️ Generated image (Response ID: ${responseId})`, files: [attachment] });
       } catch (error) {
         logToFile(`Error in /create command: ${error.message}`);
         if (hasResponded) {
