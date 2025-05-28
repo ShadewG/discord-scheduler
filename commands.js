@@ -246,7 +246,8 @@ const commands = {
       // Generate a short video using Runway
       new SlashCommandBuilder().setName('video').setDescription('Create a video with Runway from an image and prompt')
         .addAttachmentOption(option => option.setName('image').setDescription('Input image').setRequired(true))
-        .addStringOption(option => option.setName('prompt').setDescription('Prompt for the video').setRequired(true)),
+        .addStringOption(option => option.setName('prompt').setDescription('Prompt for the video').setRequired(true))
+        .addIntegerOption(option => option.setName('duration').setDescription('Duration in seconds (default: 5)')),
 
       // Generate an image using the GPT image API
       new SlashCommandBuilder().setName('create').setDescription('Create an image with the RED-MONOLITH style')
