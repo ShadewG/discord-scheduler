@@ -1647,6 +1647,12 @@ client.on('interactionCreate', async interaction => {
           
           // Categorize projects
           projects.forEach(project => {
+            // Skip projects that are already uploaded
+            const statusLower = project.status ? project.status.toLowerCase() : '';
+            if (statusLower.includes('uploaded')) {
+              return;
+            }
+
             if (!project.mainDeadline) {
               noDueDate.push(project);
               return;
