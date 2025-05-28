@@ -118,6 +118,7 @@ The bot supports various slash commands:
 - `/vo <text>` - Generate an ElevenLabs voiceover and send it
 - `/video <prompt> <image>` - Generate a video from an image using Runway
 - `/create <prompt>` - Generate a RED-MONOLITH style image using GPT
+- `/incoming-email` - Display instructions for forwarding emails to Discord
 
 ## Creds 2.0
 

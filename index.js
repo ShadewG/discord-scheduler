@@ -4326,6 +4326,15 @@ Example Output: {
         await interaction.reply({ content: `You redeemed **${reward.name}** for ${reward.cost} Creds!`, ephemeral: true });
       }
     }
+
+    // Handle the /incoming-email command
+    else if (commandName === 'incoming-email') {
+      const ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+      const instructions = EMAIL_CHANNEL_ID
+        ? `Configure your email provider to POST to \`/incoming-email\`. Emails will be forwarded to <#${EMAIL_CHANNEL_ID}>.`
+        : 'Email forwarding is not configured. Set EMAIL_CHANNEL_ID in the environment variables.';
+      await interaction.reply({ content: instructions, ephemeral });
+    }
     
     // Other commands here
     // ...

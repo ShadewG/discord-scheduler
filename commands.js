@@ -251,6 +251,10 @@ const commands = {
       // Generate an image using the GPT image API
       new SlashCommandBuilder().setName('create').setDescription('Create an image with the RED-MONOLITH style')
         .addStringOption(option => option.setName('prompt').setDescription('Prompt for the image').setRequired(true)),
+
+      // Provide instructions for forwarding emails to Discord
+      new SlashCommandBuilder().setName('incoming-email').setDescription('Show the webhook endpoint for email forwarding')
+        .addBooleanOption(option => option.setName('ephemeral').setDescription('Show the response only to you')),
     ],
 
   // Economy commands
