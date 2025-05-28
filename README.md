@@ -117,7 +117,8 @@ The bot supports various slash commands:
 - `/frameio [timeframe]` - Fetch recent Frame.io comments to test connectivity
 - `/vo <text>` - Generate an ElevenLabs voiceover and send it
 - `/video <prompt> <image>` - Generate a video from an image using Runway
-- `/create <prompt>` - Generate a RED-MONOLITH style image using GPT
+ - `/create <prompt>` - Generate a RED-MONOLITH style image using GPT
+   (images are generated at 1792x1024 resolution to approximate a 16:9 canvas)
 
 ## Creds 2.0
 
