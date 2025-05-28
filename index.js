@@ -4078,6 +4078,78 @@ Example Output: {
       }
     }
 
+    // Handle the /video command
+    else if (commandName === 'video') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+
+        const prompt = interaction.options.getString('prompt');
+        const image = interaction.options.getAttachment('image');
+        const apiKey = process.env.RUNWAY_API_KEY;
+        const model = process.env.RUNWAY_MODEL || 'stable-video-diffusion';
+
+        if (!apiKey) {
+          await interaction.editReply('❌ Runway API not configured.');
+          return;
+        }
+        if (!image) {
+          await interaction.editReply('❌ You must provide an image.');
+          return;
+        }
+
+        const startResp = await axios.post(
+          `https://api.runwayml.com/v1/models/${model}/inferences`,
+          {
+            input: { prompt, image: image.url }
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        const id = startResp.data.id;
+        let status = startResp.data.status;
+        let videoUrl;
+        let attempts = 0;
+
+        while (status !== 'succeeded' && status !== 'failed' && attempts < 30) {
+          await new Promise(r => setTimeout(r, 2000));
+          const poll = await axios.get(`https://api.runwayml.com/v1/inferences/${id}`, {
+            headers: { Authorization: `Bearer ${apiKey}` }
+          });
+          status = poll.data.status;
+          if (status === 'succeeded') {
+            videoUrl = poll.data.output?.url || poll.data.output;
+          }
+          attempts++;
+        }
+
+        if (status !== 'succeeded' || !videoUrl) {
+          await interaction.editReply('❌ Video generation failed.');
+          return;
+        }
+
+        const videoResp = await axios.get(videoUrl, { responseType: 'arraybuffer' });
+        const attachment = new AttachmentBuilder(Buffer.from(videoResp.data), { name: 'video.mp4' });
+        await interaction.editReply({ content: '📹 Generated video:', files: [attachment] });
+      } catch (error) {
+        logToFile(`Error in /video command: ${error.message}`);
+        let msg = error.message;
+        if (error.response && error.response.status === 400) {
+          msg = 'Runway API returned 400 Bad Request. Check your model and parameters.';
+        }
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${msg}`);
+        } else {
+          await interaction.reply({ content: `❌ ${msg}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js
