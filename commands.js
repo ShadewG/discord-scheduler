@@ -241,7 +241,14 @@ const commands = {
 
       // Generate a short voiceover using ElevenLabs
       new SlashCommandBuilder().setName('vo').setDescription('Create a voiceover with ElevenLabs')
-        .addStringOption(option => option.setName('text').setDescription('Text to convert to speech').setRequired(true)),
+        .addStringOption(option => option.setName('text').setDescription('Text to convert to speech').setRequired(true))
+        .addStringOption(option =>
+          option.setName('voice').setDescription('Select the voice')
+            .addChoices(
+              { name: 'Matt washer', value: 'YCxeyFA0G7yTk6Wuv2oq' },
+              { name: 'Frederick Surrey', value: 'j9jfwdrw7BRfcR43Qohk' },
+              { name: 'Constantino', value: 'ApsbCjXt5HguctE80a0i' }
+            )),
 
       // Generate a short video using Runway
       new SlashCommandBuilder().setName('video').setDescription('Create a video with Runway from an image and prompt')

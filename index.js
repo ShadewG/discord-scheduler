@@ -981,6 +981,8 @@ client.once('ready', async () => {
     // Register specific commands to BODYCAM server
     const BODYCAM_SERVER_ID = '1290489132522672182';
     const CATEGORIES_TO_INCLUDE = ['basic', 'notion', 'utility'];
+    const INSANITY_SERVER_ID = '1275557298307203123';
+    const INSANITY_CATEGORIES = ['utility'];
     const FILES_SERVER_ID = '626755121501437957';
     const CREDIT_COMMANDS = ['creds'];
     
@@ -1003,6 +1005,25 @@ client.once('ready', async () => {
         });
     } else {
       logToFile(`⚠️ BODYCAM server with ID ${BODYCAM_SERVER_ID} not found in bot's guilds`);
+    }
+
+    // Register utility commands to Dr Insanity server
+    const insanityGuild = client.guilds.cache.get(INSANITY_SERVER_ID);
+    if (insanityGuild) {
+      logToFile(`Found DR INSANITY server: ${insanityGuild.name} (${insanityGuild.id})`);
+      registerCommandsToGuild(client, TOKEN, INSANITY_SERVER_ID, INSANITY_CATEGORIES)
+        .then(success => {
+          if (success) {
+            logToFile(`✅ Successfully registered utility commands to DR INSANITY server`);
+          } else {
+            logToFile(`❌ Failed to register utility commands to DR INSANITY server`);
+          }
+        })
+        .catch(error => {
+          logToFile(`Error registering utility commands to DR INSANITY server: ${error.message}`);
+        });
+    } else {
+      logToFile(`⚠️ DR INSANITY server with ID ${INSANITY_SERVER_ID} not found in bot's guilds`);
     }
 
     // Register credit commands to FILES server
@@ -4113,8 +4134,9 @@ Example Output: {
         hasResponded = true;
 
         const text = interaction.options.getString('text');
+        const selectedVoice = interaction.options.getString('voice');
         const apiKey = process.env.ELEVENLABS_API_KEY;
-        const voiceId = process.env.ELEVENLABS_VOICE_ID;
+        const voiceId = selectedVoice || process.env.ELEVENLABS_VOICE_ID;
 
         if (!apiKey || !voiceId) {
           await interaction.editReply('❌ ElevenLabs API not configured.');
