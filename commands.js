@@ -242,6 +242,11 @@ const commands = {
       // Generate a short voiceover using ElevenLabs
       new SlashCommandBuilder().setName('vo').setDescription('Create a voiceover with ElevenLabs')
         .addStringOption(option => option.setName('text').setDescription('Text to convert to speech').setRequired(true)),
+
+      // Generate a short video using Runway
+      new SlashCommandBuilder().setName('video').setDescription('Create a video with Runway from an image and prompt')
+        .addAttachmentOption(option => option.setName('image').setDescription('Input image').setRequired(true))
+        .addStringOption(option => option.setName('prompt').setDescription('Prompt for the video').setRequired(true)),
     ],
 
   // Economy commands
