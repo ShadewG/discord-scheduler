@@ -4038,6 +4038,46 @@ Example Output: {
       }
     }
 
+    // Handle the /vo command
+    else if (commandName === 'vo') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+
+        const text = interaction.options.getString('text');
+        const apiKey = process.env.ELEVENLABS_API_KEY;
+        const voiceId = process.env.ELEVENLABS_VOICE_ID;
+
+        if (!apiKey || !voiceId) {
+          await interaction.editReply('❌ ElevenLabs API not configured.');
+          return;
+        }
+
+        const response = await axios.post(
+          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+          { text, model_id: 'eleven_multilingual_v2' },
+          {
+            headers: {
+              'xi-api-key': apiKey,
+              'Content-Type': 'application/json',
+              Accept: 'audio/mpeg'
+            },
+            responseType: 'arraybuffer'
+          }
+        );
+
+        const attachment = new AttachmentBuilder(Buffer.from(response.data), { name: 'voiceover.mp3' });
+        await interaction.editReply({ content: '🗣️ Generated voiceover:', files: [attachment] });
+      } catch (error) {
+        logToFile(`Error in /vo command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
     // Handle the /ask command
     else if (commandName === 'ask') {
       // Use the handleAskCommand function from knowledge-assistant.js

@@ -238,6 +238,10 @@ const commands = {
 
       // Simple command to DM a specific user
       new SlashCommandBuilder().setName('noad').setDescription('Send a friendly DM to a specific user'),
+
+      // Generate a short voiceover using ElevenLabs
+      new SlashCommandBuilder().setName('vo').setDescription('Create a voiceover with ElevenLabs')
+        .addStringOption(option => option.setName('text').setDescription('Text to convert to speech').setRequired(true)),
     ],
 
   // Economy commands
