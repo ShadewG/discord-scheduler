@@ -23,6 +23,8 @@ NOTION_TOKEN=your_notion_integration_token
 NOTION_DB_ID=your_notion_database_id
 NOTION_WORKSPACE=your_notion_workspace_name (optional, for correct URL linking)
 OPENAI_API_KEY=your_openai_api_key
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_VOICE_ID=your_elevenlabs_voice_id
 FRAMEIO_TOKEN=your_frameio_api_token (optional)
 FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 
@@ -103,6 +105,7 @@ The bot supports various slash commands:
 - `/set` - Update properties on a Notion page
 - `/issue-report <timeframe>` - Compile recent Discord messages, Frame.io comments, Notion changelog entries and project assignments into text files
 - `/frameio [timeframe]` - Fetch recent Frame.io comments to test connectivity
+- `/vo <text>` - Generate an ElevenLabs voiceover and send it
 
 ## Creds 2.0
 
