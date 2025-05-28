@@ -17,6 +17,7 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 const { commands } = require('./commands');
+const { initEmailForwarder } = require('./email_forwarder');
 
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
@@ -83,6 +84,8 @@ const MESSAGE_BACKUP_CHANNEL_ID = '1296549507357741086'; // Channel to backup me
 const TEAM_ROLE_ID = '1364657163598823474';
 // To-do list channel ID
 const TODO_CHANNEL_ID = process.env.TODO_CHANNEL_ID;
+// Email forwarding channel ID
+const EMAIL_CHANNEL_ID = process.env.EMAIL_CHANNEL_ID;
 
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
@@ -6433,3 +6436,13 @@ function loadRecentMessages() {
 
 // Expose the recent messages array globally for the knowledge assistant
 global.recentMessages = recentMessages;
+
+// Start email forwarding server if channel ID is provided
+if (EMAIL_CHANNEL_ID) {
+  initEmailForwarder(app, client, EMAIL_CHANNEL_ID);
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Email forwarder listening on port ${PORT}`);
+    logToFile(`Email forwarder listening on port ${PORT}`);
+  });
+}
