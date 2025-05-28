@@ -60,6 +60,39 @@ try {
   logToFile(`Error initializing OpenAI client: ${error.message}`);
 }
 
+// Style guardrail for the /create command
+const RED_MONOLITH_STYLE = `### RED-MONOLITH — Universal Style Guardrail
+
+GLOBAL PALETTE
+- Monochrome reds only: #9B0000 → #FF2020 + pure black.
+- Absolutely no other hues, tints, overlays, or highlights.
+
+SURFACE & DETAIL LEVEL
+3D-rendered digital scene in red monochrome. Wide-angle camera view. Stylized lighting with deep shadows and red highlights. Characters and environment look like clay or mannequin models with no textures but still detailed an accurate to real life humans. Environment resembles a night simulation or surveillance footage. Harsh red lighting casts strong silhouettes. 3D viewport aesthetic
+
+EYES
+- Solid red orbs with a faint inner glow (halo ≤ pupil diameter). No iris or whites.
+
+CAMERA & FRAMING
+- Default canvas 16 : 9.
+- Encourage dramatic low- or high-angle shots; mild fisheye ≈ 12 mm when wide.
+
+LIGHTING
+- Single, strong red key light from camera-left (~30 ° elevation).
+- Pitch-black shadows; smooth vignette to black at frame edges.
+
+ENVIRONMENTS & PROPS
+- Sparse, noir ambience; empty negative space is OK.
+
+CLOTHING & ACCESSORIES
+- All garments inherit the same material and palette rules.
+
+HOW TO PROCESS A USER PROMPT
+1. Keep their scene concept (characters, pose, environment, action).
+2. Translate every element into the RED-MONOLITH vocabulary above—no deviations.
+3. Output a single image that obeys all global rules, merging their description with these constraints.
+4. If any part of the user prompt conflicts with these rules, adjust it to comply rather than refusing; mention the adjustment only if necessary.`;
+
 // Setup timezone
 const TZ = process.env.TIMEZONE || 'Europe/Berlin';
 
@@ -4132,6 +4165,48 @@ Example Output: {
         await interaction.editReply({ content: '📹 Generated video:', files: [attachment] });
       } catch (error) {
         logToFile(`Error in /video command: ${error.message}`);
+        if (hasResponded) {
+          await interaction.editReply(`❌ ${error.message}`);
+        } else {
+          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+        }
+      }
+    }
+
+    // Handle the /create command
+    else if (commandName === 'create') {
+      try {
+        await interaction.deferReply();
+        hasResponded = true;
+
+        const userPrompt = interaction.options.getString('prompt');
+
+        if (!openai) {
+          await interaction.editReply('❌ OpenAI API not configured.');
+          return;
+        }
+
+        const stylePrompt = `${RED_MONOLITH_STYLE}\n${userPrompt}`;
+
+        const response = await openai.images.generate({
+          model: 'dall-e-3',
+          prompt: stylePrompt,
+          n: 1,
+          size: '1024x576'
+        });
+
+        const imageUrl = response.data[0]?.url;
+
+        if (!imageUrl) {
+          await interaction.editReply('❌ Image generation failed.');
+          return;
+        }
+
+        const imageResp = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+        const attachment = new AttachmentBuilder(Buffer.from(imageResp.data), { name: 'image.png' });
+        await interaction.editReply({ content: '🖼️ Generated image:', files: [attachment] });
+      } catch (error) {
+        logToFile(`Error in /create command: ${error.message}`);
         if (hasResponded) {
           await interaction.editReply(`❌ ${error.message}`);
         } else {
