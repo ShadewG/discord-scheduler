@@ -109,6 +109,8 @@ const activeJobs = new Map();
 
 // Track the last image response ID for each user to allow follow-up edits
 const lastImageResponses = new Map();
+// Map bot message ID -> response ID for image generation, used for reply-based edits
+const imageResponseMap = new Map();
 
 // Schedule notification channel ID
 const SCHEDULE_CHANNEL_ID = '1364301344508477541'; // Daily Work Schedule channel
@@ -4302,7 +4304,8 @@ Example Output: {
         lastImageResponses.set(interaction.user.id, responseId);
         const attachment = new AttachmentBuilder(finalBuffer, { name: 'image.png' });
         await interaction.editReply('✅ Image generation complete.');
-        await interaction.followUp({ content: `🖼️ Generated image (Response ID: ${responseId})`, files: [attachment] });
+        const finalMsg = await interaction.followUp({ content: `🖼️ Generated image (Response ID: ${responseId})`, files: [attachment] });
+        imageResponseMap.set(finalMsg.id, responseId);
       } catch (error) {
         logToFile(`Error in /create command: ${error.message}`);
         if (hasResponded) {
@@ -6623,11 +6626,50 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// Collect messages in real-time
-client.on('messageCreate', message => {
+// Collect messages in real-time and handle image edit replies
+client.on('messageCreate', async message => {
   // Skip bot messages
   if (message.author.bot) return;
-  
+
+  // If replying to a bot-generated image, treat as an edit prompt
+  if (message.reference?.messageId) {
+    const prevId = imageResponseMap.get(message.reference.messageId);
+    if (prevId && openai) {
+      try {
+        const stylePrompt = `${RED_MONOLITH_STYLE}\n${message.content}`;
+        const input = [{ role: 'user', content: [{ type: 'input_text', text: stylePrompt }] }];
+        const params = {
+          model: 'gpt-4o',
+          input,
+          tools: [{ type: 'image_generation', partial_images: 2, size: '1536x1024', quality: 'high' }],
+          previous_response_id: prevId,
+          stream: true
+        };
+        const stream = await openai.responses.create(params);
+        let finalBuffer = null;
+        let responseId = null;
+        for await (const event of stream) {
+          if (event.result) {
+            responseId = event.id;
+            finalBuffer = Buffer.from(event.result, 'base64');
+          }
+        }
+        if (!finalBuffer) {
+          await message.reply('❌ Image generation failed.');
+        } else {
+          const attachment = new AttachmentBuilder(finalBuffer, { name: 'image.png' });
+          const replyMsg = await message.reply({ content: `🖼️ Edited image (Response ID: ${responseId})`, files: [attachment] });
+          imageResponseMap.set(replyMsg.id, responseId);
+          lastImageResponses.set(message.author.id, responseId);
+        }
+      } catch (error) {
+        logToFile(`Error editing image: ${error.message}`);
+        await message.reply(`❌ ${error.message}`);
+      }
+      return; // Do not store the edit prompt in recentMessages
+    }
+  }
+
   // Skip messages without content
   if (!message.content.trim()) return;
   

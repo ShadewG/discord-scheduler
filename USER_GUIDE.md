@@ -217,6 +217,15 @@ Many commands have an `ephemeral` option that determines whether the response is
 - `ephemeral:true` - Only you can see the response
 - `ephemeral:false` - Everyone in the channel can see the response
 
+### Image Generation
+Use `/create` to generate an image with the RED-MONOLITH style.
+
+```
+/create prompt:[description] [image:reference]
+```
+
+After the bot sends the image, reply to that image with a new prompt to produce an edited version. The bot keeps track of the previous image automatically.
+
 ### Getting Help
 If you're unsure about how to use a command, you can:
 1. Type `/help` to see general help information
