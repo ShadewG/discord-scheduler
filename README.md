@@ -11,6 +11,7 @@ A powerful Discord bot that integrates with Notion to manage projects, schedule 
 - **Customizable Watchers**: Get notified when Notion properties change
 - **Creds 2.0 Economy**: Earn and spend Creds through `/kudos`, check balances with `/creds`, and redeem rewards from `/shop`.
 - **Email Forwarding**: Send emails arriving at `dropbox@matcher.com` straight to your Discord channel.
+- **Gmail Poller**: Automatically poll Gmail and post new emails to your Discord channel.
 
 ## Environment Variables
 
@@ -33,6 +34,10 @@ FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 
 TIMEZONE=your_timezone (e.g., Europe/Berlin)
 EMAIL_CHANNEL_ID=channel_id_for_forwarding
+ENABLE_GMAIL_POLLER=false
+GMAIL_CREDENTIALS_PATH=credentials.json
+GMAIL_TOKEN_PATH=token.json
+GMAIL_POLL_INTERVAL=5
 ```
 
 For Frame.io integration, provide:
@@ -87,13 +92,15 @@ the same value.
 
 1. Configure your email provider (e.g., SendGrid or Mailgun) to POST incoming
    messages to `/incoming-email` on your deployed bot.
-2. Set `EMAIL_CHANNEL_ID` in your `.env` with the Discord channel that should
-   receive the messages.
+2. Set `EMAIL_CHANNEL_ID` in your `.env` with the Discord channel that should receive the messages.
+
+## Gmail Poller
+Set `ENABLE_GMAIL_POLLER` to `true` to poll Gmail automatically. The bot will use `GMAIL_CREDENTIALS_PATH` and `GMAIL_TOKEN_PATH` for authentication and check every `GMAIL_POLL_INTERVAL` minutes. New emails are posted to `EMAIL_CHANNEL_ID`.
+
 
 ### Using GitHub Actions + Railway
 
 This project is set up to automatically deploy to Railway using GitHub Actions when changes are pushed to the main branch.
-
 To set up continuous deployment:
 
 1. Create a Railway project for your bot
