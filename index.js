@@ -4262,8 +4262,8 @@ Example Output: {
         let partialMsg = null;
 
         for await (const event of stream) {
-          if (event.type === 'response.image_generation_call.partial_image') {
-            const idx = event.partial_image_index;
+          if (event.partial_image_b64) {
+            const idx = event.partial_image_index ?? 0;
             const buf = Buffer.from(event.partial_image_b64, 'base64');
             const partAttachment = new AttachmentBuilder(buf, { name: `partial_${idx}.png` });
             if (partialMsg) {
@@ -4271,7 +4271,9 @@ Example Output: {
             } else {
               partialMsg = await interaction.followUp({ content: `⏳ Partial image ${idx + 1}`, files: [partAttachment], ephemeral: true });
             }
-          } else if (event.type === 'response.image_generation_call') {
+          }
+
+          if (event.result) {
             responseId = event.id;
             finalBuffer = Buffer.from(event.result, 'base64');
           }
