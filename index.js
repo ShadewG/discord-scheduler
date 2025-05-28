@@ -4145,12 +4145,20 @@ Example Output: {
         }
 
         const startResp = await axios.post(
-          'https://api.runwayml.com/v1/inferences',
+          'https://api.dev.runwayml.com/v1/image_to_video',
           {
             model,
-            input: { prompt, image: image.url, duration }
+            promptImage: image.url,
+            promptText: prompt,
+            ratio: '1280:720',
+            duration
           },
-          { headers: { Authorization: `Bearer ${apiKey}` } }
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'X-Runway-Version': '2024-11-06'
+            }
+          }
         );
 
         const id = startResp.data.id;
@@ -4158,14 +4166,17 @@ Example Output: {
         let videoUrl;
         let attempts = 0;
 
-        while (status !== 'succeeded' && status !== 'failed' && attempts < 30) {
-          await new Promise(r => setTimeout(r, 2000));
-          const poll = await axios.get(`https://api.runwayml.com/v1/inferences/${id}`, {
-            headers: { Authorization: `Bearer ${apiKey}` }
+        while (!['SUCCEEDED', 'FAILED'].includes(status) && attempts < 30) {
+          await new Promise(r => setTimeout(r, 5000));
+          const poll = await axios.get(`https://api.dev.runwayml.com/v1/tasks/${id}`, {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'X-Runway-Version': '2024-11-06'
+            }
           });
           status = poll.data.status;
-          if (status === 'succeeded') {
-            videoUrl = poll.data.output?.url || poll.data.output;
+          if (status === 'SUCCEEDED') {
+            videoUrl = poll.data.output?.[0] || poll.data.output?.url || poll.data.output;
           }
           attempts++;
         }
