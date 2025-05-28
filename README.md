@@ -37,6 +37,8 @@ EMAIL_CHANNEL_ID=channel_id_for_forwarding
 ENABLE_GMAIL_POLLER=false
 GMAIL_CREDENTIALS_PATH=credentials.json
 GMAIL_TOKEN_PATH=token.json
+GMAIL_CREDENTIALS_JSON=
+GMAIL_TOKEN_JSON=
 GMAIL_POLL_INTERVAL=5
 ```
 
@@ -95,7 +97,9 @@ the same value.
 2. Set `EMAIL_CHANNEL_ID` in your `.env` with the Discord channel that should receive the messages.
 
 ## Gmail Poller
-Set `ENABLE_GMAIL_POLLER` to `true` to poll Gmail automatically. The bot will use `GMAIL_CREDENTIALS_PATH` and `GMAIL_TOKEN_PATH` for authentication and check every `GMAIL_POLL_INTERVAL` minutes. New emails are posted to `EMAIL_CHANNEL_ID`.
+Set `ENABLE_GMAIL_POLLER` to `true` to poll Gmail automatically. The bot will use `GMAIL_CREDENTIALS_PATH` and `GMAIL_TOKEN_PATH` for file-based authentication and check every `GMAIL_POLL_INTERVAL` minutes. New emails are posted to `EMAIL_CHANNEL_ID`.
+
+If you prefer not to store the credential files on disk, provide the contents via `GMAIL_CREDENTIALS_JSON` and `GMAIL_TOKEN_JSON` environment variables instead.
 
 
 ### Using GitHub Actions + Railway

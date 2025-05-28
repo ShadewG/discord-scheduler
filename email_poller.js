@@ -5,11 +5,13 @@ const path = require('path');
 const { logToFile } = require('./log_utils');
 
 class GmailPoller {
-  constructor(client, channelId, credsPath, tokenPath) {
+  constructor(client, channelId, credsPath, tokenPath, credsJson, tokenJson) {
     this.client = client;
     this.channelId = channelId;
     this.credsPath = credsPath || path.join(process.cwd(), 'credentials.json');
     this.tokenPath = tokenPath || path.join(process.cwd(), 'token.json');
+    this.credsJson = credsJson;
+    this.tokenJson = tokenJson;
     this.gmail = null;
     this.lastCheckedHistoryId = null;
   }
@@ -29,7 +31,23 @@ class GmailPoller {
 
   async authenticate() {
     const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+
+    const loadFromEnv = () => {
+      if (this.credsJson && this.tokenJson) {
+        const { client_secret, client_id, redirect_uris } = this.credsJson.installed;
+        const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+        oAuth2Client.setCredentials(this.tokenJson);
+        return oAuth2Client;
+      }
+      return null;
+    };
+
     try {
+      const envAuth = loadFromEnv();
+      if (envAuth) {
+        return envAuth;
+      }
+
       const token = await fs.readFile(this.tokenPath);
       const credentials = await fs.readFile(this.credsPath);
       const { client_secret, client_id, redirect_uris } = JSON.parse(credentials).installed;
@@ -37,6 +55,9 @@ class GmailPoller {
       oAuth2Client.setCredentials(JSON.parse(token));
       return oAuth2Client;
     } catch (error) {
+      if (this.credsJson) {
+        throw new Error('Token missing or invalid when using environment credentials');
+      }
       const auth = await authenticate({ scopes: SCOPES, keyfilePath: this.credsPath });
       await fs.writeFile(this.tokenPath, JSON.stringify(auth.credentials));
       return auth;
