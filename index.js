@@ -492,6 +492,7 @@ const NOTION_TASKS_URL = process.env.NOTION_TASKS_URL ||
   (DB ? `https://www.notion.so/${NOTION_WORKSPACE ? `${NOTION_WORKSPACE}/` : ''}${DB.replace(/-/g, '')}` : null);
 const CHANGELOG_DB = process.env.NOTION_CHANGELOG_DB_ID; // No hardcoded fallback - rely on environment variable
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const RUNWAY_MODEL = process.env.RUNWAY_MODEL;
 const GUILD_ID = process.env.GUILD_ID;
 
 // Status watchers configuration
@@ -512,6 +513,7 @@ console.log(`- NOTION_DATABASE_ID: ${DB ? `✅ Set (${DB.substring(0, 6)}...)` :
 console.log(`- NOTION_CHANGELOG_DB_ID: ${CHANGELOG_DB ? `✅ Set (${CHANGELOG_DB.substring(0, 6)}...)` : '❌ Missing'}`);
 console.log(`- NOTION_TASKS_URL: ${NOTION_TASKS_URL ? '✅ Set' : '❌ Missing (will use default)'}`);
 console.log(`- OPENAI_API_KEY: ${OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`- RUNWAY_MODEL: ${RUNWAY_MODEL ? '✅ Set' : '❌ Missing'}`);
 
 // Validate required environment variables
 if (!TOKEN) {
@@ -4123,9 +4125,14 @@ Example Output: {
         const prompt = interaction.options.getString('prompt');
         const image = interaction.options.getAttachment('image');
         const apiKey = process.env.RUNWAY_API_KEY;
+        const model = RUNWAY_MODEL;
 
         if (!apiKey) {
           await interaction.editReply('❌ Runway API not configured.');
+          return;
+        }
+        if (!model) {
+          await interaction.editReply('❌ Runway model not configured.');
           return;
         }
         if (!image) {
@@ -4136,6 +4143,7 @@ Example Output: {
         const startResp = await axios.post(
           'https://api.runwayml.com/v1/inferences',
           {
+            model,
             input: { prompt, image: image.url }
           },
           { headers: { Authorization: `Bearer ${apiKey}` } }
@@ -4195,7 +4203,9 @@ Example Output: {
           model: 'dall-e-3',
           prompt: stylePrompt,
           n: 1,
-          size: '1024x576'
+          // Use the widest orientation supported by the API to approximate 16:9
+          // (1792x1024 is very close to 1.77 : 1)
+          size: '1792x1024'
         });
 
         const imageUrl = response.data[0]?.url;
