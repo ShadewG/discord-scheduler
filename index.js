@@ -4231,13 +4231,18 @@ Example Output: {
 
         let finalBuffer = null;
         let responseId = null;
+        let partialMsg = null;
 
         for await (const event of stream) {
           if (event.type === 'response.image_generation_call.partial_image') {
             const idx = event.partial_image_index;
             const buf = Buffer.from(event.partial_image_b64, 'base64');
             const partAttachment = new AttachmentBuilder(buf, { name: `partial_${idx}.png` });
-            await interaction.followUp({ content: `⏳ Partial image ${idx + 1}`, files: [partAttachment], ephemeral: true });
+            if (partialMsg) {
+              partialMsg = await partialMsg.edit({ content: `⏳ Partial image ${idx + 1}`, files: [partAttachment] });
+            } else {
+              partialMsg = await interaction.followUp({ content: `⏳ Partial image ${idx + 1}`, files: [partAttachment], ephemeral: true });
+            }
           } else if (event.type === 'response.image_generation_call') {
             responseId = event.id;
             finalBuffer = Buffer.from(event.result, 'base64');
@@ -4251,7 +4256,8 @@ Example Output: {
 
         lastImageResponses.set(interaction.user.id, responseId);
         const attachment = new AttachmentBuilder(finalBuffer, { name: 'image.png' });
-        await interaction.editReply({ content: `🖼️ Generated image (Response ID: ${responseId})`, files: [attachment] });
+        await interaction.editReply('✅ Image generation complete.');
+        await interaction.followUp({ content: `🖼️ Generated image (Response ID: ${responseId})`, files: [attachment] });
       } catch (error) {
         logToFile(`Error in /create command: ${error.message}`);
         if (hasResponded) {
