@@ -37,4 +37,22 @@ function frameioErrorMessage(error, action) {
   return `${action} failed: ${error.message}`;
 }
 
-module.exports = { logToFile, frameioErrorMessage };
+/**
+ * Format a generic axios error into a human readable message.
+ * @param {any} error - The error thrown by axios.
+ * @param {string} action - Description of the action being performed.
+ * @returns {string}
+ */
+function axiosErrorMessage(error, action) {
+  if (error.response) {
+    const status = error.response.status;
+    const data =
+      typeof error.response.data === 'object'
+        ? JSON.stringify(error.response.data)
+        : String(error.response.data);
+    return `${action} returned ${status} ${error.response.statusText}: ${data}`;
+  }
+  return `${action} failed: ${error.message}`;
+}
+
+module.exports = { logToFile, frameioErrorMessage, axiosErrorMessage };

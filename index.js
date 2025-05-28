@@ -7,7 +7,7 @@ const { Client: NotionClient } = require('@notionhq/client');
 const cron = require('node-cron');
 const fs = require('fs'); // Re-add fs module
 const path = require('path');
-const { logToFile, frameioErrorMessage } = require('./log_utils');
+const { logToFile, frameioErrorMessage, axiosErrorMessage } = require('./log_utils');
 const { addCreds } = require('./utils');
 const { loadTasks, saveTasks, addTask } = require('./tasks');
 const points = require('./points');
@@ -4179,11 +4179,12 @@ Example Output: {
         const attachment = new AttachmentBuilder(Buffer.from(videoResp.data), { name: 'video.mp4' });
         await interaction.editReply({ content: '📹 Generated video:', files: [attachment] });
       } catch (error) {
-        logToFile(`Error in /video command: ${error.message}`);
+        const msg = axiosErrorMessage(error, 'Runway video generation');
+        logToFile(`Error in /video command: ${msg}`);
         if (hasResponded) {
-          await interaction.editReply(`❌ ${error.message}`);
+          await interaction.editReply(`❌ ${msg}`);
         } else {
-          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+          await interaction.reply({ content: `❌ ${msg}`, ephemeral: true });
         }
       }
     }
