@@ -10,6 +10,7 @@ A powerful Discord bot that integrates with Notion to manage projects, schedule 
 - **Meeting Coordination**: Schedule and coordinate meetings with team members
 - **Customizable Watchers**: Get notified when Notion properties change
 - **Creds 2.0 Economy**: Earn and spend Creds through `/kudos`, check balances with `/creds`, and redeem rewards from `/shop`.
+- **Email Forwarding**: Send emails arriving at `dropbox@matcher.com` straight to your Discord channel.
 
 ## Environment Variables
 
@@ -29,6 +30,7 @@ FRAMEIO_TOKEN=your_frameio_api_token (optional)
 FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 
 TIMEZONE=your_timezone (e.g., Europe/Berlin)
+EMAIL_CHANNEL_ID=channel_id_for_forwarding
 ```
 
 For Frame.io integration, provide:
@@ -78,6 +80,13 @@ the same value.
 2. Install dependencies: `npm install`
 3. Create a `.env` file with the required environment variables
 4. Run the bot: `node index.js`
+
+## Email Forwarding
+
+1. Configure your email provider (e.g., SendGrid or Mailgun) to POST incoming
+   messages to `/incoming-email` on your deployed bot.
+2. Set `EMAIL_CHANNEL_ID` in your `.env` with the Discord channel that should
+   receive the messages.
 
 ### Using GitHub Actions + Railway
 
