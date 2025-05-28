@@ -117,7 +117,7 @@ The bot supports various slash commands:
 - `/issue-report <timeframe>` - Compile recent Discord messages, Frame.io comments, Notion changelog entries and project assignments into text files
 - `/frameio [timeframe]` - Fetch recent Frame.io comments to test connectivity
 - `/vo <text>` - Generate an ElevenLabs voiceover and send it
-- `/video <prompt> <image>` - Generate a video from an image using Runway
+- `/video <prompt> <image> [duration]` - Generate a video from an image using Runway
 
 
 ## Creds 2.0

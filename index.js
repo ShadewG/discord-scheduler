@@ -4124,6 +4124,7 @@ Example Output: {
 
         const prompt = interaction.options.getString('prompt');
         const image = interaction.options.getAttachment('image');
+        const duration = interaction.options.getInteger('duration') || 5;
         const apiKey = process.env.RUNWAY_API_KEY;
         const model = RUNWAY_MODEL;
 
@@ -4144,7 +4145,7 @@ Example Output: {
           'https://api.runwayml.com/v1/inferences',
           {
             model,
-            input: { prompt, image: image.url }
+            input: { prompt, image: image.url, duration }
           },
           { headers: { Authorization: `Bearer ${apiKey}` } }
         );
