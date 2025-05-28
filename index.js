@@ -4195,7 +4195,9 @@ Example Output: {
           model: 'dall-e-3',
           prompt: stylePrompt,
           n: 1,
-          size: '1024x576'
+          // Use the widest orientation supported by the API to approximate 16:9
+          // (1792x1024 is very close to 1.77 : 1)
+          size: '1792x1024'
         });
 
         const imageUrl = response.data[0]?.url;
