@@ -27,6 +27,7 @@ OPENAI_API_KEY=your_openai_api_key
 ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_VOICE_ID=your_elevenlabs_voice_id
 RUNWAY_API_KEY=your_runway_api_key
+RUNWAY_MODEL=stable-video-diffusion
 FRAMEIO_TOKEN=your_frameio_api_token (optional)
 FRAMEIO_ACCOUNT_ID=your_frameio_account_id (optional, auto-detected if omitted)
 
