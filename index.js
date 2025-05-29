@@ -4319,6 +4319,26 @@ Example Output: {
         }
 
         if (!finalBuffer) {
+          logToFile('Streaming image generation returned no result. Falling back to images.generate');
+          try {
+            const gen = await openai.images.generate({
+              model: 'dall-e-3',
+              prompt: stylePrompt,
+              n: 1,
+              size: '1024x1024',
+              response_format: 'b64_json'
+            });
+            const imgB64 = gen.data?.[0]?.b64_json;
+            if (imgB64) {
+              finalBuffer = Buffer.from(imgB64, 'base64');
+              responseId = gen.created?.toString();
+            }
+          } catch (genErr) {
+            logToFile(`Fallback image generation failed: ${genErr.message}`);
+          }
+        }
+
+        if (!finalBuffer) {
           await interaction.editReply('❌ Image generation failed.');
           return;
         }
@@ -6676,6 +6696,27 @@ client.on('messageCreate', async message => {
             finalBuffer = Buffer.from(event.result, 'base64');
           }
         }
+
+        if (!finalBuffer) {
+          logToFile('Edit stream produced no result. Using images.generate fallback');
+          try {
+            const gen = await openai.images.generate({
+              model: 'dall-e-3',
+              prompt: stylePrompt,
+              n: 1,
+              size: '1024x1024',
+              response_format: 'b64_json'
+            });
+            const imgB64 = gen.data?.[0]?.b64_json;
+            if (imgB64) {
+              finalBuffer = Buffer.from(imgB64, 'base64');
+              responseId = gen.created?.toString();
+            }
+          } catch (genErr) {
+            logToFile(`Fallback edit generation failed: ${genErr.message}`);
+          }
+        }
+
         if (!finalBuffer) {
           await message.reply('❌ Image generation failed.');
         } else {
