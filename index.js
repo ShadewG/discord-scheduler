@@ -152,7 +152,8 @@ function startVoiceRecording(channel) {
   const connection = joinVoiceChannel({
     channelId: channel.id,
     guildId: channel.guild.id,
-    adapterCreator: channel.guild.voiceAdapterCreator
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false
   });
 
   const receiver = connection.receiver;
@@ -181,7 +182,7 @@ function startVoiceRecording(channel) {
 // Stop recording and handle transcription/summary
 async function stopVoiceRecording(guildId) {
   const session = activeRecordings.get(guildId);
-  if (!session) return;
+  if (!session) return { transcript: '', summaryGenerated: false };
 
   clearInterval(session.interval);
   for (const { stream } of session.files.values()) {
@@ -202,6 +203,7 @@ async function stopVoiceRecording(guildId) {
     }
   }
 
+  let summaryGenerated = false;
   if (transcript && openai) {
     try {
       const summaryResp = await openai.chat.completions.create({
@@ -215,10 +217,13 @@ async function stopVoiceRecording(guildId) {
       const summary = summaryResp.choices[0]?.message?.content || 'No summary produced';
       const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
       await channel.send(`**Call Summary**\n${summary}`);
+      summaryGenerated = true;
     } catch (err) {
       logToFile(`Error summarizing call: ${err.message}`);
     }
   }
+
+  return { transcript, summaryGenerated };
 }
 
 
@@ -4393,8 +4398,16 @@ Example Output: {
           return;
         }
         await interaction.reply('⏳ Stopping recording...');
-        await stopVoiceRecording(interaction.guild.id);
-        await interaction.followUp('✅ Recording stopped and summarized.');
+        const { transcript, summaryGenerated } = await stopVoiceRecording(interaction.guild.id);
+        let msg = '✅ Recording stopped';
+        if (summaryGenerated) {
+          msg += ' and summarized.';
+        } else if (transcript) {
+          msg += ', but summarization failed.';
+        } else {
+          msg += ', but no audio was captured.';
+        }
+        await interaction.followUp(msg);
       }
     }
 
