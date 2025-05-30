@@ -19,7 +19,7 @@ const app = express();
 const { commands } = require('./commands');
 const { initEmailForwarder } = require('./email_forwarder');
 const GmailPoller = require('./email_poller');
-const { initDatabase, logMessageToDB, importBackups } = require('./message_db');
+const { initDatabase, logMessageToDB, importBackups, ensureMessages } = require('./message_db');
 
 // File to track notifications for stale VA Review projects
 const STALE_VA_REVIEW_PATH = path.join(__dirname, 'stale-va-review.json');
@@ -1160,6 +1160,10 @@ client.once('ready', async () => {
   
   // Check next execution times
   checkAllNextExecutionTimes();
+
+  // Export historical messages for key servers if not already done
+  await exportGuildMessagesIfNeeded('1275557298307203123'); // Dr Insanity server
+  await exportGuildMessagesIfNeeded('1290489132522672182'); // Insanity Bodycam server
 
   // Start Gmail polling if enabled
   if (ENABLE_GMAIL_POLLER && EMAIL_CHANNEL_ID) {
@@ -6882,6 +6886,63 @@ client.on('messageCreate', async message => {
     recentMessages.pop();
   }
 });
+
+// Export all historical messages from a guild if not already exported
+async function exportGuildMessagesIfNeeded(guildId) {
+  try {
+    const flagPath = path.join(__dirname, 'backups', `exported_${guildId}.flag`);
+    if (fs.existsSync(flagPath)) {
+      logToFile(`Export for guild ${guildId} already completed`);
+      return;
+    }
+
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) {
+      logToFile(`Guild ${guildId} not found for export`);
+      return;
+    }
+
+    await guild.channels.fetch();
+
+    for (const channel of guild.channels.cache.values()) {
+      if (!channel.isTextBased() || channel.isDMBased()) continue;
+
+      let before;
+      while (true) {
+        const options = { limit: 100 };
+        if (before) options.before = before;
+        const messages = await channel.messages.fetch(options);
+        if (messages.size === 0) break;
+
+        const formatted = [...messages.values()].map(msg => ({
+          id: msg.id,
+          content: msg.content,
+          author: {
+            id: msg.author.id,
+            username: msg.author.username,
+            tag: msg.author.tag
+          },
+          channelId: channel.id,
+          channelName: channel.name,
+          guildId: guild.id,
+          guildName: guild.name,
+          timestamp: msg.createdAt.toISOString(),
+          attachments: [...msg.attachments.values()].map(a => a.url)
+        }));
+
+        ensureMessages(formatted);
+        before = messages.last().id;
+
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+
+    fs.writeFileSync(flagPath, new Date().toISOString());
+    logToFile(`Exported messages for guild ${guild.name}`);
+  } catch (error) {
+    logToFile(`Error exporting guild ${guildId}: ${error.message}`);
+  }
+}
 
 // Update the Knowledge Assistant to use real-time messages
 // This code should go in knowledge-assistant.js, but for demonstration:
