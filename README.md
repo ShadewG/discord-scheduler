@@ -7,6 +7,7 @@ A powerful Discord bot that integrates with Notion to manage projects, schedule 
 - **Notion integration**: Sync Discord channels with Notion pages for project tracking
 - **Project Management**: Track project status, owner, due dates, and more
 - **Scheduled Reminders**: Automatically send reminders at scheduled times
+- **Deadline Alerts**: Project chats receive automatic warnings when deadlines are near
 - **Meeting Coordination**: Schedule and coordinate meetings with team members
 - **Customizable Watchers**: Get notified when Notion properties change
 - **Creds 2.0 Economy**: Earn and spend Creds through `/kudos`, check balances with `/creds`, and redeem rewards from `/shop`.
