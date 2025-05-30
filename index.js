@@ -6872,7 +6872,8 @@ client.on('messageCreate', async message => {
     guildId: message.guild?.id,
     guildName: message.guild?.name,
     timestamp: message.createdAt.toISOString(),
-    attachments: Array.from(message.attachments.values()).map(a => a.url)
+    attachments: Array.from(message.attachments.values()).map(a => a.url),
+    url: message.url
   };
   
   // Add to recent messages array (prepend)
@@ -6927,7 +6928,8 @@ async function exportGuildMessagesIfNeeded(guildId) {
           guildId: guild.id,
           guildName: guild.name,
           timestamp: msg.createdAt.toISOString(),
-          attachments: [...msg.attachments.values()].map(a => a.url)
+          attachments: [...msg.attachments.values()].map(a => a.url),
+          url: msg.url
         }));
 
         ensureMessages(formatted);

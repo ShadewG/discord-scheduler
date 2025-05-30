@@ -213,7 +213,11 @@ const commands = {
     // Add the ask command for the knowledge assistant
     new SlashCommandBuilder().setName('ask').setDescription('Ask a question about guides, workflows, or best practices')
       .addStringOption(option => option.setName('question').setDescription('What would you like to know?').setRequired(true))
-      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you')),
+      .addBooleanOption(option => option.setName('ephemeral').setDescription('Make the response only visible to you'))
+      .addStringOption(option =>
+        option.setName('model')
+          .setDescription('Model to use (4o or o3)')
+          .addChoices({ name: '4o', value: '4o' }, { name: 'o3', value: 'o3' })),
       
     // Add extract-tasks command to ensure it's registered properly
     new SlashCommandBuilder().setName('extract-tasks').setDescription('Extract tasks from morning messages and create Notion pages'),

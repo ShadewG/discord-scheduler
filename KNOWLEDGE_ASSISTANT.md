@@ -35,9 +35,8 @@ TIMEZONE=America/New_York
 ### Discord Messages
 All new Discord messages are logged to a lightweight on-disk database (`messages.db`).
 On startup, any JSON backups in the `backups/` folder are imported so the database has older history as well.
-Real-time messages are captured automatically as users chat. You can still run
-`npm run backup-messages` to create JSON snapshots, but the `/ask` command now
-pulls context directly from the database.
+Real-time messages are captured automatically as users chat, and each entry includes a direct link to the original Discord message.
+You can still run `npm run backup-messages` to create JSON snapshots, but the `/ask` command now pulls context directly from the database.
 
 ## Automated Updates
 
@@ -59,6 +58,7 @@ Users can ask questions using the `/ask` command:
 
 Optional parameters:
 - `ephemeral`: Set to true to make the answer only visible to you
+- `model`: Choose `o3` to use GPT-3.5; defaults to `4o`
 
 ## How It Works
 

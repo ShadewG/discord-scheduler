@@ -62,7 +62,8 @@ async function fetchMessages(channel) {
       guildId: channel.guild.id,
       guildName: channel.guild.name,
       timestamp: msg.createdAt.toISOString(),
-      attachments: Array.from(msg.attachments.values()).map(a => a.url)
+      attachments: Array.from(msg.attachments.values()).map(a => a.url),
+      url: msg.url
     }));
     
     log(`Fetched ${formattedMessages.length} messages from #${channel.name}`);
