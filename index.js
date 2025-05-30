@@ -19,6 +19,7 @@ const app = express();
 const { commands } = require('./commands');
 const { initEmailForwarder } = require('./email_forwarder');
 const GmailPoller = require('./email_poller');
+const { initDatabase, logMessageToDB, importBackups } = require('./message_db');
 
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
@@ -60,6 +61,13 @@ try {
 } catch (error) {
   console.log(`❌ Error initializing OpenAI client: ${error.message}`);
   logToFile(`Error initializing OpenAI client: ${error.message}`);
+}
+
+// Initialize simple message database
+initDatabase();
+const imported = importBackups();
+if (imported > 0) {
+  console.log(`Imported ${imported} messages from backups`);
 }
 
 // Style guardrail for the /create command
@@ -6755,6 +6763,9 @@ client.on('messageCreate', async message => {
   
   // Add to recent messages array (prepend)
   recentMessages.unshift(storedMessage);
+
+  // Persist message to the simple database
+  logMessageToDB(storedMessage);
   
   // Limit the array size
   if (recentMessages.length > RECENT_MESSAGES_LIMIT) {

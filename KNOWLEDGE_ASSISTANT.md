@@ -33,9 +33,11 @@ TIMEZONE=America/New_York
    - Text versions are tracked in git, PDFs are not
 
 ### Discord Messages
-Discord messages are collected in two ways:
-1. **Real-time collection**: Messages are automatically collected as users chat
-2. **Scheduled backups**: Run `npm run backup-messages` or use the scheduler
+All new Discord messages are logged to a lightweight on-disk database (`messages.db`).
+On startup, any JSON backups in the `backups/` folder are imported so the database has older history as well.
+Real-time messages are captured automatically as users chat. You can still run
+`npm run backup-messages` to create JSON snapshots, but the `/ask` command now
+pulls context directly from the database.
 
 ## Automated Updates
 
