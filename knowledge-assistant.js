@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const { OpenAI } = require('openai');
+const { loadRecentMessages } = require('./message_db');
 
 // Try to load pdf-parse, but don't crash if it's not available
 let pdfParse = null;
@@ -184,44 +185,24 @@ async function loadGuides() {
   }
 }
 
-// Function to load Discord message backups
-function loadDiscordMessages() {
-  const backupsDir = path.join(__dirname, 'backups');
+// Function to load Discord messages from the simple database and memory
+function loadDiscordMessages(limit = 500) {
   let messages = [];
-
   try {
-    // First, check for real-time messages in memory
+    // Load from persistent database
+    const dbMessages = loadRecentMessages(limit);
+    if (dbMessages.length > 0) {
+      logToFile(`Loaded ${dbMessages.length} messages from database`);
+      messages.push(...dbMessages);
+    }
+
+    // Include any real-time messages not yet persisted
     const recentMessagesFromBot = global.recentMessages || [];
     if (recentMessagesFromBot.length > 0) {
       logToFile(`Loaded ${recentMessagesFromBot.length} real-time messages from memory`);
-      messages = [...recentMessagesFromBot];
+      messages.push(...recentMessagesFromBot);
     }
-    
-    // Then check for message backups
-    if (!fs.existsSync(backupsDir)) {
-      logToFile('Backups directory not found');
-      return messages;
-    }
-    
-    const files = fs.readdirSync(backupsDir);
-    
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const filePath = path.join(backupsDir, file);
-        logToFile(`Loading Discord backup: ${file}`);
-        
-        try {
-          const backup = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-          if (backup.messages && Array.isArray(backup.messages)) {
-            messages.push(...backup.messages);
-            logToFile(`Loaded ${backup.messages.length} messages from ${file}`);
-          }
-        } catch (parseError) {
-          logToFile(`Error parsing backup file ${file}: ${parseError.message}`);
-        }
-      }
-    }
-    
+
     return messages;
   } catch (error) {
     logToFile(`Error loading Discord messages: ${error.message}`);
