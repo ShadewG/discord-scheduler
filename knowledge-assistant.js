@@ -33,8 +33,8 @@ try {
   console.error(`Error initializing OpenAI: ${error.message}`);
 }
 
-// Set the AI model to use
-const AI_MODEL = 'gpt-4.1-2025-04-14';
+// Default AI model to use for answering questions
+const DEFAULT_MODEL = 'gpt-4o';
 
 // Log utility function
 function logToFile(message) {
@@ -211,7 +211,7 @@ function loadDiscordMessages(limit = 500) {
 }
 
 // Function to answer a question using guides and Discord messages
-async function answerQuestion(question, discordMessages, guides) {
+async function answerQuestion(question, discordMessages, guides, model = DEFAULT_MODEL) {
   try {
     logToFile(`Processing question: ${question}`);
     
@@ -239,7 +239,8 @@ async function answerQuestion(question, discordMessages, guides) {
     if (relevantMessages.length > 0) {
       discordContext = "=== Recent Discord Messages ===\n";
       relevantMessages.forEach(msg => {
-        discordContext += `${msg.author.tag}: ${msg.content}\n`;
+        const link = msg.url || `https://discord.com/channels/${msg.guildId}/${msg.channelId}/${msg.id}`;
+        discordContext += `${msg.author.tag}: ${msg.content} [link](${link})\n`;
       });
     }
     
@@ -259,7 +260,7 @@ ${discordContext}`;
 
     // Call the OpenAI API
     const response = await openai.chat.completions.create({
-      model: AI_MODEL,
+      model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question }
@@ -280,7 +281,14 @@ async function handleAskCommand(interaction) {
   try {
     // Check if ephemeral flag is set
     const ephemeral = interaction.options.getBoolean('ephemeral') || false;
-    
+
+    // Model option ("4o" default, "o3" for GPT-3.5)
+    const modelOpt = interaction.options.getString('model');
+    let model = DEFAULT_MODEL;
+    if (modelOpt === 'o3') {
+      model = 'gpt-3.5-turbo';
+    }
+
     await interaction.deferReply({ ephemeral });
     
     const question = interaction.options.getString('question');
@@ -308,8 +316,8 @@ async function handleAskCommand(interaction) {
       return await interaction.editReply({ embeds: [errorEmbed] });
     }
     
-    // Generate answer
-    const answer = await answerQuestion(question, discordMessages, guides);
+    // Generate answer with selected model
+    const answer = await answerQuestion(question, discordMessages, guides, model);
     
     // Create embed response
     const embed = new EmbedBuilder()
@@ -361,7 +369,7 @@ if (require.main === module) {
       const testQuestion = "What's the workflow for editing videos?";
       console.log(`Testing with question: "${testQuestion}"`);
       
-      const answer = await answerQuestion(testQuestion, discordMessages, guides);
+      const answer = await answerQuestion(testQuestion, discordMessages, guides, DEFAULT_MODEL);
       console.log('Answer:');
       console.log(answer);
       

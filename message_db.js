@@ -25,7 +25,11 @@ function loadAllMessages() {
     if (!data.trim()) return [];
     return data.trim().split('\n').map(line => {
       try {
-        return JSON.parse(line);
+        const msg = JSON.parse(line);
+        if (!msg.url && msg.guildId && msg.channelId && msg.id) {
+          msg.url = `https://discord.com/channels/${msg.guildId}/${msg.channelId}/${msg.id}`;
+        }
+        return msg;
       } catch {
         return null;
       }
@@ -76,7 +80,11 @@ function loadRecentMessages(limit = 500) {
     const slice = lines.slice(-limit);
     return slice.map(line => {
       try {
-        return JSON.parse(line);
+        const msg = JSON.parse(line);
+        if (!msg.url && msg.guildId && msg.channelId && msg.id) {
+          msg.url = `https://discord.com/channels/${msg.guildId}/${msg.channelId}/${msg.id}`;
+        }
+        return msg;
       } catch {
         return null;
       }
