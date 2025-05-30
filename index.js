@@ -132,6 +132,9 @@ const GMAIL_CREDENTIALS_JSON = process.env.GMAIL_CREDENTIALS_JSON ? JSON.parse(p
 const GMAIL_TOKEN_JSON = process.env.GMAIL_TOKEN_JSON ? JSON.parse(process.env.GMAIL_TOKEN_JSON) : null;
 const GMAIL_POLL_INTERVAL = parseInt(process.env.GMAIL_POLL_INTERVAL, 10) || 5;
 
+// Number of days in advance to remind about deadlines
+const DEADLINE_REMINDER_WINDOW = 7;
+
 // Store jobs in memory, each with a tag, cron expression, text, and whether to send a notification 5 min before
 let jobs = [
   { tag: 'Social Fika', cron: '0 9 * * 1-5', text: `☕ <@&${TEAM_ROLE_ID}> **Social Fika** - Casual check-in + daily sync (9:00-9:20).`, notify: true },
@@ -144,7 +147,8 @@ let jobs = [
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
   { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
   { tag: 'Morning Task Extraction', cron: '5 11 * * 1-5', text: '', extractTasks: true }, // Automatically extract tasks
-  { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
+  { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true }, // New job to check completed tasks
+  { tag: 'Deadline Reminder', cron: '0 9 * * *', text: '', deadlineReminder: true } // Remind upcoming project deadlines
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -641,6 +645,18 @@ function getNotionPageUrl(pageId) {
   if (!pageId) return null;
   // Format is: https://www.notion.so/{workspace}/{page-id}
   return `https://www.notion.so/${pageId.replace(/-/g, '')}`;
+}
+
+// Find a Discord channel whose name contains the given project code
+function findProjectChannel(code) {
+  const pattern = code.toLowerCase();
+  for (const guild of client.guilds.cache.values()) {
+    const channel = guild.channels.cache.find(
+      ch => ch.type === 0 && ch.name.includes(pattern)
+    );
+    if (channel) return channel;
+  }
+  return null;
 }
 
 // Function to find a project by query
@@ -4566,6 +4582,13 @@ function scheduleAllJobs() {
           }
           return;
         }
+
+        // Special handling for deadline reminders
+        if (job.deadlineReminder) {
+          logToFile('Checking project deadlines');
+          await sendDeadlineReminders();
+          return;
+        }
         
         // Regular job execution for notification messages
         logToFile(`Message to send: ${job.text}`);
@@ -6170,6 +6193,41 @@ async function checkEndOfDayTaskUpdates() {
     logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
     console.error('Error checking end-of-day task updates:', error);
     return { success: false, error: error.message };
+  }
+}
+
+// Check all projects and send reminders for upcoming deadlines
+async function sendDeadlineReminders() {
+  try {
+    const result = await fetchProjectDeadlines();
+    if (!result.success) {
+      logToFile(`Failed to fetch deadlines: ${result.error}`);
+      return;
+    }
+    const now = new Date();
+    for (const project of result.projects) {
+      if (!project.mainDeadline) continue;
+      const deadline = new Date(project.mainDeadline);
+      const daysLeft = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
+      if (daysLeft < 0 || daysLeft > DEADLINE_REMINDER_WINDOW) continue;
+
+      const channel = findProjectChannel(project.code) ||
+        client.channels.cache.get(SCHEDULE_CHANNEL_ID);
+      if (!channel) continue;
+
+      const text = daysLeft === 0
+        ? `⚠️ **${project.code}** is due today!`
+        : `⏰ **${project.code}** due in ${daysLeft} day${daysLeft !== 1 ? 's' : ''} (${project.formattedMainDeadline})`;
+
+      try {
+        await channel.send(text);
+        logToFile(`Sent deadline reminder for ${project.code} to #${channel.name}`);
+      } catch (err) {
+        logToFile(`Error sending deadline reminder for ${project.code}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    logToFile(`❌ Error in sendDeadlineReminders: ${err.message}`);
   }
 }
 
