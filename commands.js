@@ -250,6 +250,11 @@ const commands = {
               { name: 'Constantino', value: 'ApsbCjXt5HguctE80a0i' }
             )),
 
+      // Record a voice call and summarize it
+      new SlashCommandBuilder().setName('record').setDescription('Record the voice channel and summarize')
+        .addSubcommand(sub => sub.setName('start').setDescription('Start recording'))
+        .addSubcommand(sub => sub.setName('stop').setDescription('Stop recording')), 
+
       // Generate a short video using Runway
       new SlashCommandBuilder().setName('video').setDescription('Create a video with Runway from an image and prompt')
         .addAttachmentOption(option => option.setName('image').setDescription('Input image').setRequired(true))

@@ -1,6 +1,8 @@
 // Discord Bot for Insanity
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, AttachmentBuilder } = require('discord.js');
+const { joinVoiceChannel, EndBehaviorType, getVoiceConnection } = require('@discordjs/voice');
+const prism = require('prism-media');
 const { OpenAI } = require('openai');
 const moment = require('moment-timezone');
 const { Client: NotionClient } = require('@notionhq/client');
@@ -24,6 +26,12 @@ const { initDatabase, logMessageToDB, importBackups, ensureMessages } = require(
 // File to track notifications for stale VA Review projects
 const STALE_VA_REVIEW_PATH = path.join(__dirname, 'stale-va-review.json');
 let staleVaNotifications = readJsonFile(STALE_VA_REVIEW_PATH, {});
+
+// Active voice recording sessions keyed by guild ID
+const activeRecordings = new Map();
+
+// Channel ID to post meeting summaries
+const SUMMARY_CHANNEL_ID = '1377991132570456145';
 
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
@@ -132,6 +140,84 @@ async function checkStaleVaReview() {
   } catch (err) {
     logToFile(`❌ Error in checkStaleVaReview: ${err.message}`);
     return { success: false, error: err.message };
+  }
+}
+
+// Start recording a voice channel
+function startVoiceRecording(channel) {
+  if (!fs.existsSync(path.join(__dirname, 'recordings'))) {
+    fs.mkdirSync(path.join(__dirname, 'recordings'), { recursive: true });
+  }
+
+  const connection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator
+  });
+
+  const receiver = connection.receiver;
+  const session = { connection, channel, files: new Map(), interval: null };
+
+  receiver.speaking.on('start', userId => {
+    if (session.files.has(userId)) return;
+    const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 2, rate: 48000 });
+    const outPath = path.join(__dirname, 'recordings', `${Date.now()}-${userId}.pcm`);
+    const out = fs.createWriteStream(outPath);
+    opusStream.pipe(decoder).pipe(out);
+    session.files.set(userId, { path: outPath, stream: opusStream });
+  });
+
+  session.interval = setInterval(() => {
+    const memberCount = channel.members.filter(m => !m.user.bot).size;
+    if (memberCount === 0) {
+      stopVoiceRecording(channel.guild.id).catch(err => console.error(err));
+    }
+  }, 5000);
+
+  activeRecordings.set(channel.guild.id, session);
+}
+
+// Stop recording and handle transcription/summary
+async function stopVoiceRecording(guildId) {
+  const session = activeRecordings.get(guildId);
+  if (!session) return;
+
+  clearInterval(session.interval);
+  for (const { stream } of session.files.values()) {
+    stream.destroy();
+  }
+  session.connection.destroy();
+  activeRecordings.delete(guildId);
+
+  let transcript = '';
+  if (openai) {
+    for (const { path: filePath } of session.files.values()) {
+      try {
+        const resp = await openai.audio.transcriptions.create({ file: fs.createReadStream(filePath), model: 'whisper-1' });
+        transcript += resp.text + '\n';
+      } catch (err) {
+        logToFile(`Error transcribing ${filePath}: ${err.message}`);
+      }
+    }
+  }
+
+  if (transcript && openai) {
+    try {
+      const summaryResp = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'Summarize the following call transcript. Include key discussion points and action items.' },
+          { role: 'user', content: transcript }
+        ],
+        max_tokens: 500
+      });
+      const summary = summaryResp.choices[0]?.message?.content || 'No summary produced';
+      const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
+      await channel.send(`**Call Summary**\n${summary}`);
+    } catch (err) {
+      logToFile(`Error summarizing call: ${err.message}`);
+    }
   }
 }
 
@@ -4268,13 +4354,39 @@ Example Output: {
 
         const attachment = new AttachmentBuilder(Buffer.from(response.data), { name: 'voiceover.mp3' });
         await interaction.editReply({ content: '🗣️ Generated voiceover:', files: [attachment] });
-      } catch (error) {
-        logToFile(`Error in /vo command: ${error.message}`);
-        if (hasResponded) {
-          await interaction.editReply(`❌ ${error.message}`);
-        } else {
-          await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+    } catch (error) {
+      logToFile(`Error in /vo command: ${error.message}`);
+      if (hasResponded) {
+        await interaction.editReply(`❌ ${error.message}`);
+      } else {
+        await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+      }
+    }
+    }
+
+    // Handle the /record command
+    else if (commandName === 'record') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'start') {
+        const channel = interaction.member.voice.channel;
+        if (!channel) {
+          await interaction.reply({ content: '❌ You must be in a voice channel to start recording.', ephemeral: true });
+          return;
         }
+        if (activeRecordings.has(channel.guild.id)) {
+          await interaction.reply({ content: '❌ A recording is already in progress.', ephemeral: true });
+          return;
+        }
+        startVoiceRecording(channel);
+        await interaction.reply('🔴 Recording started.');
+      } else if (sub === 'stop') {
+        if (!activeRecordings.has(interaction.guild.id)) {
+          await interaction.reply({ content: '❌ No active recording.', ephemeral: true });
+          return;
+        }
+        await interaction.reply('⏳ Stopping recording...');
+        await stopVoiceRecording(interaction.guild.id);
+        await interaction.followUp('✅ Recording stopped and summarized.');
       }
     }
 
