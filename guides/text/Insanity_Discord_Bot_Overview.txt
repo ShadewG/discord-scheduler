@@ -1,0 +1,31 @@
+The Insanity Discord Bot is a specialized assistant for managing our video production workflow. It integrates with Notion, Frame.io, email, and other tools to keep the team organized.
+
+Key features:
+- Notion integration to sync channel discussions with project pages
+- Scheduled reminders and meeting coordination
+- Frame.io comment retrieval and video generation via Runway
+- Creds 2.0 economy for rewarding contributions
+- Email forwarding and Gmail polling
+- Knowledge assistant to answer questions from guides and Discord history
+
+Useful commands:
+- `/where` – find project information in Notion
+- `/link` – get the Notion page for this channel
+- `/sync` – update Notion with properties from a message
+- `/analyze` – analyze recent messages and update Notion
+- `/schedule` and `/add` – view or create reminder schedules
+- `/meeting` – schedule meetings with automatic reminders
+- `/creds`, `/kudos`, `/shop`, `/redeem` – manage the economy system
+- `/frameio` – fetch recent Frame.io comments
+- `/vo` and `/video` – generate voiceovers and videos
+- `/dashboard`, `/timeline`, `/summary` – project overview utilities
+- `/ask` – ask questions about guides and server history
+
+This server is primarily for coordinating the Insanity Bodycam team. Use the bot to track project status, schedule tasks, and keep everyone informed.
+
+Team roles and contacts:
+- **Nick** and **Harald** are the owners of Insanity.
+- **Shadew** acts as the operational manager – direct system questions or suggestions to him.
+- **Ayoub** and **Armin** lead the main channel.
+- **Amin** leads the bodycam work.
+- The rest of the members are primarily editors assisting with content production.
