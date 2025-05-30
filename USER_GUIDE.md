@@ -143,6 +143,7 @@ List all active Notion watchers in detail.
 Show the weekly schedule of reminders.
 - **Usage**: `/schedule`
 - **Example**: `/schedule`
+- The bot also posts automatic deadline reminders in project channels a few days before each due date.
 
 ### `/meeting`
 Schedule a meeting with reminders.
