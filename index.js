@@ -137,7 +137,15 @@ async function checkStaleVaReview() {
 
 
 // Import knowledge assistant
-const { handleAskCommand } = require('./knowledge-assistant');
+const {
+  handleAskCommand,
+  loadGuides,
+  loadDiscordMessages,
+  answerQuestion,
+  getConversation,
+  addToConversation,
+  DEFAULT_MODEL
+} = require('./knowledge-assistant');
 
 // Configure OpenAI client
 let openai = null;
@@ -6794,6 +6802,25 @@ process.on('SIGTERM', () => {
 client.on('messageCreate', async message => {
   // Skip bot messages
   if (message.author.bot) return;
+
+  // If message is a DM to the bot, treat it like the /ask command with context
+  if (message.channel.isDMBased()) {
+    const question = message.content.trim();
+    if (!question) return;
+    try {
+      const guides = await loadGuides();
+      const discordMsgs = loadDiscordMessages();
+      const history = getConversation(message.author.id);
+      const answer = await answerQuestion(question, discordMsgs, guides, DEFAULT_MODEL, history);
+      addToConversation(message.author.id, 'user', question);
+      addToConversation(message.author.id, 'assistant', answer);
+      await message.channel.send(answer);
+    } catch (err) {
+      console.error('Error handling DM ask:', err);
+      await message.channel.send('❌ Error processing your question.');
+    }
+    return;
+  }
 
   // If replying to a bot-generated image, treat as an edit prompt
   if (message.reference?.messageId) {

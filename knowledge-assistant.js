@@ -36,6 +36,23 @@ try {
 // Default AI model to use for answering questions
 const DEFAULT_MODEL = 'gpt-4o';
 
+// Simple in-memory conversation store for DMs
+const conversations = new Map();
+
+// Helper functions to manage conversation history
+function getConversation(userId) {
+  return conversations.get(userId) || [];
+}
+
+function addToConversation(userId, role, content, limit = 10) {
+  const history = conversations.get(userId) || [];
+  history.push({ role, content });
+  if (history.length > limit * 2) {
+    history.splice(0, history.length - limit * 2);
+  }
+  conversations.set(userId, history);
+}
+
 // Log utility function
 function logToFile(message) {
   const timestamp = new Date().toISOString();
@@ -211,7 +228,7 @@ function loadDiscordMessages(limit = 500) {
 }
 
 // Function to answer a question using guides and Discord messages
-async function answerQuestion(question, discordMessages, guides, model = DEFAULT_MODEL) {
+async function answerQuestion(question, discordMessages, guides, model = DEFAULT_MODEL, history = []) {
   try {
     logToFile(`Processing question: ${question}`);
     
@@ -263,6 +280,7 @@ ${discordContext}`;
       model,
       messages: [
         { role: 'system', content: systemPrompt },
+        ...history,
         { role: 'user', content: question }
       ],
       temperature: 0.3,
@@ -282,11 +300,11 @@ async function handleAskCommand(interaction) {
     // Check if ephemeral flag is set
     const ephemeral = interaction.options.getBoolean('ephemeral') || false;
 
-    // Model option ("4o" default, "o3" for GPT-3.5)
+    // Model option ("4o" default, "o3" for alternate model)
     const modelOpt = interaction.options.getString('model');
     let model = DEFAULT_MODEL;
     if (modelOpt === 'o3') {
-      model = 'gpt-3.5-turbo';
+      model = 'o3-2025-04-16';
     }
 
     await interaction.deferReply({ ephemeral });
@@ -349,7 +367,10 @@ module.exports = {
   handleAskCommand,
   loadGuides,
   loadDiscordMessages,
-  answerQuestion
+  answerQuestion,
+  getConversation,
+  addToConversation,
+  DEFAULT_MODEL
 };
 
 // If this file is run directly, test the functionality
