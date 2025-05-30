@@ -8,7 +8,7 @@ const cron = require('node-cron');
 const fs = require('fs'); // Re-add fs module
 const path = require('path');
 const { logToFile, frameioErrorMessage, axiosErrorMessage } = require('./log_utils');
-const { addCreds } = require('./utils');
+const { addCreds, readJsonFile, writeJsonFile } = require('./utils');
 const { loadTasks, saveTasks, addTask } = require('./tasks');
 const points = require('./points');
 const rewards = require('./rewards.json');
@@ -19,6 +19,10 @@ const app = express();
 const { commands } = require('./commands');
 const { initEmailForwarder } = require('./email_forwarder');
 const GmailPoller = require('./email_poller');
+
+// File to track notifications for stale VA Review projects
+const STALE_VA_REVIEW_PATH = path.join(__dirname, 'stale-va-review.json');
+let staleVaNotifications = readJsonFile(STALE_VA_REVIEW_PATH, {});
 
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
@@ -34,6 +38,99 @@ async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
       }
       throw err;
     }
+  }
+}
+
+// Check for projects stuck in VA Review without updates
+async function checkStaleVaReview() {
+  if (!notion || !DB) {
+    logToFile('checkStaleVaReview skipped: Notion not configured');
+    return { success: false, error: 'Notion not configured' };
+  }
+
+  try {
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const response = await notion.databases.query({
+      database_id: DB,
+      filter: {
+        and: [
+          { property: 'Status', status: { equals: 'VA Review' } },
+          { timestamp: 'last_edited_time', last_edited_time: { on_or_before: cutoff } }
+        ]
+      },
+      sorts: [{ timestamp: 'last_edited_time', direction: 'ascending' }],
+      page_size: 50
+    });
+
+    let notified = 0;
+
+    for (const page of response.results) {
+      const pageId = page.id;
+      const lastNotified = staleVaNotifications[pageId];
+      const now = new Date();
+      if (lastNotified && (now - new Date(lastNotified)) < 24 * 60 * 60 * 1000) {
+        continue; // already notified within 24h
+      }
+
+      // Get project title
+      const titleProp = Object.values(page.properties).find(p => p.type === 'title');
+      const title = titleProp?.title?.[0]?.plain_text || 'Untitled';
+
+      // Determine discord channel from property or code
+      let channelId = null;
+      const dcProp = page.properties['Discord Channel'];
+      if (dcProp?.url) {
+        const m = dcProp.url.match(/channels\/\d+\/(\d+)/);
+        if (m) channelId = m[1];
+      } else if (dcProp?.rich_text?.length) {
+        const text = dcProp.rich_text.map(t => t.plain_text).join('');
+        const m = text.match(/(\d{17,})/);
+        if (m) channelId = m[1];
+      }
+      if (!channelId) {
+        const codeMatch = title.match(/(CL|IB|BC)\d{2}/i);
+        const code = codeMatch ? codeMatch[0].toLowerCase() : null;
+        if (code) {
+          const ch = [...client.channels.cache.values()].find(c => c.type === 0 && c.name.includes(code));
+          if (ch) channelId = ch.id;
+        }
+      }
+
+      // Find assigned Discord users
+      const ownerProp = page.properties['Project Owner'];
+      let ownerNames = [];
+      if (ownerProp?.people?.length) ownerNames = ownerProp.people.map(p => p.name);
+      else if (ownerProp?.select?.name) ownerNames = [ownerProp.select.name];
+
+      const ownerIds = ownerNames.map(name => {
+        const staff = STAFF_AVAILABILITY.find(s =>
+          (s.notionProjectOwnerName && s.notionProjectOwnerName.toLowerCase() === name.toLowerCase()) ||
+          (s.notionTaskAssigneeName && s.notionTaskAssigneeName.toLowerCase() === name.toLowerCase())
+        );
+        return staff?.discordUserId;
+      }).filter(Boolean);
+
+      if (ownerIds.length === 0) continue;
+
+      const mention = ownerIds.map(id => `<@${id}>`).join(' ');
+      const message = `${mention} project **${title}** has been in **VA Review** for over 48 hours without updates.`;
+
+      const targetChannel = client.channels.cache.get(channelId || SCHEDULE_CHANNEL_ID);
+      if (targetChannel) {
+        await targetChannel.send(message);
+        staleVaNotifications[pageId] = now.toISOString();
+        notified++;
+      }
+    }
+
+    if (notified > 0) {
+      writeJsonFile(STALE_VA_REVIEW_PATH, staleVaNotifications);
+    }
+
+    return { success: true, notified };
+  } catch (err) {
+    logToFile(`❌ Error in checkStaleVaReview: ${err.message}`);
+    return { success: false, error: err.message };
   }
 }
 
@@ -144,7 +241,8 @@ let jobs = [
   { tag: 'Wrap-Up Meeting', cron: '0 17 * * 1-5', text: `👋 <@&${TEAM_ROLE_ID}> **Wrap-Up Meeting** - Daily summary + vibes check for the day (17:00-17:30).`, notify: true },
   { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
   { tag: 'Morning Task Extraction', cron: '5 11 * * 1-5', text: '', extractTasks: true }, // Automatically extract tasks
-  { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true } // New job to check completed tasks
+  { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true }, // New job to check completed tasks
+  { tag: 'VA Review Stale Check', cron: '0 9 * * *', text: '', checkVaReview: true }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -4563,6 +4661,18 @@ function scheduleAllJobs() {
             logToFile(`End-of-day task check completed. Updated ${result.updatedTasks || 0} tasks.`);
           } else {
             logToFile(`❌ Error in end-of-day task check: ${result.error || 'Unknown error'}`);
+          }
+          return;
+        }
+
+        // Special handling for stale VA Review projects
+        if (job.checkVaReview) {
+          logToFile('Starting stale VA Review check');
+          const result = await checkStaleVaReview();
+          if (!result.success) {
+            logToFile(`❌ Error in VA review check: ${result.error}`);
+          } else {
+            logToFile(`VA review check notified ${result.notified || 0} projects`);
           }
           return;
         }
