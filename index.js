@@ -25,6 +25,10 @@ const { initDatabase, logMessageToDB, importBackups, ensureMessages } = require(
 const STALE_VA_REVIEW_PATH = path.join(__dirname, 'stale-va-review.json');
 let staleVaNotifications = readJsonFile(STALE_VA_REVIEW_PATH, {});
 
+// File to track which deadline reminders have been sent
+const DEADLINE_REMINDERS_PATH = path.join(__dirname, 'deadline-reminders.json');
+let sentDeadlineReminders = readJsonFile(DEADLINE_REMINDERS_PATH, {});
+
 // Simple helper for rate-limited GET requests with retries
 async function axiosGetWithRetry(url, headers, retries = 3, backoff = 1000) {
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -250,7 +254,8 @@ let jobs = [
   { tag: 'Daily Message Backup', cron: '0 11 * * *', text: '', backupMessages: true }, // New job to backup messages
   { tag: 'Morning Task Extraction', cron: '5 11 * * 1-5', text: '', extractTasks: true }, // Automatically extract tasks
   { tag: 'End-of-Day Task Check', cron: '0 20 * * 1-5', text: '', updateTasks: true }, // New job to check completed tasks
-  { tag: 'VA Review Stale Check', cron: '0 9 * * *', text: '', checkVaReview: true }
+  { tag: 'VA Review Stale Check', cron: '0 9 * * *', text: '', checkVaReview: true },
+  { tag: 'Deadline Reminder Check', cron: '0 8 * * 1-5', text: '', checkDeadlines: true }
 ];
 
 // Add 5-minute notification jobs for any events that need them
@@ -4611,7 +4616,7 @@ client.login(TOKEN).catch(error => {
 });
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments, sendDeadlineReminders };
 
 // Function to schedule all jobs
 function scheduleAllJobs() {
@@ -4685,6 +4690,18 @@ function scheduleAllJobs() {
             logToFile(`❌ Error in VA review check: ${result.error}`);
           } else {
             logToFile(`VA review check notified ${result.notified || 0} projects`);
+          }
+          return;
+        }
+
+        // Special handling for upcoming deadline reminders
+        if (job.checkDeadlines) {
+          logToFile('Starting deadline reminder check');
+          const result = await sendDeadlineReminders();
+          if (!result.success) {
+            logToFile(`❌ Error in deadline reminder check: ${result.error}`);
+          } else {
+            logToFile(`Deadline reminder check sent ${result.notified || 0} reminders`);
           }
           return;
         }
@@ -5969,7 +5986,7 @@ async function createNotionTaskPage(authorData) {
 // to prevent conflicts with the registration in the ready event handler
 
 // Export the client for testing
-module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments };
+module.exports = { client, notion, findProjectByQuery, getNotionPageUrl, fetchProjectDeadlines, generateIssueReport, fetchProjectAssignments, sendDeadlineReminders };
 
 // Add this function after the findProjectByQuery function
 
@@ -6292,6 +6309,86 @@ async function checkEndOfDayTaskUpdates() {
     logToFile(`❌ Error in checkEndOfDayTaskUpdates: ${error.message}`);
     console.error('Error checking end-of-day task updates:', error);
     return { success: false, error: error.message };
+  }
+}
+
+// Send reminders for upcoming project deadlines
+async function sendDeadlineReminders() {
+  if (!notion || !DB) {
+    logToFile('sendDeadlineReminders skipped: Notion not configured');
+    return { success: false, error: 'Notion not configured' };
+  }
+
+  try {
+    const { success, projects, error } = await fetchProjectDeadlines();
+    if (!success) return { success: false, error };
+
+    const now = new Date();
+    let notified = 0;
+
+    for (const project of projects) {
+      if (!project.mainDeadline) continue;
+      const deadlineDate = new Date(project.mainDeadline);
+      const daysUntil = Math.ceil((deadlineDate - now) / (1000 * 60 * 60 * 24));
+
+      if (![3, 1, 0, -1].includes(daysUntil)) continue;
+
+      if (sentDeadlineReminders[project.pageId] === daysUntil) continue;
+
+      let channelId = null;
+      try {
+        const page = await notion.pages.retrieve({ page_id: project.pageId });
+        const dcProp = page.properties['Discord Channel'];
+        if (dcProp?.url) {
+          const m = dcProp.url.match(/channels\/\d+\/(\d+)/);
+          if (m) channelId = m[1];
+        } else if (dcProp?.rich_text?.length) {
+          const text = dcProp.rich_text.map(t => t.plain_text).join('');
+          const m = text.match(/(\d{17,})/);
+          if (m) channelId = m[1];
+        }
+      } catch (err) {
+        logToFile(`Error fetching page for deadline reminder: ${err.message}`);
+      }
+
+      if (!channelId) {
+        const code = project.code?.toLowerCase();
+        if (code) {
+          const ch = [...client.channels.cache.values()].find(c => c.type === 0 && c.name.includes(code));
+          if (ch) channelId = ch.id;
+        }
+      }
+
+      const channel = client.channels.cache.get(channelId || SCHEDULE_CHANNEL_ID);
+      if (!channel) continue;
+
+      let when;
+      if (daysUntil > 1) when = `in ${daysUntil} days`;
+      else if (daysUntil === 1) when = 'tomorrow';
+      else if (daysUntil === 0) when = 'today';
+      else when = `${Math.abs(daysUntil)} day overdue`;
+
+      const text = daysUntil >= 0
+        ? `⏰ Project **${project.code}** is due ${when} (${project.formattedMainDeadline}).`
+        : `❗ Project **${project.code}** was due ${project.formattedMainDeadline} and is ${when}.`;
+
+      try {
+        await channel.send(text);
+        sentDeadlineReminders[project.pageId] = daysUntil;
+        notified++;
+      } catch (err) {
+        logToFile(`Error sending deadline reminder for ${project.code}: ${err.message}`);
+      }
+    }
+
+    if (notified > 0) {
+      writeJsonFile(DEADLINE_REMINDERS_PATH, sentDeadlineReminders);
+    }
+
+    return { success: true, notified };
+  } catch (err) {
+    logToFile(`❌ Error in sendDeadlineReminders: ${err.message}`);
+    return { success: false, error: err.message };
   }
 }
 
